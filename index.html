@@ -499,47 +499,71 @@
     save(); renderCompare();
   };
 
-  // ================= MOYSKLAD STOC =================
-  var moyskladStock = {};
-  var moyskladStockUpdatedAt = null;
-  var moyskladSyncing = false;
-  function moyskladQtyFor(p){
-    if(moyskladStock[p.barcode] !== undefined) return moyskladStock[p.barcode];
+  // ================= MOYSKLAD PARTAJAT (folosit de Comparație produse și Produse MoySklad) =================
+  var moyskladByBarcode = {};
+  var expandedHistoryFull = {};
+  function rebuildMoyskladIndex(){
+    moyskladByBarcode = {};
+    catalogProducts.forEach(function(mp){
+      (mp.barcodes||[]).forEach(function(bc){ moyskladByBarcode[bc] = mp; });
+    });
+  }
+  function moyskladLookup(p){
+    if(moyskladByBarcode[p.barcode]) return moyskladByBarcode[p.barcode];
     if(p.altBarcodes){
       for(var i=0;i<p.altBarcodes.length;i++){
-        if(moyskladStock[p.altBarcodes[i]] !== undefined) return moyskladStock[p.altBarcodes[i]];
+        if(moyskladByBarcode[p.altBarcodes[i]]) return moyskladByBarcode[p.altBarcodes[i]];
       }
     }
     return null;
   }
-  window.ptSyncMoyskladStock = async function(){
-    var proxyUrl = state.settings.moyskladProxyUrl;
-    if(!proxyUrl){ ptToast('Configurează întâi URL-ul serverului MoySklad, în tab-ul Setări.', false); return; }
-    if(moyskladSyncing) return;
-    moyskladSyncing = true;
-    renderCompare();
-    try {
-      var res = await fetch(proxyUrl);
-      var data = await res.json();
-      if(!res.ok || data.error){
-        ptToast('Nu am putut actualiza stocurile MoySklad: ' + (data.detail || data.error || res.status), false);
-      } else {
-        moyskladStock = data.stock || {};
-        moyskladStockUpdatedAt = data.updatedAt || new Date().toISOString();
-        ptToast('Stocuri MoySklad actualizate (' + Object.keys(moyskladStock).length + ' coduri).', true);
-      }
-    } catch(err){
-      ptToast('Eroare la conectarea cu serverul MoySklad: ' + (err && err.message ? err.message : err), false);
-    }
-    moyskladSyncing = false;
-    renderCompare();
+  function fmtHistoryLine(h){
+    var dateOnly = String(h.date||'').slice(0,10);
+    var supplier = h.supplier.length > 8 ? h.supplier.slice(0,8) + '...' : h.supplier;
+    return dateOnly + ' · ' + supplier + ' — ' + h.quantity + ' x ' + fmt(h.price);
+  }
+  window.ptToggleHistoryFull = function(id){
+    expandedHistoryFull[id] = !expandedHistoryFull[id];
+    rerenderVisibleTabs();
   };
+  function rerenderVisibleTabs(){
+    var cmp = document.getElementById('tab-compare');
+    var cat = document.getElementById('tab-catalog');
+    if(cmp && cmp.style.display !== 'none') renderCompare();
+    if(cat && cat.style.display !== 'none') renderCatalog();
+  }
+  function historyBlockHtml(msId){
+    var hist = catalogHistoryCache[msId];
+    var html = '<div style="margin-top:8px"><div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;margin-bottom:4px">Istoric achiziții</div>';
+    if(!hist || hist === 'loading'){
+      html += '<span style="font-size:12px;color:var(--text-soft)">Se încarcă…</span>';
+    } else if(hist.error){
+      html += '<span style="font-size:12px;color:var(--bad)">Eroare: ' + escAttr(String(hist.error)) + '</span>';
+    } else if(!hist.rows.length){
+      html += '<span style="font-size:12px;color:var(--text-soft)">Niciun istoric găsit.</span>';
+    } else {
+      var showAll = !!expandedHistoryFull[msId];
+      var rowsToShow = showAll ? hist.rows : hist.rows.slice(0, 2);
+      rowsToShow.forEach(function(h){
+        html += '<div style="font-size:11.5px;font-family:var(--mono);padding:2px 0">' + escAttr(fmtHistoryLine(h)) + '</div>';
+      });
+      if(hist.rows.length > 2){
+        html += '<button class="icon-link" onclick="ptToggleHistoryFull(\'' + msId + '\')">' + (showAll ? '▴ arată mai puțin' : '▾ arată tot istoricul (' + hist.rows.length + ')') + '</button>';
+      }
+    }
+    html += '</div>';
+    return html;
+  }
+  function ensureHistoryLoaded(msId){
+    if(!catalogHistoryCache[msId]) ptLoadCatalogHistory(msId);
+  }
 
   // ================= CATALOG MOYSKLAD (tab separat) =================
   var catalogProducts = [];
   var catalogSyncing = false;
   var catalogUpdatedAt = null;
   var catalogSearchTerm = '';
+  var catalogBrandFilter = '';
   var expandedCatalogId = null;
   var catalogHistoryCache = {};
   function catalogProxyUrl(extra){
@@ -552,7 +576,7 @@
     if(!base){ ptToast('Configurează întâi URL-ul serverului MoySklad, în tab-ul Setări.', false); return; }
     if(catalogSyncing) return;
     catalogSyncing = true;
-    renderCatalog();
+    rerenderVisibleTabs();
     try {
       var res = await fetch(catalogProxyUrl('catalog=1'));
       var data = await res.json();
@@ -562,22 +586,23 @@
         catalogProducts = data.products || [];
         catalogUpdatedAt = data.updatedAt || new Date().toISOString();
         catalogHistoryCache = {};
+        rebuildMoyskladIndex();
         ptToast('Catalog sincronizat: ' + catalogProducts.length + ' produse.', true);
       }
     } catch(err){
       ptToast('Eroare la conectarea cu serverul MoySklad: ' + (err && err.message ? err.message : err), false);
     }
     catalogSyncing = false;
-    renderCatalog();
+    rerenderVisibleTabs();
   };
   window.ptToggleCatalogExpand = function(id){
     expandedCatalogId = (expandedCatalogId === id) ? null : id;
     renderCatalog();
-    if(expandedCatalogId && !catalogHistoryCache[id]) ptLoadCatalogHistory(id);
+    if(expandedCatalogId) ensureHistoryLoaded(id);
   };
   window.ptLoadCatalogHistory = async function(id){
     catalogHistoryCache[id] = 'loading';
-    renderCatalog();
+    rerenderVisibleTabs();
     try {
       var res = await fetch(catalogProxyUrl('history=' + encodeURIComponent(id)));
       var data = await res.json();
@@ -585,7 +610,7 @@
     } catch(err){
       catalogHistoryCache[id] = { error: err && err.message ? err.message : String(err) };
     }
-    renderCatalog();
+    rerenderVisibleTabs();
   };
   function renderCatalog(){
     var el = document.getElementById('tab-catalog');
@@ -603,9 +628,14 @@
       el.innerHTML = html;
       return;
     }
-    html += '<div class="search-row"><input type="text" id="pt-catalog-search" placeholder="Caută după nume sau barcode…" value="' + catalogSearchTerm.replace(/"/g,'') + '" style="flex:1"></div>';
+    var allCatalogBrands = Array.from(new Set(catalogProducts.map(function(p){ return p.brand; }).filter(Boolean))).sort();
+    html += '<div class="search-row"><input type="text" id="pt-catalog-search" placeholder="Caută după nume sau barcode…" value="' + catalogSearchTerm.replace(/"/g,'') + '" style="flex:2">' +
+      '<select id="pt-catalog-brand" style="flex:1;margin-bottom:0"><option value="">Toate brandurile' + (allCatalogBrands.length ? ' (' + allCatalogBrands.length + ')' : '') + '</option>' +
+      allCatalogBrands.map(function(b){ return '<option value="' + escAttr(b) + '" ' + (catalogBrandFilter===b?'selected':'') + '>' + escAttr(b) + '</option>'; }).join('') +
+      '</select></div>';
     var q = normName(catalogSearchTerm);
     var filtered = catalogProducts.filter(function(p){
+      if(catalogBrandFilter && p.brand !== catalogBrandFilter) return false;
       if(!q) return true;
       var hay = normName(p.name) + ' ' + (p.barcodes||[]).join(' ') + ' ' + (p.article||'') + ' ' + (p.code||'');
       return hay.indexOf(q) !== -1;
@@ -613,7 +643,7 @@
     var RENDER_LIMIT = 200;
     var truncated = filtered.length > RENDER_LIMIT;
     var visible = truncated ? filtered.slice(0, RENDER_LIMIT) : filtered;
-    if(truncated) html += '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:4px 10px;font-size:10.5px;margin-bottom:8px;display:inline-block">' + filtered.length + ' produse — afișez primele ' + RENDER_LIMIT + '. Caută pentru a găsi restul.</div><div style="flex-basis:100%"></div>';
+    if(truncated) html += '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:4px 10px;font-size:10.5px;margin-bottom:8px;display:inline-block">' + filtered.length + ' produse — afișez primele ' + RENDER_LIMIT + '. Caută sau filtrează pe brand pentru restul.</div><div style="flex-basis:100%"></div>';
 
     html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th>Produs</th><th>Preț achiziție</th><th>Stoc</th><th>Zile în depozit</th></tr></thead><tbody>';
     visible.forEach(function(p){
@@ -621,27 +651,13 @@
       html += '<tr>';
       html += '<td style="width:40px">' + (p.imageUrl ? '<img src="' + escAttr(p.imageUrl) + '" style="width:32px;height:32px;object-fit:cover;border-radius:6px;display:block" onerror="this.style.display=\'none\'">' : '') + '</td>';
       html += '<td><button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button>' +
-        '<div class="prod-meta">' + (p.barcodes && p.barcodes.length ? 'EAN ' + p.barcodes.join(', ') : 'fără barcode') + (p.article ? ' · art. ' + escAttr(p.article) : '') + '</div></td>';
+        '<div class="prod-meta">' + (p.brand ? escAttr(p.brand) + ' · ' : '') + (p.barcodes && p.barcodes.length ? 'EAN ' + p.barcodes.join(', ') : 'fără barcode') + (p.article ? ' · art. ' + escAttr(p.article) : '') + '</div></td>';
       html += '<td class="dim">' + (p.buyPrice !== null ? fmt(p.buyPrice) + ' ' + (p.buyPriceCurrency||'') : '—') + '</td>';
       html += '<td class="dim" style="text-align:center">' + (p.stock !== null && p.stock !== undefined ? p.stock : '—') + '</td>';
-      html += '<td class="dim" style="text-align:center">' + (p.stockDays !== null && p.stockDays !== undefined ? p.stockDays : '—') + '</td>';
+      html += '<td class="dim" style="text-align:center">' + (p.stockDays !== null && p.stockDays !== undefined ? Math.round(p.stockDays) : '—') + '</td>';
       html += '</tr>';
       if(isExpanded){
-        html += '<tr><td colspan="5"><div class="detail-panel">';
-        var hist = catalogHistoryCache[p.id];
-        if(!hist || hist === 'loading'){
-          html += '<span style="font-size:12px;color:var(--text-soft)">Se încarcă istoricul de achiziții…</span>';
-        } else if(hist.error){
-          html += '<span style="font-size:12px;color:var(--bad)">Eroare la încărcarea istoricului: ' + escAttr(String(hist.error)) + '</span>';
-        } else if(!hist.rows.length){
-          html += '<span style="font-size:12px;color:var(--text-soft)">Niciun istoric de achiziții găsit pentru acest produs.</span>';
-        } else {
-          html += '<div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;margin-bottom:6px">Istoric achiziții</div>';
-          hist.rows.forEach(function(h){
-            html += '<div class="history-row"><span>' + escAttr(String(h.date||'').slice(0,16)) + ' · ' + escAttr(h.supplier) + '</span><span style="font-family:var(--mono)">' + h.quantity + ' buc × ' + fmt(h.price) + '</span></div>';
-          });
-        }
-        html += '</div></td></tr>';
+        html += '<tr><td colspan="5"><div class="detail-panel">' + historyBlockHtml(p.id) + '</div></td></tr>';
       }
     });
     html += '</tbody></table></div></div>';
@@ -656,6 +672,10 @@
         i.focus(); i.setSelectionRange(i.value.length, i.value.length);
       });
     }
+    var brandEl = document.getElementById('pt-catalog-brand');
+    if(brandEl){
+      brandEl.addEventListener('change', function(e){ catalogBrandFilter = e.target.value; renderCatalog(); });
+    }
   }
 
   // ================= COMPARE TAB =================
@@ -665,7 +685,15 @@
   var editingProductKey = null;
   var editingEntry = null;
   var expandedProductKey = null;
-  window.ptToggleExpand = function(key){ expandedProductKey = (expandedProductKey === key) ? null : key; editingProductKey = null; editingEntry = null; renderCompare(); };
+  window.ptToggleExpand = function(key){
+    expandedProductKey = (expandedProductKey === key) ? null : key;
+    editingProductKey = null; editingEntry = null;
+    renderCompare();
+    if(expandedProductKey && state.settings.moyskladProxyUrl){
+      var msProd = moyskladLookup(state.products[key]);
+      if(msProd) ensureHistoryLoaded(msProd.id);
+    }
+  };
   var mergeOpenKey = null;
   var mergeSourceKey = null;
   window.ptStartMerge = function(key){ mergeSourceKey = key; renderCompare(); };
@@ -835,8 +863,8 @@
       '</div>';
     if(msOn){
       html += '<div class="panel" style="padding:10px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">' +
-        '<button class="secondary" onclick="ptSyncMoyskladStock()" ' + (moyskladSyncing ? 'disabled' : '') + '>' + (moyskladSyncing ? 'Se actualizează…' : '🔄 Actualizează stocuri MoySklad') + '</button>' +
-        '<span style="font-size:11.5px;color:var(--text-soft)">' + (moyskladStockUpdatedAt ? ('Ultima actualizare: ' + new Date(moyskladStockUpdatedAt).toLocaleString('ro-RO')) : 'Nesincronizat încă') + '</span>' +
+        '<button class="secondary" onclick="ptSyncCatalog()" ' + (catalogSyncing ? 'disabled' : '') + '>' + (catalogSyncing ? 'Se actualizează…' : '🔄 Actualizează date MoySklad') + '</button>' +
+        '<span style="font-size:11.5px;color:var(--text-soft)">' + (catalogUpdatedAt ? ('Ultima actualizare: ' + new Date(catalogUpdatedAt).toLocaleString('ro-RO') + ' · ' + catalogProducts.length + ' produse') : 'Nesincronizat încă') + '</span>' +
         '</div>';
     }
     html += '<div class="search-row"><input type="text" id="pt-search" placeholder="Caută după nume, brand, barcode sau mărime…" value="' + searchTerm.replace(/"/g,'') + '" style="flex:2">' +
@@ -873,7 +901,7 @@
       var suppliersList = state.suppliers.filter(function(s){ return keys.some(function(k){ return !!state.products[k].bySupplier[s.id]; }); });
       var colspan = suppliersList.length + 3 + (msOn ? 1 : 0);
       html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th>Produs</th>' +
-        (msOn ? '<th>Stoc MS</th>' : '') +
+        (msOn ? '<th>MoySklad</th>' : '') +
         suppliersList.map(function(s){ return '<th>' + s.name + '</th>'; }).join('') +
         '<th>RRP</th><th></th></tr></thead><tbody>';
 
@@ -886,6 +914,7 @@
         suppliersList.forEach(function(s){ var e = p.bySupplier[s.id]; if(e){ var uc = effectiveUnitCost(e, s.id); if(minLanded === null || uc < minLanded) minLanded = uc; } });
         var transit = getInTransitInfo(k);
         var isExpanded = expandedProductKey === k;
+        var msProd = msOn ? moyskladLookup(p) : null;
         var canonicalMoq = null, canonicalMoqDate = null;
         Object.keys(p.bySupplier).forEach(function(sid){
           var e2 = p.bySupplier[sid];
@@ -894,15 +923,25 @@
 
         var isMergeSource = mergeSourceKey === k;
         html += '<tr' + (isMergeSource ? ' style="outline:2px solid var(--accent);outline-offset:-2px"' : '') + '>';
-        html += '<td><button class="prod-title-btn" style="' + (mergeSourceKey && !isMergeSource ? 'color:var(--accent)' : '') + '" onclick="ptProductClick(\'' + kEsc + '\')">' + (isMergeSource ? '🔀 ' : (isExpanded ? '▾' : '▸') + ' ') + p.displayName + '</button> <button class="icon-link" style="padding:0 3px" title="Copiază denumirea" onclick="event.stopPropagation();ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button> <button class="icon-link" style="padding:0 3px" title="Unește cu alt produs" onclick="event.stopPropagation();ptStartMerge(\'' + kEsc + '\')">🔀</button>' +
+        html += '<td><div style="display:flex;gap:8px;align-items:flex-start">' +
+          (msProd && msProd.imageUrl ? '<img src="' + escAttr(msProd.imageUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0;margin-top:2px" onerror="this.style.display=\'none\'">' : '') +
+          '<div>' +
+          '<button class="prod-title-btn" style="' + (mergeSourceKey && !isMergeSource ? 'color:var(--accent)' : '') + '" onclick="ptProductClick(\'' + kEsc + '\')">' + (isMergeSource ? '🔀 ' : (isExpanded ? '▾' : '▸') + ' ') + p.displayName + '</button> <button class="icon-link" style="padding:0 3px" title="Copiază denumirea" onclick="event.stopPropagation();ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button> <button class="icon-link" style="padding:0 3px" title="Unește cu alt produs" onclick="event.stopPropagation();ptStartMerge(\'' + kEsc + '\')">🔀</button>' +
           '<div class="prod-meta">' + (p.brand ? p.brand + ' · ' : '') + (p.quantity ? p.quantity + ' · ' : '') + (p.barcode ? 'EAN ' + p.barcode : 'fără barcode') + (p.altBarcodes && p.altBarcodes.length ? ' (+' + p.altBarcodes.length + ' cod' + (p.altBarcodes.length>1?'uri':'') + ': ' + p.altBarcodes.join(', ') + ')' : '') + (canonicalMoq ? ' · MOQ ' + canonicalMoq : '') + '</div>' +
           perSupplierBarcodeLine(p) +
           (transit.qty > 0 ? '<div style="margin-top:3px"><span class="rrp" style="background:' + (transit.overdue ? 'var(--bad)' : 'var(--rank2)') + ';color:#fff;font-size:12.5px;padding:3px 9px">' + (transit.overdue ? 'Întârziat · ' : 'Pe drum (' + (transit.freight === 'air' ? 'avia' : 'mare') + ') · ') + '<b style="font-size:14px">' + transit.qty + '</b> buc' + '</span></div>' : '') +
-          '</td>';
+          '</div></div></td>';
 
         if(msOn){
-          var msQty = moyskladQtyFor(p);
-          html += '<td class="dim" style="text-align:center">' + (msQty === null ? '—' : '<b style="color:var(--text);font-family:var(--mono)">' + msQty + '</b>') + '</td>';
+          if(!msProd){
+            html += '<td class="dim" style="text-align:center">—</td>';
+          } else {
+            html += '<td style="text-align:center;line-height:1.5;font-size:11px">' +
+              '<div><b style="font-size:14.5px;font-family:var(--mono)">St. ' + (msProd.stock !== null && msProd.stock !== undefined ? msProd.stock : '—') + '</b></div>' +
+              '<div style="color:var(--text-soft);font-family:var(--mono)">Sc. ' + (msProd.buyPrice !== null && msProd.buyPrice !== undefined ? fmt(msProd.buyPrice) : '—') + '</div>' +
+              '<div style="color:var(--text-soft);font-family:var(--mono)">Zd. ' + (msProd.stockDays !== null && msProd.stockDays !== undefined ? Math.round(msProd.stockDays) : '—') + '</div>' +
+              '</td>';
+          }
         }
 
         suppliersList.forEach(function(s){
@@ -950,8 +989,11 @@
             html += '<div style="margin-bottom:10px"><button class="icon-link" onclick="ptEditProduct(\'' + kEsc + '\')">✏️ editează numele/brandul/cantitatea/barcode-ul</button></div>';
           }
           if(msOn){
-            var msQtyDetail = moyskladQtyFor(p);
-            html += '<div style="margin-bottom:10px"><span style="font-size:12px;color:var(--text-soft)">Stoc MoySklad: <b style="color:var(--text)">' + (msQtyDetail === null ? 'necunoscut (fără potrivire pe barcode)' : msQtyDetail + ' buc') + '</b>' + (moyskladStockUpdatedAt ? (' · actualizat ' + new Date(moyskladStockUpdatedAt).toLocaleString('ro-RO')) : '') + '</span></div>';
+            if(!msProd){
+              html += '<div style="margin-bottom:10px;font-size:12px;color:var(--text-soft)">Nicio potrivire MoySklad pentru barcode-ul acestui produs.</div>';
+            } else {
+              html += historyBlockHtml(msProd.id);
+            }
           }
 
           var rows = Object.keys(p.bySupplier).map(function(sid){ return { sid: sid, e: p.bySupplier[sid] }; });
@@ -2429,9 +2471,7 @@
         }
         state.settings.moyskladProxyUrl = proxyUrl;
         save();
-        moyskladStock = data.stock || {};
-        moyskladStockUpdatedAt = data.updatedAt || new Date().toISOString();
-        fb.className = 'feedback ok'; fb.textContent = '✓ Conectat! ' + Object.keys(moyskladStock).length + ' coduri de bare cu stoc găsite.';
+        fb.className = 'feedback ok'; fb.textContent = '✓ Conectat! ' + Object.keys(data.stock || {}).length + ' coduri de bare cu stoc găsite. Mergi în tab-ul Comparație produse sau Produse MoySklad și apasă „Actualizează"/„Sincronizează" ca să aduci și restul datelor (preț, imagine, zile în depozit).';
         renderCompare();
       } catch(err){
         fb.className = 'feedback err';
