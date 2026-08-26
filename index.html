@@ -8,63 +8,77 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
   :root {
-    --bg: #F6F4EF;
+    --bg: #F2F5F4;
     --panel: #FFFFFF;
-    --border: #E3DED2;
-    --text: #2A241F;
-    --text-soft: #6E6455;
-    --accent: #6E4C63;
-    --accent-dark: #4F3547;
-    --rank1: #2F6B4F; --rank1-bg: #E7F0EA;
-    --rank2: #2E5C8A; --rank2-bg: #E6EDF5;
-    --rank3: #8A5A2F; --rank3-bg: #F5EDE3;
-    --bad: #B23A34; --bad-bg: #F8E9E8;
+    --border: #DCE4E1;
+    --text: #1E2624;
+    --text-soft: #71827D;
+    --accent: #0F6E56;
+    --accent-dark: #085041;
+    --accent-soft: #E1F5EE;
+    --rank1: #0F6E56; --rank1-bg: #E1F5EE;
+    --rank2: #1B6FA8; --rank2-bg: #E6F1FB;
+    --rank3: #A9762B; --rank3-bg: #FAEEDA;
+    --bad: #C23B3B; --bad-bg: #FBEAEA;
     --mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
     --serif: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
-    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    --sans: 'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+    --radius: 12px;
+    --shadow-sm: 0 1px 3px rgba(15,110,86,0.07);
+    --shadow-md: 0 4px 16px rgba(15,110,86,0.12);
   }
   * { box-sizing: border-box; }
   #pt-root { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; padding: 28px 20px 60px; }
   #pt-root .wrap { max-width: 1600px; margin: 0 auto; }
-  #pt-root h1 { font-family: var(--serif); font-size: 27px; font-weight: 600; margin: 0 0 2px; letter-spacing: -0.01em; }
+  #pt-root h1 { font-family: var(--sans); font-size: 27px; font-weight: 700; margin: 0 0 2px; letter-spacing: -0.01em; }
   #pt-root .sub { color: var(--text-soft); font-size: 13.5px; margin-bottom: 20px; }
   #pt-root .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; flex-wrap: wrap; }
-  #pt-root .tab-btn { background: none; border: none; padding: 10px 14px; font-size: 13.5px; font-weight: 600; color: var(--text-soft); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-family: var(--sans); }
+  #pt-root .tab-btn { background: none; border: none; padding: 10px 14px; font-size: 13.5px; font-weight: 600; color: var(--text-soft); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-family: var(--sans); transition: color .15s ease, border-color .15s ease; }
+  #pt-root .tab-btn:hover { color: var(--accent-dark); }
   #pt-root .tab-btn.active { color: var(--accent-dark); border-bottom-color: var(--accent); }
   #pt-root .subtabs { display: flex; gap: 8px; margin-bottom: 16px; }
-  #pt-root .subtab-btn { background: var(--bg); border: 1px solid var(--border); border-radius: 20px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; color: var(--text-soft); cursor: pointer; }
+  #pt-root .subtab-btn { background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; color: var(--text-soft); cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease; }
+  #pt-root .subtab-btn:hover { border-color: var(--accent); color: var(--accent-dark); }
   #pt-root .subtab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-  #pt-root .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
-  #pt-root .panel h2 { font-family: var(--serif); font-size: 17px; margin: 0 0 4px; }
+  #pt-root .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow-sm); }
+  #pt-root .panel h2 { font-family: var(--sans); font-weight: 600; font-size: 17px; margin: 0 0 4px; }
   #pt-root .panel .hint { color: var(--text-soft); font-size: 12.5px; margin-bottom: 14px; line-height: 1.5; }
   #pt-root label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-soft); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.02em; }
-  #pt-root input[type=text], #pt-root input[type=number], #pt-root input[type=file], #pt-root select, #pt-root textarea {
-    width: 100%; border: 1px solid var(--border); background: var(--bg); border-radius: 7px; padding: 9px 11px;
-    font-size: 13.5px; font-family: var(--sans); color: var(--text); margin-bottom: 14px;
+  #pt-root input[type=text], #pt-root input[type=password], #pt-root input[type=number], #pt-root input[type=file], #pt-root select, #pt-root textarea {
+    width: 100%; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 9px 11px;
+    font-size: 13.5px; font-family: var(--sans); color: var(--text); margin-bottom: 14px; transition: border-color .15s ease, box-shadow .15s ease;
   }
+  #pt-root input[type=text]:focus, #pt-root input[type=password]:focus, #pt-root input[type=number]:focus, #pt-root select:focus, #pt-root textarea:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  #pt-root .auth-link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; padding: 0; }
+  #pt-root .auth-link:hover { color: var(--accent-dark); text-decoration: underline; }
   #pt-root textarea { font-family: var(--mono); font-size: 12px; min-height: 120px; resize: vertical; }
   #pt-root .row { display: flex; gap: 12px; flex-wrap: wrap; }
   #pt-root .row > div { flex: 1; min-width: 130px; }
-  #pt-root button.primary { background: var(--accent); color: #fff; border: none; padding: 10px 18px; border-radius: 7px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
-  #pt-root button.primary:hover { background: var(--accent-dark); }
-  #pt-root button.primary:disabled { opacity: 0.45; cursor: not-allowed; }
-  #pt-root button.secondary { background: none; border: 1px solid var(--accent); color: var(--accent-dark); padding: 9px 14px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; }
-  #pt-root button.icon-x { background: none; border: none; color: var(--text-soft); cursor: pointer; font-size: 12.5px; padding: 2px 6px; }
-  #pt-root button.icon-x:hover { color: var(--bad); }
-  #pt-root button.icon-link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 11.5px; padding: 2px 6px; font-weight: 600; }
-  #pt-root .supplier-chip { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border: 1px solid var(--border); border-radius: 7px; margin-bottom: 8px; font-size: 14px; }
+  #pt-root button.primary { background: var(--accent); color: #fff; border: none; padding: 10px 18px; border-radius: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow-sm); transition: background .15s ease, box-shadow .15s ease, transform .1s ease; }
+  #pt-root button.primary:hover { background: var(--accent-dark); box-shadow: var(--shadow-md); }
+  #pt-root button.primary:active { transform: translateY(1px); }
+  #pt-root button.primary:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+  #pt-root button.secondary { background: var(--panel); border: 1px solid var(--accent); color: var(--accent-dark); padding: 9px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s ease, box-shadow .15s ease; }
+  #pt-root button.secondary:hover { background: var(--accent-soft); box-shadow: var(--shadow-sm); }
+  #pt-root button.icon-x { background: none; border: none; color: var(--text-soft); cursor: pointer; font-size: 12.5px; padding: 2px 6px; border-radius: 5px; transition: color .15s ease, background .15s ease; }
+  #pt-root button.icon-x:hover { color: var(--bad); background: var(--bad-bg); }
+  #pt-root button.icon-link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 11.5px; padding: 2px 6px; font-weight: 600; border-radius: 5px; transition: background .15s ease; }
+  #pt-root button.icon-link:hover { background: var(--accent-soft); }
+  #pt-root .supplier-chip { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; font-size: 14px; background: var(--panel); box-shadow: var(--shadow-sm); }
   #pt-root .feedback { font-size: 12.5px; padding: 10px 12px; border-radius: 7px; margin-top: 8px; white-space: pre-line; }
   #pt-root .feedback.ok { background: var(--rank1-bg); color: var(--rank1); }
   #pt-root .feedback.err { background: var(--bad-bg); color: var(--bad); }
   #pt-root .search-row { display: flex; gap: 10px; margin-bottom: 16px; }
   #pt-root .search-row input { margin-bottom: 0; }
   #pt-root .stat-strip { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
-  #pt-root .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; font-family: var(--mono); }
+  #pt-root .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 16px; font-family: var(--mono); box-shadow: var(--shadow-sm); }
   #pt-root .stat .n { font-size: 20px; font-weight: 700; color: var(--accent-dark); }
   #pt-root .stat .l { font-size: 10.5px; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.04em; }
   #pt-root .legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--text-soft); margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
   #pt-root .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
-  #pt-root .product-card { border: 1px solid var(--border); border-radius: 9px; margin-bottom: 12px; overflow: hidden; }
+  #pt-root .product-card { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; overflow: hidden; box-shadow: var(--shadow-sm); }
   #pt-root .product-head { display: flex; justify-content: space-between; align-items: center; padding: 7px 12px; background: var(--bg); border-bottom: 1px solid var(--border); gap: 8px; flex-wrap: wrap; }
   #pt-root .product-head .name { font-weight: 600; font-size: 13px; }
   #pt-root .product-head .meta { font-size: 10px; color: var(--text-soft); font-family: var(--mono); }
@@ -141,22 +155,37 @@
   #pt-root .two-col > .side { flex: 1; min-width: 260px; }
   #pt-root .history-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13px; }
   #pt-auth-gate { max-width: 380px; margin: 90px auto 0; }
+  #pt-root .table-wrap { -webkit-overflow-scrolling: touch; }
+  @media (max-width: 640px) {
+    #pt-root { padding: 16px 12px 40px; }
+    #pt-root h1 { font-size: 21px; }
+    #pt-auth-gate { margin-top: 40px; max-width: 100%; }
+    #pt-root .tabs { flex-wrap: nowrap; overflow-x: auto; }
+    #pt-root .tab-btn { white-space: nowrap; padding: 10px 12px; }
+    #pt-root .search-row { flex-direction: column; }
+    #pt-root .stat-strip { gap: 8px; }
+    #pt-root .stat { flex: 1 1 calc(50% - 8px); }
+    #pt-root .panel { padding: 14px; }
+  }
 </style>
 </head>
 <body>
 
 <div id="pt-root">
   <div id="pt-auth-gate">
-    <div class="panel">
-      <h2 style="font-family:var(--serif);margin:0 0 4px">Panou achiziții</h2>
-      <div class="hint">Autentifică-te pentru a accesa datele.</div>
-      <label>Email</label>
-      <input type="text" id="pt-auth-email" autocomplete="username">
-      <label>Parolă</label>
+    <form class="panel" id="pt-auth-form">
+      <h2 id="pt-auth-title" style="font-family:var(--sans);font-weight:700;margin:0 0 4px">Panou achiziții</h2>
+      <div class="hint" id="pt-auth-hint">Autentifică-te pentru a accesa datele.</div>
+      <div id="pt-auth-email-row">
+        <label>Email</label>
+        <input type="text" id="pt-auth-email" name="email" autocomplete="username">
+      </div>
+      <label id="pt-auth-password-label">Parolă</label>
       <input type="password" id="pt-auth-password" autocomplete="current-password">
-      <button class="primary" id="pt-auth-submit" style="width:100%">Intră</button>
+      <button class="primary" type="submit" id="pt-auth-submit" style="width:100%">Intră</button>
+      <div style="text-align:center;margin-top:10px" id="pt-auth-forgot-row"><button type="button" class="auth-link" id="pt-auth-forgot">Am uitat parola</button></div>
       <div id="pt-auth-feedback" class="feedback" style="display:none"></div>
-    </div>
+    </form>
   </div>
   <div class="wrap" id="pt-app-wrap" style="display:none">
     <h1>Panou achiziții</h1>
@@ -468,6 +497,42 @@
     save(); renderCompare();
   };
 
+  // ================= MOYSKLAD STOC =================
+  var moyskladStock = {};
+  var moyskladStockUpdatedAt = null;
+  var moyskladSyncing = false;
+  function moyskladQtyFor(p){
+    if(moyskladStock[p.barcode] !== undefined) return moyskladStock[p.barcode];
+    if(p.altBarcodes){
+      for(var i=0;i<p.altBarcodes.length;i++){
+        if(moyskladStock[p.altBarcodes[i]] !== undefined) return moyskladStock[p.altBarcodes[i]];
+      }
+    }
+    return null;
+  }
+  window.ptSyncMoyskladStock = async function(){
+    var proxyUrl = state.settings.moyskladProxyUrl;
+    if(!proxyUrl){ ptToast('Configurează întâi URL-ul serverului MoySklad, în tab-ul Setări.', false); return; }
+    if(moyskladSyncing) return;
+    moyskladSyncing = true;
+    renderCompare();
+    try {
+      var res = await fetch(proxyUrl);
+      var data = await res.json();
+      if(!res.ok || data.error){
+        ptToast('Nu am putut actualiza stocurile MoySklad: ' + (data.detail || data.error || res.status), false);
+      } else {
+        moyskladStock = data.stock || {};
+        moyskladStockUpdatedAt = data.updatedAt || new Date().toISOString();
+        ptToast('Stocuri MoySklad actualizate (' + Object.keys(moyskladStock).length + ' coduri).', true);
+      }
+    } catch(err){
+      ptToast('Eroare la conectarea cu serverul MoySklad: ' + (err && err.message ? err.message : err), false);
+    }
+    moyskladSyncing = false;
+    renderCompare();
+  };
+
   // ================= COMPARE TAB =================
   var searchTerm = '';
   var brandFilter = '';
@@ -604,6 +669,7 @@
     var prevPageScroll = window.scrollY;
     var allBrands = Array.from(new Set(Object.keys(state.products).map(function(k){ return state.products[k].brand; }).filter(Boolean))).sort();
     var archivedCount = Object.keys(state.products).filter(function(k){ return state.products[k].archived; }).length;
+    var msOn = !!state.settings.moyskladProxyUrl;
     var keys = Object.keys(state.products).filter(function(k){
       var p = state.products[k];
       if(showArchived){ if(!p.archived) return false; } else { if(p.archived) return false; }
@@ -633,6 +699,12 @@
       '<span style="display:flex;align-items:center;gap:6px"><label style="margin:0;font-size:11px">USD→MDL</label><input type="number" step="0.01" id="pt-quick-rate" value="' + state.settings.exchangeRate + '" style="width:80px;margin:0"></span>' +
       '<span style="display:flex;align-items:center;gap:6px"><label style="margin:0;font-size:11px">USD→KRW</label><input type="number" step="1" id="pt-quick-krw" value="' + state.settings.krwPerUsd + '" style="width:80px;margin:0"></span>' +
       '</div>';
+    if(msOn){
+      html += '<div class="panel" style="padding:10px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">' +
+        '<button class="secondary" onclick="ptSyncMoyskladStock()" ' + (moyskladSyncing ? 'disabled' : '') + '>' + (moyskladSyncing ? 'Se actualizează…' : '🔄 Actualizează stocuri MoySklad') + '</button>' +
+        '<span style="font-size:11.5px;color:var(--text-soft)">' + (moyskladStockUpdatedAt ? ('Ultima actualizare: ' + new Date(moyskladStockUpdatedAt).toLocaleString('ro-RO')) : 'Nesincronizat încă') + '</span>' +
+        '</div>';
+    }
     html += '<div class="search-row"><input type="text" id="pt-search" placeholder="Caută după nume, brand, barcode sau mărime…" value="' + searchTerm.replace(/"/g,'') + '" style="flex:2">' +
       '<select id="pt-brand-filter" style="flex:1;margin-bottom:0"><option value="">Toate brandurile' + (allBrands.length ? ' (' + allBrands.length + ')' : '') + '</option>' +
       allBrands.map(function(b){ return '<option value="' + escAttr(b) + '" ' + (brandFilter===b?'selected':'') + '>' + b + '</option>'; }).join('') +
@@ -664,8 +736,9 @@
       }
 
       var suppliersList = state.suppliers.filter(function(s){ return keys.some(function(k){ return !!state.products[k].bySupplier[s.id]; }); });
-      var colspan = suppliersList.length + 3;
+      var colspan = suppliersList.length + 3 + (msOn ? 1 : 0);
       html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th>Produs</th>' +
+        (msOn ? '<th>Stoc MS</th>' : '') +
         suppliersList.map(function(s){ return '<th>' + s.name + '</th>'; }).join('') +
         '<th>RRP</th><th></th></tr></thead><tbody>';
 
@@ -691,6 +764,11 @@
           perSupplierBarcodeLine(p) +
           (transit.qty > 0 ? '<div style="margin-top:3px"><span class="rrp" style="background:' + (transit.overdue ? 'var(--bad)' : 'var(--rank2)') + ';color:#fff;font-size:12.5px;padding:3px 9px">' + (transit.overdue ? 'Întârziat · ' : 'Pe drum (' + (transit.freight === 'air' ? 'avia' : 'mare') + ') · ') + '<b style="font-size:14px">' + transit.qty + '</b> buc' + '</span></div>' : '') +
           '</td>';
+
+        if(msOn){
+          var msQty = moyskladQtyFor(p);
+          html += '<td class="dim" style="text-align:center">' + (msQty === null ? '—' : '<b style="color:var(--text);font-family:var(--mono)">' + msQty + '</b>') + '</td>';
+        }
 
         suppliersList.forEach(function(s){
           var e = p.bySupplier[s.id];
@@ -736,9 +814,10 @@
           } else {
             html += '<div style="margin-bottom:10px"><button class="icon-link" onclick="ptEditProduct(\'' + kEsc + '\')">✏️ editează numele/brandul/cantitatea/barcode-ul</button></div>';
           }
-          html += '<div style="margin-bottom:10px">' + (p.moyskladStock ?
-            ('<span style="font-size:12px;color:var(--text-soft)">Stoc MoySklad: <b style="color:var(--text)">' + p.moyskladStock.qty + ' buc</b> (verificat ' + p.moyskladStock.checkedAt + ') </span><button class="icon-link" onclick="ptCheckMoyskladStock(\'' + kEsc + '\')">🔄 reverifică</button>') :
-            ('<button class="icon-link" onclick="ptCheckMoyskladStock(\'' + kEsc + '\')">📦 verifică stoc MoySklad</button>')) + '</div>';
+          if(msOn){
+            var msQtyDetail = moyskladQtyFor(p);
+            html += '<div style="margin-bottom:10px"><span style="font-size:12px;color:var(--text-soft)">Stoc MoySklad: <b style="color:var(--text)">' + (msQtyDetail === null ? 'necunoscut (fără potrivire pe barcode)' : msQtyDetail + ' buc') + '</b>' + (moyskladStockUpdatedAt ? (' · actualizat ' + new Date(moyskladStockUpdatedAt).toLocaleString('ro-RO')) : '') + '</span></div>';
+          }
 
           var rows = Object.keys(p.bySupplier).map(function(sid){ return { sid: sid, e: p.bySupplier[sid] }; });
           rows.sort(function(a,b){ return a.e.landedCost - b.e.landedCost; });
@@ -804,25 +883,6 @@
     if(newWrap) newWrap.scrollTop = prevScroll;
     window.scrollTo(0, prevPageScroll);
   }
-  window.ptCheckMoyskladStock = function(key){
-    var proxyUrl = state.settings.moyskladProxyUrl;
-    if(!proxyUrl){
-      ptToast('MoySklad nu e încă conectat — se activează după ce muți tool-ul pe hosting propriu (vezi tab-ul Setări).', false);
-      return;
-    }
-    var p = state.products[key];
-    if(!p || !p.barcode){ ptToast('Acest produs nu are barcode — nu poate fi căutat în MoySklad.', false); return; }
-    fetch(proxyUrl + (proxyUrl.indexOf('?')===-1?'?':'&') + 'barcode=' + encodeURIComponent(p.barcode))
-      .then(function(res){ if(!res.ok) throw new Error('cod ' + res.status); return res.json(); })
-      .then(function(data){
-        var qty = data && typeof data.qty === 'number' ? data.qty : (data && typeof data.stock === 'number' ? data.stock : null);
-        if(qty === null){ ptToast('Server conectat, dar răspunsul nu are formatul așteptat.', false); return; }
-        p.moyskladStock = { qty: qty, checkedAt: todayStr() };
-        save(); renderCompare();
-        ptToast('Stoc MoySklad: ' + qty + ' buc.', true);
-      })
-      .catch(function(err){ ptToast('Nu am putut lua stocul: ' + (err && err.message ? err.message : err), false); });
-  };
   window.ptDeleteProduct = function(key){
     var snapshot = JSON.parse(JSON.stringify(state.products[key]));
     delete state.products[key];
@@ -2020,7 +2080,7 @@
     var t = document.createElement('div');
     t.id = 'pt-toast';
     t.textContent = msg;
-    t.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;padding:10px 18px;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.2);max-width:80vw;text-align:center;' + (ok ? 'background:#E7F0EA;color:#2F6B4F;border:1px solid #2F6B4F;' : 'background:#F8E9E8;color:#B23A34;border:1px solid #B23A34;');
+    t.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;padding:10px 18px;border-radius:10px;font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.16);max-width:80vw;text-align:center;' + (ok ? 'background:#E1F5EE;color:#0F6E56;border:1px solid #0F6E56;' : 'background:#FBEAEA;color:#C23B3B;border:1px solid #C23B3B;');
     document.body.appendChild(t);
     setTimeout(function(){ if(t.parentNode) t.remove(); }, 3800);
   }
@@ -2029,8 +2089,8 @@
     if(existing) existing.remove();
     var t = document.createElement('div');
     t.id = 'pt-toast';
-    t.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;padding:10px 14px 10px 18px;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.2);max-width:80vw;text-align:center;display:flex;align-items:center;gap:10px;background:#F5EDE3;color:#8A5A2F;border:1px solid #8A5A2F;';
-    t.innerHTML = '<span>' + msg + '</span><button id="pt-toast-undo-btn" style="background:#8A5A2F;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-weight:700;cursor:pointer;font-size:12.5px">Anulează</button>';
+    t.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;padding:10px 14px 10px 18px;border-radius:10px;font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.16);max-width:80vw;text-align:center;display:flex;align-items:center;gap:10px;background:#FAEEDA;color:#A9762B;border:1px solid #A9762B;';
+    t.innerHTML = '<span>' + msg + '</span><button id="pt-toast-undo-btn" style="background:#A9762B;color:#fff;border:none;border-radius:8px;padding:4px 12px;font-weight:700;cursor:pointer;font-size:12.5px">Anulează</button>';
     document.body.appendChild(t);
     var timer = setTimeout(function(){ if(t.parentNode) t.remove(); }, 6000);
     document.getElementById('pt-toast-undo-btn').addEventListener('click', function(){
@@ -2188,15 +2248,11 @@
       '<div class="hint">Un singur coeficient, folosit ca punct de plecare peste tot. Îl ajustezi manual în funcție de furnizor sau tipul comenzii — în tab-ul Comenzi, la fiecare comandă în parte.</div>' +
       '<div class="row"><div><label>Coeficient implicit</label><input type="number" step="0.01" id="pt-set-coef" value="' + state.settings.coef + '"></div></div>' +
       '<button class="primary" id="pt-save-settings">Salvează setările</button><div id="pt-set-feedback"></div></div>';
-    html += '<div class="panel"><h2>MoySklad — pregătit pentru conectare</h2>' +
-      '<div class="hint">Conexiunea directă din browser nu funcționează (MoySklad blochează asta, confirmat prin test). Când muți tool-ul pe hosting propriu, vei publica o mică funcție-server care ține tokenul în siguranță și vorbește cu MoySklad în locul browserului. Completează URL-ul ei aici — restul tool-ului se activează automat, fără alte modificări.</div>' +
-      '<label>URL server intermediar (completezi după ce publici funcția, ex: pe Cloudflare Workers / Vercel)</label>' +
-      '<input type="text" id="pt-ms-proxy" value="' + escAttr(state.settings.moyskladProxyUrl||'') + '" placeholder="https://exemplu.workers.dev/stoc">' +
-      '<button class="secondary" id="pt-ms-test">Testează</button><div id="pt-ms-feedback"></div>' +
-      '<div class="hint" style="margin-top:10px">Tokenul MoySklad rămâne salvat local, ca reper pentru configurarea serverului mai târziu — dar nu mai e folosit direct din tool.</div>' +
-      '<label>Token MoySklad (doar ca reper, pentru configurarea viitoare a serverului)</label>' +
-      '<input type="password" id="pt-ms-token" value="' + escAttr(state.settings.moyskladToken||'') + '" placeholder="lipește tokenul aici">' +
-      '<button class="secondary" id="pt-ms-save-token">Salvează tokenul</button></div>';
+    html += '<div class="panel"><h2>MoySklad — stocuri</h2>' +
+      '<div class="hint">Serverul intermediar (Cloudflare Worker) ține tokenul MoySklad în siguranță și trimite aplicației doar perechile barcode → cantitate. Completează URL-ul lui aici.</div>' +
+      '<label>URL server intermediar</label>' +
+      '<input type="text" id="pt-ms-proxy" value="' + escAttr(state.settings.moyskladProxyUrl||'') + '" placeholder="https://exemplu.workers.dev">' +
+      '<button class="secondary" id="pt-ms-test">Testează și salvează</button><div id="pt-ms-feedback"></div></div>';
     html += '<div class="panel"><h2>Backup date</h2>' +
       '<div class="hint">Descarcă tot conținutul (furnizori, produse, comenzi, setări) într-un fișier JSON — util și ca să muți datele dintr-o versiune veche a tool-ului (ex. artifact Claude.ai) în cea conectată la Supabase. Încărcarea unui backup suprascrie datele curente.</div>' +
       '<button class="secondary" id="pt-export-json">⬇ Descarcă backup JSON</button> ' +
@@ -2205,7 +2261,10 @@
       '<div id="pt-backup-feedback"></div></div>';
     html += '<div class="panel"><h2>Cont</h2>' +
       '<div class="hint">Autentificat ca <b>' + escAttr(currentUserEmail) + '</b>.</div>' +
-      '<button class="secondary" id="pt-signout">Ieși din cont</button></div>';
+      '<label>Parolă nouă</label><input type="password" id="pt-change-password" autocomplete="new-password" placeholder="minim 6 caractere">' +
+      '<button class="secondary" id="pt-change-password-btn">Schimbă parola</button> ' +
+      '<button class="secondary" id="pt-signout">Ieși din cont</button>' +
+      '<div id="pt-account-feedback"></div></div>';
     el.innerHTML = html;
 
     document.getElementById('pt-fetch-rates').addEventListener('click', async function(){
@@ -2230,26 +2289,25 @@
     document.getElementById('pt-ms-test').addEventListener('click', async function(){
       var proxyUrl = document.getElementById('pt-ms-proxy').value.trim();
       var fb = document.getElementById('pt-ms-feedback');
-      if(!proxyUrl){ fb.className = 'feedback err'; fb.textContent = 'Nu ai încă un server conectat — normal, deocamdată. Completează URL-ul aici după ce publici funcția-server, când muți tool-ul pe hosting propriu.'; return; }
-      state.settings.moyskladProxyUrl = proxyUrl;
-      save();
+      if(!proxyUrl){ fb.className = 'feedback err'; fb.textContent = 'Completează URL-ul serverului intermediar.'; return; }
       fb.className = 'feedback'; fb.textContent = 'Se testează…';
       try {
-        var res = await fetch(proxyUrl + (proxyUrl.indexOf('?')===-1?'?':'&') + 'barcode=test');
-        if(!res.ok){
-          fb.className = 'feedback err'; fb.textContent = 'Serverul a răspuns cu eroare (cod ' + res.status + '). Verifică URL-ul și configurarea funcției.';
+        var res = await fetch(proxyUrl);
+        var data = await res.json();
+        if(!res.ok || data.error){
+          fb.className = 'feedback err'; fb.textContent = 'Serverul a răspuns cu eroare: ' + (data.detail || data.error || res.status) + '. Verifică URL-ul și secretele configurate pe Worker.';
           return;
         }
-        fb.className = 'feedback ok'; fb.textContent = '✓ Serverul a răspuns! Conexiunea e funcțională — de acum, stocul MoySklad poate fi afișat direct în tool.';
+        state.settings.moyskladProxyUrl = proxyUrl;
+        save();
+        moyskladStock = data.stock || {};
+        moyskladStockUpdatedAt = data.updatedAt || new Date().toISOString();
+        fb.className = 'feedback ok'; fb.textContent = '✓ Conectat! ' + Object.keys(moyskladStock).length + ' coduri de bare cu stoc găsite.';
+        renderCompare();
       } catch(err){
         fb.className = 'feedback err';
-        fb.textContent = 'Nu am putut ajunge la acest URL. Verifică dacă e corect și dacă funcția-server e publicată și activă. Eroare: ' + (err && err.message ? err.message : err);
+        fb.textContent = 'Nu am putut ajunge la acest URL. Verifică dacă e corect și dacă Worker-ul e publicat. Eroare: ' + (err && err.message ? err.message : err);
       }
-    });
-    document.getElementById('pt-ms-save-token').addEventListener('click', function(){
-      state.settings.moyskladToken = document.getElementById('pt-ms-token').value.trim();
-      save();
-      ptToast('Token salvat local, ca reper.', true);
     });
     document.getElementById('pt-export-json').addEventListener('click', function(){
       var blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -2284,6 +2342,22 @@
     document.getElementById('pt-signout').addEventListener('click', async function(){
       await supabaseClient.auth.signOut();
       location.reload();
+    });
+    document.getElementById('pt-change-password-btn').addEventListener('click', async function(){
+      var password = document.getElementById('pt-change-password').value;
+      var fb = document.getElementById('pt-account-feedback');
+      if(!password || password.length < 6){
+        fb.className = 'feedback err'; fb.textContent = 'Parola trebuie să aibă cel puțin 6 caractere.';
+        return;
+      }
+      fb.className = 'feedback'; fb.textContent = 'Se salvează…';
+      var result = await supabaseClient.auth.updateUser({ password: password });
+      if(result.error){
+        fb.className = 'feedback err'; fb.textContent = 'Nu am putut schimba parola: ' + result.error.message;
+        return;
+      }
+      document.getElementById('pt-change-password').value = '';
+      fb.className = 'feedback ok'; fb.textContent = 'Parolă schimbată.';
     });
   }
 
@@ -2361,6 +2435,7 @@
   }
 
   // ================= AUTENTIFICARE =================
+  var authMode = 'login';
   function showApp(session){
     currentUserEmail = (session && session.user && session.user.email) || '';
     document.getElementById('pt-auth-gate').style.display = 'none';
@@ -2370,6 +2445,18 @@
   function showAuthGate(){
     document.getElementById('pt-auth-gate').style.display = '';
     document.getElementById('pt-app-wrap').style.display = 'none';
+  }
+  function setAuthMode(mode){
+    authMode = mode;
+    var recovery = mode === 'recovery';
+    document.getElementById('pt-auth-title').textContent = recovery ? 'Parolă nouă' : 'Panou achiziții';
+    document.getElementById('pt-auth-hint').textContent = recovery ? 'Alege o parolă nouă pentru contul tău.' : 'Autentifică-te pentru a accesa datele.';
+    document.getElementById('pt-auth-email-row').style.display = recovery ? 'none' : '';
+    document.getElementById('pt-auth-forgot-row').style.display = recovery ? 'none' : '';
+    document.getElementById('pt-auth-password-label').textContent = recovery ? 'Parolă nouă' : 'Parolă';
+    document.getElementById('pt-auth-password').autocomplete = recovery ? 'new-password' : 'current-password';
+    document.getElementById('pt-auth-submit').textContent = recovery ? 'Salvează parola' : 'Intră';
+    document.getElementById('pt-auth-feedback').style.display = 'none';
   }
   async function doSignIn(){
     var email = document.getElementById('pt-auth-email').value.trim();
@@ -2392,11 +2479,47 @@
     }
     fb.style.display = 'none';
   }
-  document.getElementById('pt-auth-submit').addEventListener('click', doSignIn);
-  document.getElementById('pt-auth-password').addEventListener('keydown', function(e){
-    if(e.key === 'Enter') doSignIn();
+  async function doSetNewPassword(){
+    var password = document.getElementById('pt-auth-password').value;
+    var fb = document.getElementById('pt-auth-feedback');
+    fb.style.display = 'block'; fb.className = 'feedback'; fb.textContent = 'Se salvează…';
+    if(!password || password.length < 6){
+      fb.className = 'feedback err'; fb.textContent = 'Parola trebuie să aibă cel puțin 6 caractere.';
+      return;
+    }
+    var result = await supabaseClient.auth.updateUser({ password: password });
+    if(result.error){
+      fb.className = 'feedback err'; fb.textContent = 'Nu am putut salva parola: ' + result.error.message;
+      return;
+    }
+    fb.style.display = 'none';
+    authMode = 'login';
+    var sessionResult = await supabaseClient.auth.getSession();
+    if(sessionResult.data && sessionResult.data.session) showApp(sessionResult.data.session);
+  }
+  document.getElementById('pt-auth-form').addEventListener('submit', function(e){
+    e.preventDefault();
+    if(authMode === 'recovery') doSetNewPassword(); else doSignIn();
+  });
+  document.getElementById('pt-auth-forgot').addEventListener('click', async function(){
+    var email = document.getElementById('pt-auth-email').value.trim();
+    var fb = document.getElementById('pt-auth-feedback');
+    fb.style.display = 'block';
+    if(!email){
+      fb.className = 'feedback err'; fb.textContent = 'Completează email-ul, apoi apasă din nou „Am uitat parola”.';
+      return;
+    }
+    fb.className = 'feedback'; fb.textContent = 'Se trimite emailul de resetare…';
+    var redirectUrl = window.location.href.split('#')[0].split('?')[0];
+    var result = await supabaseClient.auth.resetPasswordForEmail(email, { redirectTo: redirectUrl });
+    if(result.error){
+      fb.className = 'feedback err'; fb.textContent = 'Nu am putut trimite emailul: ' + result.error.message;
+      return;
+    }
+    fb.className = 'feedback ok'; fb.textContent = 'Ți-am trimis un email cu link de resetare a parolei — verifică inbox-ul (și Spam).';
   });
   supabaseClient.auth.onAuthStateChange(function(event, session){
+    if(event === 'PASSWORD_RECOVERY'){ setAuthMode('recovery'); showAuthGate(); return; }
     if(session){ showApp(session); } else { showAuthGate(); }
   });
   supabaseClient.auth.getSession().then(function(result){
