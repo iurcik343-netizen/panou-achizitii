@@ -532,6 +532,34 @@
     if(cmp && cmp.style.display !== 'none') renderCompare();
     if(cat && cat.style.display !== 'none') renderCatalog();
   }
+  // ================= ÎNCĂRCARE TREPTATĂ A IMAGINILOR LIPSĂ =================
+  var imgUrlCache = {};
+  var imgQueue = [];
+  var imgActive = 0;
+  var IMG_CONCURRENCY = 4;
+  function ensureImageUrl(msProd){
+    if(!msProd || msProd.imageUrl || !msProd.hasImage) return;
+    if(imgUrlCache[msProd.id]) return;
+    imgUrlCache[msProd.id] = 'queued';
+    imgQueue.push(msProd);
+    pumpImgQueue();
+  }
+  function pumpImgQueue(){
+    while(imgActive < IMG_CONCURRENCY && imgQueue.length){
+      (function(msProd){
+        imgActive++;
+        var url = catalogProxyUrl('imgurl=' + encodeURIComponent(msProd.id));
+        fetch(url).then(function(r){ return r.json(); }).then(function(data){
+          if(data && data.imageUrl) msProd.imageUrl = data.imageUrl;
+        }).catch(function(){}).then(function(){
+          imgUrlCache[msProd.id] = 'done';
+          imgActive--;
+          pumpImgQueue();
+          rerenderVisibleTabs();
+        });
+      })(imgQueue.shift());
+    }
+  }
   function historyBlockHtml(msId){
     var hist = catalogHistoryCache[msId];
     var html = '<div style="margin-top:8px"><div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;margin-bottom:4px">Istoric achiziții</div>';
@@ -554,8 +582,57 @@
     html += '</div>';
     return html;
   }
+  function historyPreviewHtml(msId){
+    var hist = catalogHistoryCache[msId];
+    if(!hist || hist === 'loading' || hist.error || !hist.rows || !hist.rows.length) return '';
+    var html = '<div style="font-size:10.5px;color:var(--text-soft);font-family:var(--mono);margin-top:2px">';
+    hist.rows.slice(0,2).forEach(function(h){ html += '🧾 ' + escAttr(fmtHistoryLine(h)) + '<br>'; });
+    html += '</div>';
+    return html;
+  }
+  function historyRestHtml(msId){
+    var hist = catalogHistoryCache[msId];
+    var html = '<div style="margin-top:8px"><div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;margin-bottom:4px">Istoric achiziții</div>';
+    if(!hist || hist === 'loading'){
+      html += '<span style="font-size:12px;color:var(--text-soft)">Se încarcă…</span>';
+    } else if(hist.error){
+      html += '<span style="font-size:12px;color:var(--bad)">Eroare: ' + escAttr(String(hist.error)) + '</span>';
+    } else if(!hist.rows.length){
+      html += '<span style="font-size:12px;color:var(--text-soft)">Niciun istoric găsit.</span>';
+    } else if(hist.rows.length <= 2){
+      html += '<span style="font-size:12px;color:var(--text-soft)">Doar cele arătate mai sus lângă denumire.</span>';
+    } else {
+      hist.rows.slice(2).forEach(function(h){
+        html += '<div style="font-size:11.5px;font-family:var(--mono);padding:2px 0">' + escAttr(fmtHistoryLine(h)) + '</div>';
+      });
+    }
+    html += '</div>';
+    return html;
+  }
+  var historyQueue = [];
+  var historyActive = 0;
+  var HISTORY_CONCURRENCY = 3;
   function ensureHistoryLoaded(msId){
-    if(!catalogHistoryCache[msId]) ptLoadCatalogHistory(msId);
+    if(catalogHistoryCache[msId]) return;
+    catalogHistoryCache[msId] = 'loading';
+    historyQueue.push(msId);
+    pumpHistoryQueue();
+  }
+  function pumpHistoryQueue(){
+    while(historyActive < HISTORY_CONCURRENCY && historyQueue.length){
+      (function(msId){
+        historyActive++;
+        fetch(catalogProxyUrl('history=' + encodeURIComponent(msId))).then(function(r){ return r.json(); }).then(function(data){
+          catalogHistoryCache[msId] = (data && data.error) ? { error: data.detail || data.error } : { rows: (data && data.history) || [] };
+        }).catch(function(err){
+          catalogHistoryCache[msId] = { error: err && err.message ? err.message : String(err) };
+        }).then(function(){
+          historyActive--;
+          pumpHistoryQueue();
+          rerenderVisibleTabs();
+        });
+      })(historyQueue.shift());
+    }
   }
 
   // ================= CATALOG MOYSKLAD (tab separat) =================
@@ -600,18 +677,6 @@
     renderCatalog();
     if(expandedCatalogId) ensureHistoryLoaded(id);
   };
-  window.ptLoadCatalogHistory = async function(id){
-    catalogHistoryCache[id] = 'loading';
-    rerenderVisibleTabs();
-    try {
-      var res = await fetch(catalogProxyUrl('history=' + encodeURIComponent(id)));
-      var data = await res.json();
-      catalogHistoryCache[id] = (!res.ok || data.error) ? { error: data.detail || data.error || res.status } : { rows: data.history || [] };
-    } catch(err){
-      catalogHistoryCache[id] = { error: err && err.message ? err.message : String(err) };
-    }
-    rerenderVisibleTabs();
-  };
   function renderCatalog(){
     var el = document.getElementById('tab-catalog');
     var base = state.settings.moyskladProxyUrl;
@@ -648,6 +713,7 @@
     html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th>Produs</th><th>Preț achiziție</th><th>Stoc</th><th>Zile în depozit</th></tr></thead><tbody>';
     visible.forEach(function(p){
       var isExpanded = expandedCatalogId === p.id;
+      ensureImageUrl(p);
       html += '<tr>';
       html += '<td style="width:40px">' + (p.imageUrl ? '<img src="' + escAttr(p.imageUrl) + '" style="width:32px;height:32px;object-fit:cover;border-radius:6px;display:block" onerror="this.style.display=\'none\'">' : '') + '</td>';
       html += '<td><button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button>' +
@@ -915,6 +981,7 @@
         var transit = getInTransitInfo(k);
         var isExpanded = expandedProductKey === k;
         var msProd = msOn ? moyskladLookup(p) : null;
+        if(msProd){ ensureImageUrl(msProd); ensureHistoryLoaded(msProd.id); }
         var canonicalMoq = null, canonicalMoqDate = null;
         Object.keys(p.bySupplier).forEach(function(sid){
           var e2 = p.bySupplier[sid];
@@ -930,6 +997,7 @@
           '<div class="prod-meta">' + (p.brand ? p.brand + ' · ' : '') + (p.quantity ? p.quantity + ' · ' : '') + (p.barcode ? 'EAN ' + p.barcode : 'fără barcode') + (p.altBarcodes && p.altBarcodes.length ? ' (+' + p.altBarcodes.length + ' cod' + (p.altBarcodes.length>1?'uri':'') + ': ' + p.altBarcodes.join(', ') + ')' : '') + (canonicalMoq ? ' · MOQ ' + canonicalMoq : '') + '</div>' +
           perSupplierBarcodeLine(p) +
           (transit.qty > 0 ? '<div style="margin-top:3px"><span class="rrp" style="background:' + (transit.overdue ? 'var(--bad)' : 'var(--rank2)') + ';color:#fff;font-size:12.5px;padding:3px 9px">' + (transit.overdue ? 'Întârziat · ' : 'Pe drum (' + (transit.freight === 'air' ? 'avia' : 'mare') + ') · ') + '<b style="font-size:14px">' + transit.qty + '</b> buc' + '</span></div>' : '') +
+          (msProd ? historyPreviewHtml(msProd.id) : '') +
           '</div></div></td>';
 
         if(msOn){
@@ -998,7 +1066,7 @@
             if(!msProd){
               html += '<div style="margin-bottom:10px;font-size:12px;color:var(--text-soft)">Nicio potrivire MoySklad pentru barcode-ul acestui produs.</div>';
             } else {
-              html += historyBlockHtml(msProd.id);
+              html += historyRestHtml(msProd.id);
             }
           }
 
