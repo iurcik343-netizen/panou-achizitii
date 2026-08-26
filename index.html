@@ -653,7 +653,7 @@
       html += '<td><button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button>' +
         '<div class="prod-meta">' + (p.brand ? escAttr(p.brand) + ' · ' : '') + (p.barcodes && p.barcodes.length ? 'EAN ' + p.barcodes.join(', ') : 'fără barcode') + (p.article ? ' · art. ' + escAttr(p.article) : '') + '</div></td>';
       html += '<td class="dim">' + (p.buyPrice !== null ? fmt(p.buyPrice) + ' ' + (p.buyPriceCurrency||'') : '—') + '</td>';
-      html += '<td class="dim" style="text-align:center">' + (p.stock !== null && p.stock !== undefined ? p.stock : '—') + '</td>';
+      html += '<td class="dim" style="text-align:center">' + (p.stock !== null && p.stock !== undefined ? p.stock : 0) + '</td>';
       html += '<td class="dim" style="text-align:center">' + (p.stockDays !== null && p.stockDays !== undefined ? Math.round(p.stockDays) : '—') + '</td>';
       html += '</tr>';
       if(isExpanded){
@@ -936,10 +936,16 @@
           if(!msProd){
             html += '<td class="dim" style="text-align:center">—</td>';
           } else {
-            html += '<td style="text-align:center;line-height:1.5;font-size:11px">' +
-              '<div><b style="font-size:14.5px;font-family:var(--mono)">St. ' + (msProd.stock !== null && msProd.stock !== undefined ? msProd.stock : '—') + '</b></div>' +
-              '<div style="color:var(--text-soft);font-family:var(--mono)">Sc. ' + (msProd.buyPrice !== null && msProd.buyPrice !== undefined ? fmt(msProd.buyPrice) : '—') + '</div>' +
-              '<div style="color:var(--text-soft);font-family:var(--mono)">Zd. ' + (msProd.stockDays !== null && msProd.stockDays !== undefined ? Math.round(msProd.stockDays) : '—') + '</div>' +
+            var stVal = (msProd.stock !== null && msProd.stock !== undefined) ? msProd.stock : 0;
+            var zdHtml = '—';
+            if(msProd.stockDays !== null && msProd.stockDays !== undefined){
+              var zd = Math.round(msProd.stockDays);
+              var zdColor = zd <= 60 ? 'var(--rank1)' : (zd <= 120 ? 'var(--rank2)' : 'var(--bad)');
+              zdHtml = '<b style="font-size:13px;color:' + zdColor + '">' + zd + '</b> (zile)';
+            }
+            html += '<td style="text-align:center;line-height:1.6;font-size:11px">' +
+              '<div><b style="font-size:14.5px;font-family:var(--mono)">' + stVal + '</b></div>' +
+              '<div style="font-family:var(--mono)">' + zdHtml + '</div>' +
               '</td>';
           }
         }
