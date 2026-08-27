@@ -390,6 +390,29 @@
     renderSettings();
   };
 
+  // ================= CURĂȚARE RÂNDURI BRUTE VECHI DIN PRICE LISTURI =================
+  // Fiecare price list importat își ține rândurile brute din Excel (headers+rows) ca să poți
+  // corecta maparea coloanelor mai târziu fără să reîncarci fișierul. Utilă imediat după import,
+  // dar cu multe liste per furnizor devine cel mai mare consumator de spațiu în starea salvată.
+  // După PRICE_LIST_ROWS_MAX_AGE_DAYS zile de la import le golim — se pierde doar comoditatea de
+  // a re-verifica maparea FĂRĂ fișier nou (UI-ul cere reîncărcarea fișierului în cazul ăsta, la
+  // fel ca la listele foarte vechi de dinainte de funcția de editare); produsele, prețurile,
+  // maparea reținută și istoricul rămân neatinse.
+  var PRICE_LIST_ROWS_MAX_AGE_DAYS = 30;
+  function pruneOldPriceListRows(){
+    var cutoff = new Date(Date.now() - PRICE_LIST_ROWS_MAX_AGE_DAYS * 86400000).toISOString().slice(0,10);
+    var pruned = 0;
+    (state.priceLists || []).forEach(function(pl){
+      if(pl.pending || !pl.rows) return;
+      if(pl.importedAt && pl.importedAt < cutoff){
+        pl.rows = null;
+        pl.rowOrigIndices = null;
+        pruned++;
+      }
+    });
+    return pruned;
+  }
+
   var saveTimer = null;
   var lastKnownUpdatedAt = null;
   var staleWarningShown = false;
@@ -446,6 +469,7 @@
         if(!parsed.settings || parsed.settings.coef === undefined){
           if(parsed.settings && parsed.settings.seaCoef !== undefined) state.settings.coef = parsed.settings.seaCoef;
         }
+        if(pruneOldPriceListRows()) save();
       }
     } catch(e){ /* first run */ }
   }
@@ -564,7 +588,7 @@
           if(data && data.received && o.status === 'in-transit'){
             o.status = 'received';
             save();
-            rerenderVisibleTabs();
+            rerenderVisibleTabsDebounced();
           }
         }).catch(function(){}).then(function(){
           delete orderStatusChecking[o.id];
@@ -727,13 +751,41 @@
     if(cmp && cmp.style.display !== 'none') renderCompare();
     if(cat && cat.style.display !== 'none') renderCatalog();
   }
+  // Poze/istoric MoySklad se încarcă treptat, în fundal, câte una — fiecare, în loc să redeseneze
+  // tabelul pe loc, așteaptă puțin să vadă dacă mai vin și altele „din același val" (ex: 6 istorice
+  // care se termină aproape simultan) și le prinde într-o singură redesenare. Fără asta, o căutare
+  // pe brand cu multe produse redesenează tabelul de zeci de ori la rând, aruncând userul înapoi sus
+  // chiar în timp ce încearcă să dea scroll.
+  var rerenderTabsTimer = null;
+  function rerenderVisibleTabsDebounced(){
+    if(rerenderTabsTimer) clearTimeout(rerenderTabsTimer);
+    rerenderTabsTimer = setTimeout(function(){
+      // Nu redesenăm peste o editare în curs (un input/textarea/select cu focus, în interiorul
+      // tabelului) — o redesenare din fundal chiar cât tastezi ar reconstrui rândul din starea
+      // veche (neschimbată încă) și ți-ar șterge exact ce tocmai ai scris, neștiindu-se salvat.
+      // Reîncercăm periodic, până când nu mai ești în mijlocul unei editări.
+      var active = document.activeElement;
+      var tag = active && active.tagName;
+      var isEditing = active && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') &&
+        (active.closest('#tab-compare') || active.closest('#tab-catalog'));
+      if(isEditing){ rerenderVisibleTabsDebounced(); return; }
+      rerenderVisibleTabs();
+    }, 200);
+  }
   function setInnerHtmlKeepingFocus(el, html){
     var active = document.activeElement;
     var focusInfo = null;
     if(active && active.id && el.contains(active)){
       focusInfo = { id: active.id, start: active.selectionStart, end: active.selectionEnd };
     }
+    // Reținem poziția de scroll a containerelor tabelului (vertical + orizontal) ÎNAINTE de
+    // înlocuirea DOM-ului — altfel orice redesenare (inclusiv cele declanșate în fundal, mai sus)
+    // te-ar arunca înapoi la începutul listei chiar dacă ai scrollat deja în jos.
+    var oldScrollers = Array.prototype.slice.call(el.querySelectorAll('.pt-vscroll, .table-wrap'));
+    var scrollInfo = oldScrollers.map(function(s){ return { top: s.scrollTop, left: s.scrollLeft }; });
     el.innerHTML = html;
+    var newScrollers = el.querySelectorAll('.pt-vscroll, .table-wrap');
+    newScrollers.forEach(function(s, i){ if(scrollInfo[i]){ s.scrollTop = scrollInfo[i].top; s.scrollLeft = scrollInfo[i].left; } });
     if(focusInfo){
       var restored = document.getElementById(focusInfo.id);
       if(restored){
@@ -767,7 +819,7 @@
           imgUrlCache[msProd.id] = 'done';
           imgActive--;
           pumpImgQueue();
-          rerenderVisibleTabs();
+          rerenderVisibleTabsDebounced();
         });
       })(imgQueue.shift());
     }
@@ -855,7 +907,7 @@
         }).then(function(){
           historyActive--;
           pumpHistoryQueue();
-          rerenderVisibleTabs();
+          rerenderVisibleTabsDebounced();
         });
       })(historyQueue.shift());
     }
@@ -1130,7 +1182,7 @@
 
     html += hiddenColsChipsHtml('cat', [ { col:'price', label:'Preț achiziție' }, { col:'stock', label:'Stoc' }, { col:'days', label:'Zile în depozit' } ]);
     var catColspan = 2 + 1 + (isColHidden('cat','price')?0:1) + (isColHidden('cat','stock')?0:1) + (isColHidden('cat','days')?0:1);
-    html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th></th>' +
+    html += '<div class="panel" style="padding:0"><div class="pt-vscroll" style="max-height:70vh;overflow-y:auto"><div class="table-wrap"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th></th>' +
       resizableThHtml('cat', 'name', 'Produs', 260, 160, 640, false) +
       (isColHidden('cat','price') ? '' : resizableThHtml('cat', 'price', 'Preț achiziție', 110, 40, 260)) +
       (isColHidden('cat','stock') ? '' : resizableThHtml('cat', 'stock', 'Stoc', 80, 40, 200)) +
@@ -1153,7 +1205,7 @@
         html += '<tr><td colspan="' + catColspan + '"><div class="detail-panel">' + historyBlockHtml(p.id) + '</div></td></tr>';
       }
     });
-    html += '</tbody></table></div></div>';
+    html += '</tbody></table></div></div></div>';
     setInnerHtmlKeepingFocus(el, html);
 
     var searchEl = document.getElementById('pt-catalog-search');
@@ -1215,6 +1267,13 @@
   function stockFor(p){
     var msProd = moyskladLookup(p);
     return (msProd && msProd.stock !== null && msProd.stock !== undefined) ? msProd.stock : null;
+  }
+  var NEW_BADGE_DAYS = 30;
+  function isNewActive(p){
+    if(!p.isNew) return false;
+    if(!p.newAt) return true;
+    var days = (Date.now() - new Date(p.newAt).getTime()) / 86400000;
+    return days < NEW_BADGE_DAYS;
   }
   function nullsLastCompare(a, b, dir){
     if(a === null && b === null) return 0;
@@ -1469,7 +1528,7 @@
       // indiferent de sortare — sortarea aleasă se aplică doar în interiorul fiecărui grup.
       function newFirst(cmp){
         return function(a,b){
-          var na = !!state.products[a].isNew, nb = !!state.products[b].isNew;
+          var na = isNewActive(state.products[a]), nb = isNewActive(state.products[b]);
           if(na !== nb) return na ? -1 : 1;
           return cmp(a,b);
         };
@@ -1504,7 +1563,7 @@
       var cmpHiddenColDefs = [ { col:'ms', label:'MoySklad' }, { col:'hist', label:'Istoric' }, { col:'rrp', label:'RRP' } ]
         .concat(suppliersList.map(function(s){ return { col:'sup_'+s.id, label:s.name }; }));
       html += hiddenColsChipsHtml('cmp', cmpHiddenColDefs);
-      html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr>' +
+      html += '<div class="panel" style="padding:0"><div class="pt-vscroll" style="max-height:70vh;overflow-y:auto"><div class="table-wrap"><table class="cmp-table sticky-col-table"><thead><tr>' +
         resizableThHtml('cmp', 'name', 'Produs', 260, 160, 640, false) +
         (msOn && !isColHidden('cmp','hist') ? resizableThHtml('cmp', 'hist', 'Istoric', 220, 26, 500) : '') +
         (msOn && !isColHidden('cmp','ms') ? resizableThHtml('cmp', 'ms', 'MoySklad', 90, 26, 220) : '') +
@@ -1543,7 +1602,7 @@
           '<div style="min-width:0;flex:1">' +
           '<div style="display:flex;align-items:center;gap:2px">' +
           '<button class="prod-title-btn pt-prodname-resizable" data-colw="cmp:name" style="width:' + getColWidth('cmp','name',260) + 'px;' + (mergeSourceKey && !isMergeSource ? 'color:var(--accent)' : '') + '" onclick="ptProductClick(\'' + kEsc + '\')" title="' + jsAttrEscape(p.displayName) + '">' + (isMergeSource ? '🔀 ' : (isExpanded ? '▾' : '▸') + ' ') + p.displayName + '</button>' +
-          (p.isNew ? ' <span style="background:var(--rank1);color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:4px;flex-shrink:0;letter-spacing:0.03em">NEW</span>' : '') +
+          (isNewActive(p) ? ' <span style="background:var(--rank1);color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:4px;flex-shrink:0;letter-spacing:0.03em">NEW</span>' : '') +
           ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="event.stopPropagation();ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">🔍</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Unește cu alt produs" onclick="event.stopPropagation();ptStartMerge(\'' + kEsc + '\')">🔀</button>' +
           '</div>' +
           '<div class="prod-meta">' + (p.brand ? p.brand + ' · ' : '') + (p.quantity ? p.quantity + ' · ' : '') + (p.barcode ? 'EAN ' + p.barcode : 'fără barcode') + (p.altBarcodes && p.altBarcodes.length ? ' (+' + p.altBarcodes.length + ' cod' + (p.altBarcodes.length>1?'uri':'') + ': ' + p.altBarcodes.join(', ') + ')' : '') + (canonicalMoq ? ' · MOQ ' + canonicalMoq : '') + '</div>' +
@@ -1600,7 +1659,10 @@
         if(!isColHidden('cmp','rrp')) html += '<td class="dim" style="font-size:10px">' + colwDivHtml('cmp','rrp',110,rrpCellHtml(p, minLanded)) + '</td>';
         html += '<td>' + (p.archived ?
           '<button class="icon-link" onclick="ptUnarchiveProduct(\'' + kEsc + '\')" title="Scoate din arhivă">↩ dezarhivează</button>' :
-          '<button class="icon-link" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">📦</button> <button class="icon-x" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">✕</button>') + '</td>';
+          '<div style="display:flex;flex-direction:column;align-items:center">' +
+            '<button class="icon-link" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">📦</button>' +
+            '<button class="icon-x" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">✕</button>' +
+          '</div>') + '</td>';
         html += '</tr>';
 
         if(isExpanded){
@@ -1673,7 +1735,7 @@
           html += '</div></td></tr>';
         }
       });
-      html += '</tbody></table></div></div>';
+      html += '</tbody></table></div></div></div>';
     }
     setInnerHtmlKeepingFocus(el, html);
     var s = document.getElementById('pt-search');
@@ -2284,6 +2346,29 @@
           pendingCount--;
           if(pendingCount === 0){
             if(parsed.length === 0){ ptToast('Niciun fișier nu a putut fi citit.', false); return; }
+            if(editingPriceListId){
+              // Se încarcă o versiune nouă a fișierului pentru un price list existent (pending sau
+              // deja importat) — actualizăm ACELAȘI price list în loc să creăm altul nou, ca să nu
+              // apară duplicat în listă, iar maparea deja salvată pe el rămâne completată automat
+              // (doExcelImport, mai jos, înlocuiește prețurile vechi cu cele noi la resubmit).
+              if(parsed.length > 1) ptToast('Ai selectat mai multe fișiere — se folosește doar primul, ca înlocuitor pentru price list-ul curent.', false);
+              var f0 = parsed[0];
+              var editingPL = state.priceLists.find(function(pl){ return pl.id === editingPriceListId; });
+              if(editingPL){
+                editingPL.fileName = f0.fileName;
+                editingPL.headers = f0.headers;
+                editingPL.rows = f0.rows;
+                editingPL.skippedRows = f0.skippedRows;
+                editingPL.rowOrigIndices = f0.rowOrigIndices;
+                pendingRawBuffers[editingPriceListId] = f0.rawBuffer;
+                save();
+              }
+              importState = { fileName: f0.fileName, headers: f0.headers, rows: f0.rows, skippedRows: f0.skippedRows, rawBuffer: f0.rawBuffer, rowOrigIndices: f0.rowOrigIndices };
+              ev.target.value = '';
+              ptToast('Fișier nou încărcat — maparea de mai jos e completată automat ca prima dată, verific-o și apasă „Importă produsele".', true);
+              renderExcelImport();
+              return;
+            }
             // Fișierele NU se importă imediat — devin „în așteptare" ca să verifici maparea
             // pentru fiecare (poate diferi de la un brand la altul) înainte să creeze produse.
             // rawBuffer (conținutul binar, pentru pozele din Excel) NU intră în starea salvată
