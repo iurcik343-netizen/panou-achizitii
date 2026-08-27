@@ -406,6 +406,10 @@
   }
   function upsertProduct(fields, sid, today){
     // fields: {name, brand, quantity, barcode, altBarcodes, price, currency, freight, rrp, moq, packQty}
+    // Dacă produsul există deja în MoySklad (potrivire pe barcode), denumirea de-acolo are prioritate — e deja curățată corect.
+    if(fields.barcode && moyskladByBarcode[fields.barcode] && moyskladByBarcode[fields.barcode].name){
+      fields.name = moyskladByBarcode[fields.barcode].name;
+    }
     if(!fields.brand && fields.name){
       var bracketMatch = fields.name.match(/^\[([^\]]+)\]/);
       if(bracketMatch) fields.brand = bracketMatch[1].trim();
@@ -532,6 +536,23 @@
     if(cmp && cmp.style.display !== 'none') renderCompare();
     if(cat && cat.style.display !== 'none') renderCatalog();
   }
+  function setInnerHtmlKeepingFocus(el, html){
+    var active = document.activeElement;
+    var focusInfo = null;
+    if(active && active.id && el.contains(active)){
+      focusInfo = { id: active.id, start: active.selectionStart, end: active.selectionEnd };
+    }
+    el.innerHTML = html;
+    if(focusInfo){
+      var restored = document.getElementById(focusInfo.id);
+      if(restored){
+        restored.focus();
+        if(typeof restored.setSelectionRange === 'function' && focusInfo.start !== null && focusInfo.start !== undefined){
+          try { restored.setSelectionRange(focusInfo.start, focusInfo.end); } catch(e){}
+        }
+      }
+    }
+  }
   // ================= ÎNCĂRCARE TREPTATĂ A IMAGINILOR LIPSĂ =================
   var imgUrlCache = {};
   var imgQueue = [];
@@ -637,16 +658,27 @@
 
   // ================= CATALOG MOYSKLAD (tab separat) =================
   var catalogProducts = [];
+  var catalogFolders = [];
   var catalogSyncing = false;
   var catalogUpdatedAt = null;
   var catalogSearchTerm = '';
-  var catalogBrandFilter = '';
+  var selectedBrandId = null;
   var expandedCatalogId = null;
   var catalogHistoryCache = {};
+  var selectedProductIds = {};
+  var bulkBusy = false;
+  var NO_BRAND = '__no_brand__';
   function catalogProxyUrl(extra){
     var base = state.settings.moyskladProxyUrl;
     if(!base) return null;
     return base + (base.indexOf('?')===-1?'?':'&') + extra;
+  }
+  async function moyskladPost(action, body){
+    var base = state.settings.moyskladProxyUrl;
+    var url = base + (base.indexOf('?')===-1?'?':'&') + 'action=' + action;
+    var res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    var data = await res.json().catch(function(){ return {}; });
+    return { ok: res.ok && !data.error, data: data };
   }
   window.ptSyncCatalog = async function(){
     var base = state.settings.moyskladProxyUrl;
@@ -661,10 +693,12 @@
         ptToast('Nu am putut sincroniza catalogul MoySklad: ' + (data.detail || data.error || res.status), false);
       } else {
         catalogProducts = data.products || [];
+        catalogFolders = data.folders || [];
         catalogUpdatedAt = data.updatedAt || new Date().toISOString();
         catalogHistoryCache = {};
+        selectedProductIds = {};
         rebuildMoyskladIndex();
-        ptToast('Catalog sincronizat: ' + catalogProducts.length + ' produse.', true);
+        ptToast('Catalog sincronizat: ' + catalogProducts.length + ' produse, ' + catalogFolders.length + ' branduri.', true);
       }
     } catch(err){
       ptToast('Eroare la conectarea cu serverul MoySklad: ' + (err && err.message ? err.message : err), false);
@@ -676,6 +710,104 @@
     expandedCatalogId = (expandedCatalogId === id) ? null : id;
     renderCatalog();
     if(expandedCatalogId) ensureHistoryLoaded(id);
+  };
+  window.ptSelectBrand = function(brandId){
+    selectedBrandId = brandId;
+    selectedProductIds = {};
+    catalogSearchTerm = '';
+    renderCatalog();
+  };
+  window.ptBackToBrands = function(){
+    selectedBrandId = null;
+    selectedProductIds = {};
+    renderCatalog();
+  };
+  window.ptAddBrand = async function(){
+    var name = prompt('Numele noului brand:');
+    if(!name || !name.trim()) return;
+    var r = await moyskladPost('createFolder', { name: name.trim() });
+    if(!r.ok){ ptToast('Nu am putut crea brandul: ' + (r.data.error || 'eroare necunoscută'), false); return; }
+    catalogFolders.push({ id: r.data.id, name: r.data.name });
+    ptToast('Brand creat: ' + r.data.name + '. Apasă „Sincronizează" ca produsele noi să-l poată folosi.', true);
+    renderCatalog();
+  };
+  window.ptRenameBrand = async function(brandId, oldName){
+    var name = prompt('Nume nou pentru „' + oldName + '":', oldName);
+    if(!name || !name.trim() || name.trim() === oldName) return;
+    var r = await moyskladPost('renameFolder', { id: brandId, name: name.trim() });
+    if(!r.ok){ ptToast('Nu am putut redenumi brandul: ' + (r.data.error || 'eroare necunoscută'), false); return; }
+    catalogFolders.forEach(function(f){ if(f.id === brandId) f.name = r.data.name; });
+    catalogProducts.forEach(function(p){ if(p.brandId === brandId) p.brand = r.data.name; });
+    ptToast('Brand redenumit.', true);
+    renderCatalog();
+  };
+  window.ptDeleteBrand = async function(brandId, name){
+    if(!confirm('Ștergi definitiv brandul „' + name + '"? Funcționează doar dacă nu mai conține produse.')) return;
+    var r = await moyskladPost('deleteFolder', { id: brandId });
+    if(!r.ok){ ptToast('Nu am putut șterge brandul: ' + (r.data.error || 'eroare necunoscută'), false); return; }
+    catalogFolders = catalogFolders.filter(function(f){ return f.id !== brandId; });
+    ptToast('Brand șters.', true);
+    renderCatalog();
+  };
+  window.ptToggleProductSelect = function(id){
+    if(selectedProductIds[id]) delete selectedProductIds[id]; else selectedProductIds[id] = true;
+    renderCatalog();
+  };
+  window.ptArchiveBrand = async function(brandId, brandName){
+    var ids = catalogProducts.filter(function(p){ return brandId === NO_BRAND ? !p.brandId : p.brandId === brandId; }).map(function(p){ return p.id; });
+    if(!ids.length){ ptToast('Niciun produs de arhivat în acest brand.', false); return; }
+    if(bulkBusy) return;
+    if(!confirm('Arhivezi tot brandul „' + brandName + '" — ' + ids.length + ' produse — în MoySklad? Vor dispărea și din Comparație produse (secțiunea Arhivate).')) return;
+    bulkBusy = true; renderCatalog();
+    var barcodesToArchive = [];
+    catalogProducts.forEach(function(p){ if(ids.indexOf(p.id) !== -1) (p.barcodes||[]).forEach(function(bc){ barcodesToArchive.push(bc); }); });
+    var r = await moyskladPost('setArchived', { ids: ids, archived: true });
+    bulkBusy = false;
+    if(!r.ok && r.data.updated === 0){ ptToast('Nu am putut arhiva brandul.', false); renderCatalog(); return; }
+    catalogProducts = catalogProducts.filter(function(p){ return ids.indexOf(p.id) === -1; });
+    rebuildMoyskladIndex();
+    var archivedLocally = 0;
+    barcodesToArchive.forEach(function(bc){
+      var key = 'bc:' + bc;
+      if(state.products[key] && !state.products[key].archived){ state.products[key].archived = true; archivedLocally++; }
+    });
+    if(archivedLocally){ save(); }
+    ptToast('Brand arhivat în MoySklad (' + (r.data.updated||0) + ' produse)' + (archivedLocally ? ', și ' + archivedLocally + ' arhivate în Comparație produse' : '') + '.', true);
+    selectedBrandId = null;
+    rerenderVisibleTabs();
+  };
+  window.ptBulkArchive = async function(){
+    var ids = Object.keys(selectedProductIds);
+    if(!ids.length || bulkBusy) return;
+    if(!confirm('Arhivezi ' + ids.length + ' produs(e) în MoySklad? Poți dezarhiva oricând din MoySklad direct.')) return;
+    bulkBusy = true; renderCatalog();
+    var r = await moyskladPost('setArchived', { ids: ids, archived: true });
+    bulkBusy = false;
+    if(!r.ok && r.data.updated === 0){ ptToast('Nu am putut arhiva produsele.', false); }
+    else {
+      catalogProducts = catalogProducts.filter(function(p){ return ids.indexOf(p.id) === -1; });
+      rebuildMoyskladIndex();
+      selectedProductIds = {};
+      ptToast('Arhivat: ' + (r.data.updated || 0) + ' din ' + ids.length + '.', true);
+    }
+    renderCatalog();
+  };
+  window.ptBulkDelete = async function(){
+    var ids = Object.keys(selectedProductIds);
+    if(!ids.length || bulkBusy) return;
+    if(!confirm('ȘTERGI DEFINITIV ' + ids.length + ' produs(e) din MoySklad? Această acțiune NU poate fi anulată.')) return;
+    if(!confirm('Sigur? Verifică încă o dată numărul: ' + ids.length + ' produse vor dispărea definitiv din MoySklad.')) return;
+    bulkBusy = true; renderCatalog();
+    var r = await moyskladPost('deleteProducts', { ids: ids });
+    bulkBusy = false;
+    if(!r.ok && r.data.deleted === 0){ ptToast('Nu am putut șterge produsele.', false); }
+    else {
+      catalogProducts = catalogProducts.filter(function(p){ return ids.indexOf(p.id) === -1; });
+      rebuildMoyskladIndex();
+      selectedProductIds = {};
+      ptToast('Șters: ' + (r.data.deleted || 0) + ' din ' + ids.length + '.', true);
+    }
+    renderCatalog();
   };
   function renderCatalog(){
     var el = document.getElementById('tab-catalog');
@@ -693,14 +825,50 @@
       el.innerHTML = html;
       return;
     }
-    var allCatalogBrands = Array.from(new Set(catalogProducts.map(function(p){ return p.brand; }).filter(Boolean))).sort();
-    html += '<div class="search-row"><input type="text" id="pt-catalog-search" placeholder="Caută după nume sau barcode…" value="' + catalogSearchTerm.replace(/"/g,'') + '" style="flex:2">' +
-      '<select id="pt-catalog-brand" style="flex:1;margin-bottom:0"><option value="">Toate brandurile' + (allCatalogBrands.length ? ' (' + allCatalogBrands.length + ')' : '') + '</option>' +
-      allCatalogBrands.map(function(b){ return '<option value="' + escAttr(b) + '" ' + (catalogBrandFilter===b?'selected':'') + '>' + escAttr(b) + '</option>'; }).join('') +
-      '</select></div>';
+
+    if(selectedBrandId === null){
+      // ---- LISTA DE BRANDURI ----
+      var countByBrand = {};
+      var noBrandCount = 0;
+      catalogProducts.forEach(function(p){
+        if(p.brandId){ countByBrand[p.brandId] = (countByBrand[p.brandId]||0) + 1; }
+        else noBrandCount++;
+      });
+      html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+        '<h2 style="margin:0">Branduri (' + catalogFolders.length + ')</h2>' +
+        '<button class="primary" onclick="ptAddBrand()">+ Adaugă brand</button></div>';
+      html += '<div class="panel" style="padding:0">';
+      var sortedFolders = catalogFolders.slice().sort(function(a,b){ return a.name.localeCompare(b.name, undefined, {sensitivity:'base'}); });
+      sortedFolders.forEach(function(f){
+        html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;cursor:pointer" onclick="ptSelectBrand(\'' + f.id + '\')">' +
+          '<span>' + escAttr(f.name) + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + (countByBrand[f.id]||0) + ' produse)</span></span>' +
+          '<span class="entry-actions"><button class="icon-link" onclick="event.stopPropagation();ptRenameBrand(\'' + f.id + '\',\'' + jsAttrEscape(f.name) + '\')">✏️</button><button class="icon-x" onclick="event.stopPropagation();ptDeleteBrand(\'' + f.id + '\',\'' + jsAttrEscape(f.name) + '\')">✕</button></span>' +
+          '</div>';
+      });
+      if(noBrandCount > 0){
+        html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;cursor:pointer" onclick="ptSelectBrand(\'' + NO_BRAND + '\')">' +
+          '<span>Fără brand <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + noBrandCount + ' produse)</span></span></div>';
+      }
+      html += '</div>';
+      el.innerHTML = html;
+      return;
+    }
+
+    // ---- PRODUSELE DINTR-UN BRAND ----
+    var brandObj = catalogFolders.find(function(f){ return f.id === selectedBrandId; });
+    var brandName = selectedBrandId === NO_BRAND ? 'Fără brand' : (brandObj ? brandObj.name : '(brand necunoscut)');
+    var brandProductIds = catalogProducts.filter(function(p){ return selectedBrandId === NO_BRAND ? !p.brandId : p.brandId === selectedBrandId; }).map(function(p){ return p.id; });
+    html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
+      '<div><button class="icon-link" onclick="ptBackToBrands()">◀ Toate brandurile</button> <h2 style="display:inline;margin-left:8px">' + escAttr(brandName) + '</h2></div>' +
+      '<span><button class="secondary" onclick="ptArchiveBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')" ' + (bulkBusy?'disabled':'') + '>📦 Arhivează tot brandul (' + brandProductIds.length + ')</button> ' +
+      (selectedBrandId !== NO_BRAND ? '<button class="icon-link" onclick="ptRenameBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">✏️ redenumește</button> <button class="icon-x" onclick="ptDeleteBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">✕ șterge brand</button>' : '') + '</span>' +
+      '</div>';
+
+    html += '<div class="search-row"><input type="text" id="pt-catalog-search" placeholder="Caută după nume sau barcode…" value="' + catalogSearchTerm.replace(/"/g,'') + '" style="flex:1"></div>';
     var q = normName(catalogSearchTerm);
     var filtered = catalogProducts.filter(function(p){
-      if(catalogBrandFilter && p.brand !== catalogBrandFilter) return false;
+      var inBrand = selectedBrandId === NO_BRAND ? !p.brandId : p.brandId === selectedBrandId;
+      if(!inBrand) return false;
       if(!q) return true;
       var hay = normName(p.name) + ' ' + (p.barcodes||[]).join(' ') + ' ' + (p.article||'') + ' ' + (p.code||'');
       return hay.indexOf(q) !== -1;
@@ -708,26 +876,36 @@
     var RENDER_LIMIT = 200;
     var truncated = filtered.length > RENDER_LIMIT;
     var visible = truncated ? filtered.slice(0, RENDER_LIMIT) : filtered;
-    if(truncated) html += '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:4px 10px;font-size:10.5px;margin-bottom:8px;display:inline-block">' + filtered.length + ' produse — afișez primele ' + RENDER_LIMIT + '. Caută sau filtrează pe brand pentru restul.</div><div style="flex-basis:100%"></div>';
+    if(truncated) html += '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:4px 10px;font-size:10.5px;margin-bottom:8px;display:inline-block">' + filtered.length + ' produse — afișez primele ' + RENDER_LIMIT + '. Caută pentru restul.</div><div style="flex-basis:100%"></div>';
 
-    html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th>Produs</th><th>Preț achiziție</th><th>Stoc</th><th>Zile în depozit</th></tr></thead><tbody>';
+    var selCount = Object.keys(selectedProductIds).length;
+    if(selCount > 0){
+      html += '<div class="panel" style="padding:8px 14px;background:var(--accent-soft);border-color:var(--accent);display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' +
+        '<span style="font-size:12.5px;color:var(--accent-dark)">' + selCount + ' selectate</span>' +
+        '<button class="secondary" onclick="ptBulkArchive()" ' + (bulkBusy?'disabled':'') + '>📦 Arhivează selectate</button>' +
+        '<button class="secondary" style="border-color:var(--bad);color:var(--bad)" onclick="ptBulkDelete()" ' + (bulkBusy?'disabled':'') + '>✕ Șterge definitiv selectate</button>' +
+        '</div>';
+    }
+
+    html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th></th><th>Produs</th><th>Preț achiziție</th><th>Stoc</th><th>Zile în depozit</th></tr></thead><tbody>';
     visible.forEach(function(p){
       var isExpanded = expandedCatalogId === p.id;
       ensureImageUrl(p);
       html += '<tr>';
+      html += '<td style="width:24px"><input type="checkbox" ' + (selectedProductIds[p.id]?'checked':'') + ' onchange="ptToggleProductSelect(\'' + p.id + '\')"></td>';
       html += '<td style="width:40px">' + (p.imageUrl ? '<img src="' + escAttr(p.imageUrl) + '" style="width:32px;height:32px;object-fit:cover;border-radius:6px;display:block" onerror="this.style.display=\'none\'">' : '') + '</td>';
       html += '<td><button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button> <button class="icon-link" style="padding:0 3px" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.name) + '\')">🔍</button>' +
-        '<div class="prod-meta">' + (p.brand ? escAttr(p.brand) + ' · ' : '') + (p.barcodes && p.barcodes.length ? 'EAN ' + p.barcodes.join(', ') : 'fără barcode') + (p.article ? ' · art. ' + escAttr(p.article) : '') + '</div></td>';
+        '<div class="prod-meta">' + (p.barcodes && p.barcodes.length ? 'EAN ' + p.barcodes.join(', ') : 'fără barcode') + (p.article ? ' · art. ' + escAttr(p.article) : '') + '</div></td>';
       html += '<td class="dim">' + (p.buyPrice !== null ? fmt(p.buyPrice) + ' ' + (p.buyPriceCurrency||'') : '—') + '</td>';
       html += '<td class="dim" style="text-align:center">' + (p.stock !== null && p.stock !== undefined ? p.stock : 0) + '</td>';
       html += '<td class="dim" style="text-align:center">' + (p.stockDays !== null && p.stockDays !== undefined ? Math.round(p.stockDays) : '—') + '</td>';
       html += '</tr>';
       if(isExpanded){
-        html += '<tr><td colspan="5"><div class="detail-panel">' + historyBlockHtml(p.id) + '</div></td></tr>';
+        html += '<tr><td colspan="6"><div class="detail-panel">' + historyBlockHtml(p.id) + '</div></td></tr>';
       }
     });
     html += '</tbody></table></div></div>';
-    el.innerHTML = html;
+    setInnerHtmlKeepingFocus(el, html);
 
     var searchEl = document.getElementById('pt-catalog-search');
     if(searchEl){
@@ -737,10 +915,6 @@
         var i = document.getElementById('pt-catalog-search');
         i.focus(); i.setSelectionRange(i.value.length, i.value.length);
       });
-    }
-    var brandEl = document.getElementById('pt-catalog-brand');
-    if(brandEl){
-      brandEl.addEventListener('change', function(e){ catalogBrandFilter = e.target.value; renderCatalog(); });
     }
   }
 
@@ -864,6 +1038,14 @@
     save(); renderCompare();
     ptToast(fixed > 0 ? ('Brand greșit șters la ' + fixed + ' produse (conținea „[”, semn că era de fapt o denumire de produs, nu un brand real).') : 'Niciun brand suspect găsit.', fixed > 0);
   };
+  window.ptArchiveLocalBrand = function(brand){
+    var toArchive = Object.keys(state.products).filter(function(k){ return state.products[k].brand === brand && !state.products[k].archived; });
+    if(!toArchive.length){ ptToast('Niciun produs activ de arhivat pentru brandul „' + brand + '".', false); return; }
+    if(!confirm('Arhivezi tot brandul „' + brand + '" — ' + toArchive.length + ' produse — din Comparație produse?')) return;
+    toArchive.forEach(function(k){ state.products[k].archived = true; });
+    save(); renderCompare();
+    ptToast('Brand „' + brand + '" arhivat (' + toArchive.length + ' produse).', true);
+  };
   window.ptBackfillRrpCurrency = function(){
     var fixed = 0;
     Object.keys(state.products).forEach(function(k){
@@ -936,7 +1118,9 @@
     html += '<div class="search-row"><input type="text" id="pt-search" placeholder="Caută după nume, brand, barcode sau mărime…" value="' + searchTerm.replace(/"/g,'') + '" style="flex:2">' +
       '<select id="pt-brand-filter" style="flex:1;margin-bottom:0"><option value="">Toate brandurile' + (allBrands.length ? ' (' + allBrands.length + ')' : '') + '</option>' +
       allBrands.map(function(b){ return '<option value="' + escAttr(b) + '" ' + (brandFilter===b?'selected':'') + '>' + b + '</option>'; }).join('') +
-      '</select><button class="secondary" onclick="ptBackfillBrands()" title="Completează brandul lipsă din nume, ex: [BBIA] Produs → brand BBIA" style="white-space:nowrap">🔧 brand din nume</button>' +
+      '</select>' +
+      (brandFilter ? '<button class="secondary" onclick="ptArchiveLocalBrand(\'' + jsAttrEscape(brandFilter) + '\')" style="white-space:nowrap">📦 Arhivează tot brandul „' + escAttr(brandFilter) + '"</button>' : '') +
+      '<button class="secondary" onclick="ptBackfillBrands()" title="Completează brandul lipsă din nume, ex: [BBIA] Produs → brand BBIA" style="white-space:nowrap">🔧 brand din nume</button>' +
       '<button class="secondary" onclick="ptBackfillRrpCurrency()" title="Setează moneda RRP (pentru produsele importate înainte de acest fix)" style="white-space:nowrap">🔧 monedă RRP</button>' +
       '<button class="secondary" onclick="ptCleanupBadBrands()" title="Șterge brandurile greșite provenite dintr-un bug de import (denumiri de produs salvate ca brand)" style="white-space:nowrap">🔧 curăță branduri greșite</button>' +
       '<button class="subtab-btn ' + (showArchived?'active':'') + '" onclick="ptToggleShowArchived()" style="white-space:nowrap">📦 Arhivate (' + archivedCount + ')</button></div>';
@@ -1122,7 +1306,7 @@
       });
       html += '</tbody></table></div></div>';
     }
-    el.innerHTML = html;
+    setInnerHtmlKeepingFocus(el, html);
     var s = document.getElementById('pt-search');
     if(s){ s.addEventListener('input', function(ev){ searchTerm = normName(ev.target.value); renderCompare(); var i=document.getElementById('pt-search'); i.focus(); i.setSelectionRange(i.value.length,i.value.length); }); }
     var bf = document.getElementById('pt-brand-filter');
@@ -1243,6 +1427,12 @@
     if(!body) return;
     var html = '<label>Furnizor</label><select id="pt-ord-supplier">' + supplierOptions() + '</select>';
     html += '<label>Fișier</label><input type="file" id="pt-ord-file" accept=".xlsx,.xls,.csv">';
+    if(state.settings.moyskladProxyUrl){
+      html += '<label>Sau importă direct din comanda MoySklad (Заказы поставщикам)</label>' +
+        '<div class="row"><div style="flex:2"><input type="text" id="pt-ord-ms-number" placeholder="ex: 00117" style="margin-bottom:0"></div>' +
+        '<div style="flex:1"><button class="secondary" id="pt-ord-ms-fetch" style="width:100%">Adu comanda</button></div></div>' +
+        '<div id="pt-ord-ms-feedback"></div>';
+    }
     html += '<div id="pt-ord-mapping"></div>';
     body.innerHTML = html;
 
@@ -1265,6 +1455,41 @@
       };
       reader.readAsArrayBuffer(file);
     });
+
+    var msFetchBtn = document.getElementById('pt-ord-ms-fetch');
+    if(msFetchBtn){
+      msFetchBtn.addEventListener('click', async function(){
+        var base = state.settings.moyskladProxyUrl;
+        var fb = document.getElementById('pt-ord-ms-feedback');
+        var num = document.getElementById('pt-ord-ms-number').value.trim();
+        if(!num){ fb.className='feedback err'; fb.textContent='Introdu numărul comenzii.'; return; }
+        fb.className='feedback'; fb.textContent='Se caută în MoySklad…';
+        try {
+          var url = base + (base.indexOf('?')===-1?'?':'&') + 'ordernum=' + encodeURIComponent(num);
+          var res = await fetch(url);
+          var data = await res.json();
+          if(!res.ok || data.error){ fb.className='feedback err'; fb.textContent = data.error || 'Eroare la citirea comenzii.'; return; }
+          if(!data.lines || !data.lines.length){ fb.className='feedback err'; fb.textContent='Comanda nu are niciun produs.'; return; }
+          importOrderFile = {
+            fileName: 'MoySklad #' + data.orderNumber,
+            headers: ['Barcode','Nume','Preț','Cantitate comandată'],
+            rows: data.lines.map(function(l){ return [l.barcode||'', l.name || l.code || '(produs necunoscut)', l.price, l.quantity]; }),
+            skippedRows: 0
+          };
+          renderOrderMapping();
+          ['barcode','name','price','orderQty'].forEach(function(key, idx){
+            var sel = document.getElementById('pt-ord-map-' + key);
+            if(sel) sel.value = String(idx);
+          });
+          var curEl = document.getElementById('pt-ord-def-currency');
+          if(curEl) curEl.value = 'MDL';
+          window.ptRenderOrderPreview();
+          fb.className='feedback ok'; fb.textContent = '✓ Adus: ' + data.lines.length + ' produse din comanda ' + data.orderNumber + (data.supplier ? ' (' + data.supplier + ')' : '') + '. Verifică maparea și moneda mai jos, apoi înregistrează.';
+        } catch(err){
+          fb.className='feedback err'; fb.textContent = 'Eroare la conectare: ' + (err && err.message ? err.message : err);
+        }
+      });
+    }
   }
 
   function renderOrderMapping(){
