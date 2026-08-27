@@ -2567,7 +2567,7 @@
     var defCurrency = document.getElementById('pt-map-def-currency').value;
     var defFreight = document.getElementById('pt-map-def-freight').value;
     var today = new Date().toISOString().slice(0,10);
-    var added=0, updated=0, increases=0, errors=0;
+    var added=0, updated=0, increases=0, errors=0, currencyFallbacks=0;
     var filesToProcess = (importFiles && importFiles.length) ? importFiles : [importState];
 
     filesToProcess.forEach(function(file){
@@ -2581,6 +2581,14 @@
         var price = parseFloat(String(priceRaw).replace(',','.'));
         if(!name || isNaN(price)){ errors++; return; }
         var currency = m.currency>=0 ? normalizeCurrency(r[m.currency], defCurrency) : defCurrency;
+        // Coloana de monedă e mapată, dar valoarea din acest rând nu se potrivește cu nimic
+        // recunoscut (USD/MDL/EUR/KRW) — s-a folosit silențios moneda implicită, ceea ce poate fi
+        // greșit dacă rândul chiar avea altă monedă. Semnalăm în rezumatul importului, ca produsele
+        // afectate să nu rămână neobservate cu prețul citit în moneda nepotrivită.
+        if(m.currency>=0){
+          var rawCur = String(r[m.currency]||'').trim();
+          if(rawCur && normalizeCurrency(rawCur, null) === null) currencyFallbacks++;
+        }
         var barcodeList = m.barcode>=0 ? extractBarcodes(r[m.barcode]) : [];
         var barcode = barcodeList.length ? barcodeList[0] : '';
         var altBarcodes = barcodeList.slice(1);
@@ -2643,6 +2651,7 @@
     if(filesToProcess.length > 1) msg += ' (din ' + filesToProcess.length + ' fișiere)';
     if(increases>0) msg += ', ' + increases + ' cu preț crescut';
     if(errors>0) msg += ', ' + errors + ' rânduri ignorate (lipsă produs/preț)';
+    if(currencyFallbacks>0) msg += '\n⚠ ' + currencyFallbacks + ' rând(uri) cu monedă nerecunoscută în coloana mapată — s-a folosit „' + defCurrency + '" (implicită). Verifică-le, ar putea fi în altă monedă.';
     fb.className = 'feedback ok'; fb.textContent = msg;
     importFiles = null; importState = null; editingPriceListId = null;
     renderCompare();
