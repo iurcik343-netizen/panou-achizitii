@@ -417,9 +417,13 @@
         ptToast('Atenție: baza de date e mare (~' + Math.round(payload.length/1024) + ' KB). Ia în calcul să ștergi cataloage vechi nefolosite.', false);
       }
       var nowIso = new Date().toISOString();
-      var result = await supabaseClient.from('app_state').upsert({ id: STATE_ROW_ID, data: state, updated_at: nowIso });
+      // Cerem rândul înapoi (select) după upsert, ca să reținem exact formatul de timestamp pe
+      // care îl întoarce Supabase — dacă am reține în schimb string-ul nostru local (toISOString),
+      // comparația de mai sus la salvarea următoare ar pica mereu fals-pozitiv, pentru că Postgres
+      // serializează timestamp-urile puțin diferit (alt format de precizie/fus orar).
+      var result = await supabaseClient.from('app_state').upsert({ id: STATE_ROW_ID, data: state, updated_at: nowIso }).select('updated_at').maybeSingle();
       if(result.error) ptToast('Salvarea nu a reușit: ' + result.error.message, false);
-      else { lastKnownUpdatedAt = nowIso; staleWarningShown = false; }
+      else { lastKnownUpdatedAt = (result.data && result.data.updated_at) || nowIso; staleWarningShown = false; }
     } catch(e){
       ptToast('Eroare la salvare: ' + (e && e.message ? e.message : 'necunoscută') + '. Modificarea ar putea să nu fi fost păstrată.', false);
     }
