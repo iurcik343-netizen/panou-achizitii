@@ -389,6 +389,45 @@
     return { qty: qty, eta: eta, overdue: !!(eta && eta < todayStr()), freight: freight };
   }
 
+  // Verifică automat, în fundal, dacă o comandă adusă din MoySklad (status „Pe drum") a fost
+  // între timp recepționată acolo (o Приемка creată pe baza ei) — dacă da, trece statusul pe
+  // „Recepționată", ca produsele să nu mai apară „pe drum" în Comparație produse.
+  var orderStatusQueue = [];
+  var orderStatusActive = 0;
+  var orderStatusChecking = {};
+  var ORDER_STATUS_CONCURRENCY = 2;
+  var ORDER_STATUS_RECHECK_MS = 5 * 60 * 1000;
+  function ensureOrderStatusChecked(o){
+    if(!o.moyskladOrderId || o.status !== 'in-transit') return;
+    if(!state.settings.moyskladProxyUrl) return;
+    if(o.moyskladCheckedAt && (Date.now() - o.moyskladCheckedAt) < ORDER_STATUS_RECHECK_MS) return;
+    if(orderStatusChecking[o.id]) return;
+    orderStatusChecking[o.id] = true;
+    orderStatusQueue.push(o);
+    pumpOrderStatusQueue();
+  }
+  function pumpOrderStatusQueue(){
+    while(orderStatusActive < ORDER_STATUS_CONCURRENCY && orderStatusQueue.length){
+      (function(o){
+        orderStatusActive++;
+        var base = state.settings.moyskladProxyUrl;
+        var url = base + (base.indexOf('?')===-1?'?':'&') + 'orderstatus=' + encodeURIComponent(o.moyskladOrderId);
+        fetch(url).then(function(res){ return res.json(); }).then(function(data){
+          o.moyskladCheckedAt = Date.now();
+          if(data && data.received && o.status === 'in-transit'){
+            o.status = 'received';
+            save();
+            rerenderVisibleTabs();
+          }
+        }).catch(function(){}).then(function(){
+          delete orderStatusChecking[o.id];
+          orderStatusActive--;
+          pumpOrderStatusQueue();
+        });
+      })(orderStatusQueue.shift());
+    }
+  }
+
   function convertToMDL(amount, currency){
     if(!currency || currency === 'MDL') return amount;
     if(currency === 'KRW') return (amount / state.settings.krwPerUsd) * state.settings.exchangeRate;
@@ -606,8 +645,8 @@
   function historyPreviewHtml(msId){
     var hist = catalogHistoryCache[msId];
     if(!hist || hist === 'loading' || hist.error || !hist.rows || !hist.rows.length) return '';
-    var html = '<div style="font-size:12.5px;font-weight:700;color:var(--text);font-family:var(--mono);text-align:right;white-space:nowrap">';
-    hist.rows.slice(0,2).forEach(function(h){ html += '🧾 ' + escAttr(fmtHistoryLine(h)) + '<br>'; });
+    var html = '<div style="font-size:12.5px;font-weight:500;color:var(--text-soft);font-family:var(--mono);text-align:left;white-space:nowrap">';
+    hist.rows.slice(0,2).forEach(function(h){ html += escAttr(fmtHistoryLine(h)) + '<br>'; });
     html += '</div>';
     return html;
   }
@@ -672,6 +711,21 @@
   var catalogShowHiddenProducts = false;
   function hiddenBrandIds(){ return state.settings.hiddenMoyskladBrandIds || (state.settings.hiddenMoyskladBrandIds = []); }
   function hiddenProductIds(){ return state.settings.hiddenMoyskladProductIds || (state.settings.hiddenMoyskladProductIds = []); }
+  var CATALOG_CACHE_KEY = 'pt_moysklad_catalog_cache_v1';
+  function saveCatalogCache(){
+    try { localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({ products: catalogProducts, folders: catalogFolders, updatedAt: catalogUpdatedAt })); } catch(e){ /* localStorage indisponibil sau plin — catalogul rămâne doar în memorie */ }
+  }
+  (function loadCatalogCache(){
+    try {
+      var raw = localStorage.getItem(CATALOG_CACHE_KEY);
+      if(!raw) return;
+      var cached = JSON.parse(raw);
+      catalogProducts = cached.products || [];
+      catalogFolders = cached.folders || [];
+      catalogUpdatedAt = cached.updatedAt || null;
+      rebuildMoyskladIndex();
+    } catch(e){ /* cache corupt sau inexistent — rămâne gol, se resincronizează manual */ }
+  })();
   function catalogProxyUrl(extra){
     var base = state.settings.moyskladProxyUrl;
     if(!base) return null;
@@ -702,6 +756,7 @@
         catalogHistoryCache = {};
         selectedProductIds = {};
         rebuildMoyskladIndex();
+        saveCatalogCache();
         ptToast('Catalog sincronizat: ' + catalogProducts.length + ' produse, ' + catalogFolders.length + ' branduri.', true);
       }
     } catch(err){
@@ -1193,16 +1248,16 @@
 
         var isMergeSource = mergeSourceKey === k;
         html += '<tr' + (isMergeSource ? ' style="outline:2px solid var(--accent);outline-offset:-2px"' : '') + '>';
-        html += '<td><div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between">' +
+        html += '<td><div style="display:flex;gap:8px;align-items:flex-start">' +
           '<div style="display:flex;gap:8px;align-items:flex-start">' +
-          (msProd && msProd.imageUrl ? '<img src="' + escAttr(msProd.imageUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0;margin-top:2px" onerror="this.style.display=\'none\'">' : '') +
+          (msOn ? (msProd && msProd.imageUrl ? '<img src="' + escAttr(msProd.imageUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0;margin-top:2px" onerror="this.style.visibility=\'hidden\'">' : '<div style="width:28px;height:28px;flex-shrink:0"></div>') : '') +
           '<div>' +
           '<button class="prod-title-btn" style="' + (mergeSourceKey && !isMergeSource ? 'color:var(--accent)' : '') + '" onclick="ptProductClick(\'' + kEsc + '\')">' + (isMergeSource ? '🔀 ' : (isExpanded ? '▾' : '▸') + ' ') + p.displayName + '</button> <button class="icon-link" style="padding:0 3px" title="Copiază denumirea" onclick="event.stopPropagation();ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button> <button class="icon-link" style="padding:0 3px" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">🔍</button> <button class="icon-link" style="padding:0 3px" title="Unește cu alt produs" onclick="event.stopPropagation();ptStartMerge(\'' + kEsc + '\')">🔀</button>' +
           '<div class="prod-meta">' + (p.brand ? p.brand + ' · ' : '') + (p.quantity ? p.quantity + ' · ' : '') + (p.barcode ? 'EAN ' + p.barcode : 'fără barcode') + (p.altBarcodes && p.altBarcodes.length ? ' (+' + p.altBarcodes.length + ' cod' + (p.altBarcodes.length>1?'uri':'') + ': ' + p.altBarcodes.join(', ') + ')' : '') + (canonicalMoq ? ' · MOQ ' + canonicalMoq : '') + '</div>' +
           perSupplierBarcodeLine(p) +
           (transit.qty > 0 ? '<div style="margin-top:3px"><span class="rrp" style="background:' + (transit.overdue ? 'var(--bad)' : 'var(--rank2)') + ';color:#fff;font-size:12.5px;padding:3px 9px">' + (transit.overdue ? 'Întârziat · ' : 'Pe drum (' + (transit.freight === 'air' ? 'avia' : 'mare') + ') · ') + '<b style="font-size:14px">' + transit.qty + '</b> buc' + '</span></div>' : '') +
           '</div></div>' +
-          (msProd ? '<div style="flex-shrink:0;padding-left:10px">' + historyPreviewHtml(msProd.id) + '</div>' : '') +
+          (msProd ? '<div style="flex-shrink:0;padding-left:18px">' + historyPreviewHtml(msProd.id) + '</div>' : '') +
           '</div></td>';
 
         if(msOn){
@@ -1493,7 +1548,10 @@
             fileName: 'MoySklad #' + data.orderNumber,
             headers: ['Barcode','Nume','Preț','Cantitate comandată'],
             rows: data.lines.map(function(l){ return [l.barcode||'', l.name || l.code || '(produs necunoscut)', l.price, l.quantity]; }),
-            skippedRows: 0
+            skippedRows: 0,
+            moyskladOrderId: data.moyskladOrderId || null,
+            moyskladSum: data.sum || 0,
+            moyskladShippedSum: data.shippedSum || 0
           };
           renderOrderMapping();
           ['barcode','name','price','orderQty'].forEach(function(key, idx){
@@ -1656,7 +1714,16 @@
     lines.forEach(function(l){ totals[l.currency] = (totals[l.currency]||0) + l.lineTotal; });
     var landedTotal = 0;
     lines.forEach(function(l){ landedTotal += toUSD(l.price, l.currency) * state.settings.exchangeRate * coef; });
-    state.orders.unshift({ id: uid(), supplierId: sid, date: today, eta: eta, status: 'confirmata', freight: freight, coef: coef, landedTotal: landedTotal, lines: lines, totals: totals });
+    // O comandă adusă direct din MoySklad (Заказы поставщикам) înseamnă că factura e deja
+    // înregistrată acolo, deci marfa e deja „pe drum" — dacă MoySklad arată că a fost și
+    // recepționată integral (shippedSum >= sum), sare direct la „Recepționată".
+    var msOrderId = importOrderFile.moyskladOrderId || null;
+    var initialStatus = 'confirmata';
+    if(msOrderId){
+      var msFullyReceived = importOrderFile.moyskladSum > 0 && importOrderFile.moyskladShippedSum >= importOrderFile.moyskladSum;
+      initialStatus = msFullyReceived ? 'received' : 'in-transit';
+    }
+    state.orders.unshift({ id: uid(), supplierId: sid, date: today, eta: eta, status: initialStatus, freight: freight, coef: coef, landedTotal: landedTotal, lines: lines, totals: totals, moyskladOrderId: msOrderId, moyskladCheckedAt: msOrderId ? Date.now() : null });
     lines.forEach(function(l){
       var prod = state.products[l.key];
       if(prod && prod.bySupplier[sid]){
@@ -1667,7 +1734,7 @@
 
     save();
     fb.className='feedback ok';
-    fb.textContent = 'Comandă înregistrată: ' + lines.length + ' produse (' + added + ' noi, ' + updated + ' actualizate)' + (errors>0?(', '+errors+' rânduri ignorate'):'') + '. Status: Confirmată.';
+    fb.textContent = 'Comandă înregistrată: ' + lines.length + ' produse (' + added + ' noi, ' + updated + ' actualizate)' + (errors>0?(', '+errors+' rânduri ignorate'):'') + '. Status: ' + ORDER_STATUS_LABELS[initialStatus] + '.';
     importOrderFile = null;
     renderCompare();
     if(document.getElementById('pt-order-history')) renderOrderHistory();
@@ -2238,6 +2305,7 @@
     if(state.orders.length === 0){ box.innerHTML = '<div style="color:var(--text-soft);font-size:13px">Nicio comandă salvată încă.</div>'; return; }
     var today = todayStr();
     box.innerHTML = state.orders.map(function(o){
+      ensureOrderStatusChecked(o);
       var totalStr = Object.keys(o.totals).map(function(c){ return fmt(o.totals[c]) + ' ' + c; }).join(' + ');
       var overdue = o.status !== 'received' && o.eta && o.eta < today;
       var statusSelect = '<select style="width:auto;margin-bottom:0;display:inline-block;font-weight:600;color:' + (overdue ? 'var(--bad)' : ORDER_STATUS_COLORS[o.status] || 'var(--text)') + '" onchange="ptSetOrderStatus(\'' + o.id + '\', this.value)">' +
@@ -2408,8 +2476,11 @@
     keys.forEach(function(k){
       var p = state.products[k];
       var sc = getSinecost(k);
-      var suggested = sc.cost != null ? suggestedPrice(sc.cost, state.settings.defaultMarkup) : null;
-      if(p.sellPrice == null && suggested != null){ p.sellPrice = Math.round(suggested); save(); }
+      var msProd = moyskladLookup(p);
+      if(msProd) ensureImageUrl(msProd);
+      // Prețul de vânzare vine din ce are produsul deja setat în aplicație; dacă nu are, pornește de la 0
+      // (adaosul automat nu se mai aplică — se stabilește oricum manual, per produs).
+      if(p.sellPrice == null){ p.sellPrice = 0; save(); }
       var sellVal = (p.sellPrice != null) ? p.sellPrice : '';
       var secondaryPct = (p.secondaryPct != null) ? p.secondaryPct : 15;
       if(p.secondaryPrice == null && p.sellPrice != null){ p.secondaryPrice = Math.round(p.sellPrice * (1 - secondaryPct/100)); save(); }
@@ -2425,12 +2496,13 @@
       var kEsc = k.replace(/'/g,"\\'");
 
       html += '<tr><td style="font-family:var(--sans)"><div style="display:flex;align-items:center;gap:4px">' +
+        (msProd && msProd.imageUrl ? '<img src="' + escAttr(msProd.imageUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0" onerror="this.style.visibility=\'hidden\'">' : '<div style="width:28px;height:28px;flex-shrink:0"></div>') +
         '<span class="pt-prodname-resizable" style="width:' + prodNameColWidth + 'px" title="' + jsAttrEscape(p.displayName) + '">' + p.displayName + (p.quantity?' <span style="color:var(--text-soft)">('+p.quantity+')</span>':'') + '</span>' +
         ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button></div>' +
         (sc.source ? '<br><span style="font-size:10px;color:var(--text-soft)">sinecost: '+sc.source+'</span>' : '<br><span style="font-size:10px;color:var(--bad)">fără cost cunoscut</span>') + '</td>' +
         '<td style="text-align:center;font-weight:700">' + (qtyMap[k] != null ? qtyMap[k] : '—') + '</td>' +
         '<td>' + (sc.usdPrice!=null?fmt(sc.usdPrice)+' $':'—') + '</td>' +
-        '<td><input class="qty-input pt-sell-price-input" style="width:calc(6ch + 16px)" type="number" step="0.01" value="' + sellVal + '" placeholder="' + (suggested!=null?fmt(suggested):'') + '" onchange="ptSetSellPrice(\'' + kEsc + '\',this.value)">' +
+        '<td><input class="qty-input pt-sell-price-input" style="width:calc(6ch + 16px)" type="number" step="0.01" value="' + sellVal + '" onchange="ptSetSellPrice(\'' + kEsc + '\',this.value)">' +
           '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">' + (markupPct!=null?('ad '+(markupPct>=0?'+':'')+Math.round(markupPct)+'%'):'—') + '</div></td>' +
         '<td>' + (sc.cost!=null?fmt(sc.cost):'—') + '</td>' +
         '<td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input class="qty-input" style="width:calc(6ch + 16px)" type="number" step="0.01" value="' + secondaryVal + '" onchange="ptSetSecondaryPrice(\'' + kEsc + '\',this.value)">' +
