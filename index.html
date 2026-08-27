@@ -319,7 +319,10 @@
   };
   function resizableThHtml(table, col, label, dflt, min, max, hideable){
     var hideBtn = hideable === false ? '' : '<button class="pt-colhide-btn" onmousedown="event.stopPropagation()" onclick="event.stopPropagation();ptHideCol(\'' + table + '\',\'' + col + '\')" title="Ascunde coloana">✕</button>';
-    return '<th class="pt-resizable-th">' + label + hideBtn + resizeHandleHtml(table, col, dflt, min, max) + '</th>';
+    // Eticheta trebuie și ea limitată la aceeași lățime (nu doar celulele din corp) — altfel un nume
+    // lung de furnizor în antet împiedică efectiv micșorarea coloanei, oricât ai trage de margine.
+    var labelSpan = '<span data-colw="' + table + ':' + col + '" style="display:inline-block;width:' + getColWidth(table, col, dflt) + 'px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle" title="' + label + '">' + label + '</span>';
+    return '<th class="pt-resizable-th">' + labelSpan + hideBtn + resizeHandleHtml(table, col, dflt, min, max) + '</th>';
   }
   function hiddenColsChipsHtml(table, cols){
     var hidden = cols.filter(function(c){ return isColHidden(table, c.col); });
@@ -736,8 +739,8 @@
   function historyPreviewHtml(msId){
     var hist = catalogHistoryCache[msId];
     if(!hist || hist === 'loading' || hist.error || !hist.rows || !hist.rows.length) return '';
-    var lines = hist.rows.slice(0,2).map(function(h){ return escAttr(fmtHistoryLine(h)); });
-    return '<div style="font-size:12px;font-weight:500;color:var(--text-soft);font-family:var(--mono);white-space:nowrap">' + lines.join('&nbsp;&nbsp;|&nbsp;&nbsp;') + '</div>';
+    var lines = hist.rows.slice(0,2).map(function(h){ return '<div style="overflow:hidden;text-overflow:ellipsis">' + escAttr(fmtHistoryLine(h)) + '</div>'; });
+    return '<div style="font-size:12px;font-weight:500;color:var(--text-soft);font-family:var(--mono)">' + lines.join('') + '</div>';
   }
   function historyRestHtml(msId){
     var hist = catalogHistoryCache[msId];
