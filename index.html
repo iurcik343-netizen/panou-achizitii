@@ -103,7 +103,7 @@
   #pt-root .merge-box { padding: 8px 12px; background: var(--bg); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
   #pt-root .merge-box select { margin-bottom: 0; flex: 1; }
   #pt-root .cmp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  #pt-root .cmp-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--bg); position: sticky; top: 0; }
+  #pt-root .cmp-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--bg); position: sticky; top: 0; will-change: transform; transform: translateZ(0); }
   #pt-root .sticky-col-table td:first-child, #pt-root .sticky-col-table th:first-child { position: sticky; left: 0; background: var(--panel); z-index: 2; box-shadow: 2px 0 4px rgba(0,0,0,0.05); }
   #pt-root .sticky-col-table th:first-child { background: var(--bg); z-index: 3; }
   #pt-root .cmp-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -1411,19 +1411,28 @@
     if(keys.length === 0){
       html += '<div class="panel empty">Niciun produs încă. Importă o listă de preț din tab-ul „Adaugă listă de preț”.</div>';
     } else {
+      // Produsele nou apărute la ultima actualizare a unui price list sar mereu în față,
+      // indiferent de sortare — sortarea aleasă se aplică doar în interiorul fiecărui grup.
+      function newFirst(cmp){
+        return function(a,b){
+          var na = !!state.products[a].isNew, nb = !!state.products[b].isNew;
+          if(na !== nb) return na ? -1 : 1;
+          return cmp(a,b);
+        };
+      }
       if(compareSortBy === 'stock'){
         var stockCache = {};
         keys.forEach(function(k){ stockCache[k] = stockFor(state.products[k]); });
-        keys.sort(function(a,b){ return nullsLastCompare(stockCache[a], stockCache[b], compareSortDir); });
+        keys.sort(newFirst(function(a,b){ return nullsLastCompare(stockCache[a], stockCache[b], compareSortDir); }));
       } else if(compareSortBy === 'price'){
         var priceCache = {};
         keys.forEach(function(k){ priceCache[k] = bestLandedFor(state.products[k]); });
-        keys.sort(function(a,b){ return nullsLastCompare(priceCache[a], priceCache[b], compareSortDir); });
+        keys.sort(newFirst(function(a,b){ return nullsLastCompare(priceCache[a], priceCache[b], compareSortDir); }));
       } else {
-        keys.sort(function(a,b){
+        keys.sort(newFirst(function(a,b){
           var cmp = state.products[a].displayName.localeCompare(state.products[b].displayName, undefined, {sensitivity:'base', numeric:true});
           return compareSortDir === 'asc' ? cmp : -cmp;
-        });
+        }));
       }
       var RENDER_LIMIT = 200;
       var truncated = keys.length > RENDER_LIMIT;
@@ -1480,6 +1489,7 @@
           '<div style="min-width:0;flex:1">' +
           '<div style="display:flex;align-items:center;gap:2px">' +
           '<button class="prod-title-btn pt-prodname-resizable" data-colw="cmp:name" style="width:' + getColWidth('cmp','name',260) + 'px;' + (mergeSourceKey && !isMergeSource ? 'color:var(--accent)' : '') + '" onclick="ptProductClick(\'' + kEsc + '\')" title="' + jsAttrEscape(p.displayName) + '">' + (isMergeSource ? '🔀 ' : (isExpanded ? '▾' : '▸') + ' ') + p.displayName + '</button>' +
+          (p.isNew ? ' <span style="background:var(--rank1);color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:4px;flex-shrink:0;letter-spacing:0.03em">NEW</span>' : '') +
           ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="event.stopPropagation();ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">🔍</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Unește cu alt produs" onclick="event.stopPropagation();ptStartMerge(\'' + kEsc + '\')">🔀</button>' +
           '</div>' +
           '<div class="prod-meta">' + (p.brand ? p.brand + ' · ' : '') + (p.quantity ? p.quantity + ' · ' : '') + (p.barcode ? 'EAN ' + p.barcode : 'fără barcode') + (p.altBarcodes && p.altBarcodes.length ? ' (+' + p.altBarcodes.length + ' cod' + (p.altBarcodes.length>1?'uri':'') + ': ' + p.altBarcodes.join(', ') + ')' : '') + (canonicalMoq ? ' · MOQ ' + canonicalMoq : '') + '</div>' +
@@ -1671,6 +1681,13 @@
   var addSubtab = 'excel';
   var importState = null;
   var importFiles = null;
+  var preselectImportSupplier = null;
+  window.ptGoToExcelImport = function(sid){
+    preselectImportSupplier = sid;
+    addSubtab = 'excel';
+    var btn = document.querySelector('.tab-btn[data-tab="add"]');
+    if(btn) btn.click();
+  };
 
   function renderAdd(){
     var el = document.getElementById('tab-add');
@@ -1688,8 +1705,8 @@
   }
   window.ptSetAddSubtab = function(t){ addSubtab = t; renderAdd(); };
 
-  function supplierOptions(){
-    return '<option value="" disabled selected>— alege furnizor —</option>' + state.suppliers.map(function(s){ return '<option value="' + s.id + '">' + s.name + '</option>'; }).join('');
+  function supplierOptions(preselectId){
+    return '<option value="" ' + (preselectId?'':'disabled selected') + '>— alege furnizor —</option>' + state.suppliers.map(function(s){ return '<option value="' + s.id + '" ' + (preselectId===s.id?'selected':'') + '>' + s.name + '</option>'; }).join('');
   }
 
   var HEADER_KEYWORDS = ['name','product','price','cost','barcode','ean','upc','moq','qty','rrp','recommended','brand','box','wholesale','cantitate','pret','produs','denumire','nume','marca','cutie','monedă','currency'];
@@ -1856,8 +1873,9 @@
     var preview = document.getElementById('pt-ord-preview');
     if(!preview) return;
     var sample = importOrderFile.rows.slice(0, 5);
-    var cols = ['name','price','orderQty','quantity','barcode','brand','rrp','moq','packQty','weight','currency'];
-    var labels = ['Produs','Preț','Cant. comandată','Cant. / mărime','Barcode','Brand','RRP','MOQ','Buc/pachet','Greutate','Monedă'];
+    // Aceeași ordine ca la maparea de mai sus (ORDER_FIELD_DEFS).
+    var cols = ['barcode','name','price','orderQty','quantity','brand','rrp','moq','packQty','weight','currency'];
+    var labels = ['Barcode','Produs','Preț','Cant. comandată','Cant. / mărime','Brand','RRP','MOQ','Buc/pachet','Greutate','Monedă'];
     var html = '<table><thead><tr>' + labels.map(function(l){ return '<th>' + l + '</th>'; }).join('') + '</tr></thead><tbody>';
     sample.forEach(function(r){
       html += '<tr>' + cols.map(function(k){
@@ -1979,35 +1997,36 @@
   // starea partajată direct, ca să nu îngreunăm fiecare salvare cu megaocteți de imagini.
   async function extractExcelImagesByRow(arrayBuffer){
     var out = {};
+    var TAG = '[poze Excel]';
     try {
       var zip = await JSZip.loadAsync(arrayBuffer);
       var wbXmlFile = zip.file('xl/workbook.xml');
       var wbRelsFile = zip.file('xl/_rels/workbook.xml.rels');
-      if(!wbXmlFile || !wbRelsFile) return out;
+      if(!wbXmlFile || !wbRelsFile){ console.warn(TAG, 'lipsește xl/workbook.xml sau rels — fișier neașteptat'); return out; }
       var parser = new DOMParser();
       var wbDoc = parser.parseFromString(await wbXmlFile.async('string'), 'application/xml');
       var firstSheetEl = wbDoc.getElementsByTagName('sheet')[0];
-      if(!firstSheetEl) return out;
+      if(!firstSheetEl){ console.warn(TAG, 'nu am găsit elementul <sheet> în workbook.xml'); return out; }
       var rId = firstSheetEl.getAttribute('r:id') || firstSheetEl.getAttribute('rId');
       var wbRelsDoc = parser.parseFromString(await wbRelsFile.async('string'), 'application/xml');
       var rels = Array.prototype.slice.call(wbRelsDoc.getElementsByTagName('Relationship'));
       var sheetRel = rels.find(function(r){ return r.getAttribute('Id') === rId; });
-      if(!sheetRel) return out;
+      if(!sheetRel){ console.warn(TAG, 'nu am găsit relația r:id=' + rId + ' pentru prima foaie'); return out; }
       var sheetTarget = sheetRel.getAttribute('Target').replace(/^\/?/,'');
       var sheetPath = sheetTarget.indexOf('xl/') === 0 ? sheetTarget : ('xl/' + sheetTarget);
       var pathParts = sheetPath.split('/');
       var sheetFile = pathParts.pop();
       var sheetRelsPath = pathParts.join('/') + '/_rels/' + sheetFile + '.rels';
       var sheetRelsFile = zip.file(sheetRelsPath);
-      if(!sheetRelsFile) return out;
+      if(!sheetRelsFile){ console.log(TAG, 'foaia „' + sheetFile + '" nu are fișier de relații (' + sheetRelsPath + ') — probabil nu conține nicio poză'); return out; }
       var sheetRelsDoc = parser.parseFromString(await sheetRelsFile.async('string'), 'application/xml');
       var sheetRels = Array.prototype.slice.call(sheetRelsDoc.getElementsByTagName('Relationship'));
       var drawingRel = sheetRels.find(function(r){ return (r.getAttribute('Type')||'').indexOf('/drawing') !== -1; });
-      if(!drawingRel) return out;
+      if(!drawingRel){ console.log(TAG, 'foaia „' + sheetFile + '" nu are nicio relație de tip drawing — probabil nu conține poze inserate în celule'); return out; }
       var drawingTarget = drawingRel.getAttribute('Target').replace(/^\.\.\//,'').replace(/^\/?/,'');
       var drawingPath = drawingTarget.indexOf('xl/') === 0 ? drawingTarget : ('xl/' + drawingTarget);
       var drawingFile = zip.file(drawingPath);
-      if(!drawingFile) return out;
+      if(!drawingFile){ console.warn(TAG, 'fișierul de desen ' + drawingPath + ' lipsește din arhivă'); return out; }
       var drawingParts = drawingPath.split('/');
       var drawingFileName = drawingParts.pop();
       var drawingRelsPath = drawingParts.join('/') + '/_rels/' + drawingFileName + '.rels';
@@ -2023,6 +2042,7 @@
       var drawingDoc = parser.parseFromString(await drawingFile.async('string'), 'application/xml');
       var anchors = Array.prototype.slice.call(drawingDoc.getElementsByTagName('xdr:twoCellAnchor'))
         .concat(Array.prototype.slice.call(drawingDoc.getElementsByTagName('xdr:oneCellAnchor')));
+      console.log(TAG, anchors.length + ' ancore de desen găsite, ' + Object.keys(imgIdToPath).length + ' imagini referențiate');
       var rowToPath = {};
       anchors.forEach(function(anchor){
         var from = anchor.getElementsByTagName('xdr:from')[0];
@@ -2038,12 +2058,14 @@
       await Promise.all(uniquePaths.map(async function(p){
         var f = zip.file(p);
         if(f) blobs[p] = await f.async('blob');
+        else console.warn(TAG, 'fișierul imagine ' + p + ' nu există în arhivă');
       }));
       Object.keys(rowToPath).forEach(function(row){
         var blob = blobs[rowToPath[row]];
         if(blob) out[row] = blob;
       });
-    } catch(e){ /* format neașteptat sau fișier fără poze — importul de preț/nume continuă normal */ }
+      console.log(TAG, Object.keys(out).length + ' poze potrivite cu un rând de date');
+    } catch(e){ console.warn(TAG, 'eroare la extragere', e); }
     return out;
   }
   function downscaleImageBlob(blob, maxDim){
@@ -2069,39 +2091,48 @@
     try {
       var path = 'pricelist/' + keyHint + '_' + Date.now() + '.jpg';
       var res = await supabaseClient.storage.from('product-images').upload(path, blob, { upsert: true, contentType: 'image/jpeg' });
-      if(res.error) return null;
+      if(res.error){ console.warn('[poze Excel] eroare la urcare în Storage:', res.error); return null; }
       var pub = supabaseClient.storage.from('product-images').getPublicUrl(path);
       return (pub && pub.data && pub.data.publicUrl) || null;
-    } catch(e){ return null; }
+    } catch(e){ console.warn('[poze Excel] eroare neașteptată la urcare:', e); return null; }
   }
   async function attachExcelImagesForFile(file, rowKeyMap){
     if(!file.rawBuffer || !file.rowOrigIndices) return;
     var imagesByRow = await extractExcelImagesByRow(file.rawBuffer);
     var rowNums = Object.keys(imagesByRow);
-    if(!rowNums.length) return;
+    if(!rowNums.length){ ptToast('„' + file.fileName + '": nicio poză găsită în fișier (verifică consola browserului — F12 — pentru detalii).', false); return; }
     var sheetRowToDataIndex = {};
     file.rowOrigIndices.forEach(function(sheetRow, dataIdx){ sheetRowToDataIndex[sheetRow] = dataIdx; });
-    var anyAttached = false;
+    var matched = 0, uploaded = 0;
     for(var i=0; i<rowNums.length; i++){
       var sheetRow = parseInt(rowNums[i], 10);
       var dataRowIndex = sheetRowToDataIndex[sheetRow];
       var key = dataRowIndex != null ? rowKeyMap[dataRowIndex] : null;
       if(!key || !state.products[key]) continue;
+      matched++;
       var small = await downscaleImageBlob(imagesByRow[sheetRow], 300);
       var url = await uploadPriceListImage(small, key.replace(/[^a-zA-Z0-9]/g,'_'));
-      if(url){ state.products[key].excelImageUrl = url; anyAttached = true; }
+      if(url){ state.products[key].excelImageUrl = url; uploaded++; }
     }
-    if(anyAttached){ save(); renderCompare(); }
+    if(uploaded > 0){ save(); renderCompare(); }
+    if(matched === 0){
+      ptToast('„' + file.fileName + '": am găsit ' + rowNums.length + ' poză/poze în fișier, dar niciuna nu s-a potrivit cu un rând importat.', false);
+    } else if(uploaded < matched){
+      ptToast('„' + file.fileName + '": ' + uploaded + ' din ' + matched + ' poze urcate — verifică dacă bucket-ul „product-images” din Supabase Storage există și are politica de upload activă.', false);
+    } else {
+      ptToast('„' + file.fileName + '": ' + uploaded + ' poze adăugate.', true);
+    }
   }
 
   function renderExcelImport(){
     var body = document.getElementById('pt-add-body');
     var html = '<div class="panel"><h2>Importă din Excel</h2><div class="hint">Poți încărca mai multe fișiere deodată (ex: câte unul per brand) — toate vor folosi aceeași mapare de coloane. Dacă ai mai importat de la acest furnizor, maparea folosită ultima dată se completează automat.</div>';
-    html += '<label>Furnizor</label><select id="pt-imp-supplier">' + supplierOptions() + '</select>';
+    html += '<label>Furnizor</label><select id="pt-imp-supplier">' + supplierOptions(preselectImportSupplier) + '</select>';
     html += '<label>Fișiere (poți selecta mai multe)</label><input type="file" id="pt-imp-file" accept=".xlsx,.xls,.csv" multiple>';
     html += '<div id="pt-imp-mapping"></div>';
     html += '</div>';
     body.innerHTML = html;
+    preselectImportSupplier = null;
 
     document.getElementById('pt-imp-supplier').addEventListener('change', function(){
       if(importFiles && importFiles.length) renderMapping();
@@ -2155,7 +2186,6 @@
     { key: 'name', label: 'Nume produs *' },
     { key: 'price', label: 'Preț angro *' },
     { key: 'moq', label: 'MOQ (cantitate minimă)' },
-    { key: 'quantity', label: 'Cantitate / mărime' },
     { key: 'brand', label: 'Brand' },
     { key: 'rrp', label: 'RRP (preț recomandat)' },
     { key: 'packQty', label: 'Bucăți / pachet (dacă preț e pe cutie/set)' },
@@ -2198,7 +2228,6 @@
               : guessColumn(headers, ['produs','denumire','nume','product','description','item','name'], ['korean','한글','hangul']),
       price: guessColumn(headers, ['pret','price','cost','wholesale','unit price','average price']),
       barcode: guessColumn(headers, ['barcode','ean','cod bare','upc']),
-      quantity: guessColumn(headers, ['cantitate','marime','size','volum','ml','vol']),
       brand: guessColumn(headers, ['brand','marca']),
       rrp: guessColumn(headers, ['rrp','recommended price','recommended','pret recomandat','retail']),
       moq: guessColumn(headers, ['moq','min order','cantitate minima','minim comanda','box qty','cutie']),
@@ -2230,7 +2259,7 @@
       html += '<div><label>' + f.label + '</label><select id="pt-map-' + f.key + '" onchange="ptRenderPreview()">' + colOptions + '</select></div>';
     });
     html += '</div>';
-    html += '<div class="row"><div><label>Brand implicit (rezervă — pentru fișierele fără brand în nume)</label><input type="text" id="pt-map-def-brand" placeholder="ex: Celimax" value="' + (saved ? escAttr(saved.defBrand||'') : '') + '"></div>' +
+    html += '<div class="row"><div><label>Brand implicit (rezervă — pentru fișierele fără brand în nume)</label><input type="text" id="pt-map-def-brand" placeholder="ex: Celimax"></div>' +
       '<div><label>Monedă implicită (dacă nu ai coloană)</label><select id="pt-map-def-currency" onchange="ptRenderPreview()"><option value="USD">USD</option><option value="MDL">MDL</option><option value="EUR">EUR</option><option value="KRW">KRW (won coreean)</option></select></div>' +
       '<div><label>Transport implicit</label><select id="pt-map-def-freight"><option value="sea">Mare (sea)</option><option value="air">Aer (air)</option></select></div></div>';
     html += '<div class="hint">Previzualizare (primele 5 rânduri din primul fișier):</div><div class="preview-wrap" id="pt-imp-preview"></div>';
@@ -2259,9 +2288,13 @@
     var m = currentMapping();
     var preview = document.getElementById('pt-imp-preview');
     var sample = importState.rows.slice(0, 5);
-    var html = '<table><thead><tr><th>Produs</th><th>Preț</th><th>Barcode</th><th>Cant.</th><th>Brand</th><th>RRP</th><th>MOQ</th><th>Buc/pachet</th><th>Monedă</th></tr></thead><tbody>';
+    // Aceeași ordine ca la maparea de mai sus (FIELD_DEFS), ca să compari ușor coloana din
+    // setări cu cea din previzualizare, fără să te mai încurci care unde a ajuns.
+    var previewCols = ['barcode','name','price','moq','brand','rrp','packQty','weight','currency'];
+    var previewLabels = ['Barcode','Produs','Preț','MOQ','Brand','RRP','Buc/pachet','Greutate','Monedă'];
+    var html = '<table><thead><tr>' + previewLabels.map(function(l){ return '<th>' + l + '</th>'; }).join('') + '</tr></thead><tbody>';
     sample.forEach(function(r){
-      html += '<tr>' + ['name','price','barcode','quantity','brand','rrp','moq','packQty','currency'].map(function(k){
+      html += '<tr>' + previewCols.map(function(k){
         var idx = m[k];
         return '<td>' + (idx>=0 && r[idx]!==undefined ? r[idx] : '') + '</td>';
       }).join('') + '</tr>';
@@ -2339,14 +2372,34 @@
         rowKeyMap[i] = key;
       });
       if(touchedKeys.length){
-        state.priceLists.push({ id: uid(), supplierId: sid, fileName: file.fileName, brand: fileBrand || '', importedAt: today, productKeys: touchedKeys });
+        // Dacă reimporți același fișier la același furnizor (ex: ca să corectezi o mapare
+        // greșită), actualizăm price list-ul existent în loc să adăugăm unul duplicat.
+        var existingPL = state.priceLists.find(function(pl){ return pl.supplierId === sid && pl.fileName === file.fileName; });
+        if(existingPL){
+          // Produsele care n-au fost în versiunea anterioară a acestui price list sunt noi —
+          // le marcăm ca „NEW" în Comparație produse; cele care erau deja acolo nu mai sunt noi.
+          var oldKeySet = {};
+          existingPL.productKeys.forEach(function(k){ oldKeySet[k] = true; });
+          touchedKeys.forEach(function(k){
+            if(!state.products[k]) return;
+            if(!oldKeySet[k]){ state.products[k].isNew = true; state.products[k].newAt = today; }
+            else { state.products[k].isNew = false; }
+          });
+          existingPL.brand = fileBrand || '';
+          existingPL.importedAt = today;
+          existingPL.productKeys = touchedKeys;
+        } else {
+          state.priceLists.push({ id: uid(), supplierId: sid, fileName: file.fileName, brand: fileBrand || '', importedAt: today, productKeys: touchedKeys });
+        }
       }
       // Extragerea și urcarea pozelor lipite în Excel se face în fundal, fără să blocheze
       // înregistrarea prețurilor de mai sus (asta e partea critică, trebuie să rămână rapidă).
       if(file.rawBuffer) attachExcelImagesForFile(file, rowKeyMap);
     });
 
-    state.importMappings[sid] = { mapping: m, defBrand: defBrand, defCurrency: defCurrency, defFreight: defFreight };
+    // Brandul implicit NU se ține minte între importuri — de la același furnizor vin mereu
+    // fișiere cu branduri diferite, deci ar rămâne greșit completat cu cel anterior.
+    state.importMappings[sid] = { mapping: m, defCurrency: defCurrency, defFreight: defFreight };
     save();
     var fb = document.getElementById('pt-imp-feedback');
     var msg = added + ' produse noi, ' + updated + ' actualizate';
@@ -3026,6 +3079,11 @@
   }
   var expandedSupplierId = null;
   var pendingWipeSupplierId = null;
+  var priceListsOpenFor = null;
+  window.ptTogglePriceListsView = function(sid){
+    priceListsOpenFor = (priceListsOpenFor === sid) ? null : sid;
+    renderSuppliers();
+  };
 
   function renderSuppliers(){
     var el = document.getElementById('tab-suppliers');
@@ -3049,20 +3107,24 @@
           html += '<div class="row"><div><button class="primary" onclick="ptSaveSupplierDetails(\'' + s.id + '\')" style="width:100%">Salvează</button></div>' +
             '<div><button class="secondary" onclick="ptCopySupplierData(\'' + s.id + '\')" style="width:100%">Copiază toate datele</button></div></div>';
           var supPriceLists = state.priceLists.filter(function(pl){ return pl.supplierId === s.id; }).sort(function(a,b){ return b.importedAt.localeCompare(a.importedAt); });
-          html += '<div style="margin-top:14px"><label>Price listuri adăugate (' + supPriceLists.length + ')</label>';
-          if(!supPriceLists.length){
-            html += '<div class="hint" style="margin-bottom:0">Niciun price list urmărit încă pentru acest furnizor — apar aici pe măsură ce importi Excel-uri din tab-ul „Adaugă listă de preț”.</div>';
-          } else {
-            html += '<div class="panel" style="padding:0;margin-bottom:0">';
-            supPriceLists.forEach(function(pl){
-              html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
-                '<span>' + escAttr(pl.fileName) + (pl.brand ? ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + escAttr(pl.brand) + ')</span>' : '') + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + fmtDateDMY(pl.importedAt) + ' · ' + pl.productKeys.length + ' produse</span></span>' +
-                '<button class="icon-x" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge acest price list — elimină prețurile lui de la acest furnizor, ca să poți reimporta o versiune curată">✕</button>' +
-                '</div>';
-            });
-            html += '</div>';
+          var plOpen = priceListsOpenFor === s.id;
+          html += '<div style="margin-top:14px">' +
+            '<button class="subtab-btn" onclick="event.stopPropagation();ptTogglePriceListsView(\'' + s.id + '\')">📄 Price listuri adăugate (' + supPriceLists.length + ') ' + (plOpen?'▴':'▾') + '</button></div>';
+          if(plOpen){
+            if(!supPriceLists.length){
+              html += '<div class="hint">Niciun price list urmărit încă pentru acest furnizor — apar aici pe măsură ce importi Excel-uri din tab-ul „Adaugă listă de preț”.</div>';
+            } else {
+              html += '<div class="panel" style="padding:0;margin-top:8px;margin-bottom:0">';
+              supPriceLists.forEach(function(pl){
+                html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
+                  '<span>' + escAttr(pl.fileName) + (pl.brand ? ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + escAttr(pl.brand) + ')</span>' : '') + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + fmtDateDMY(pl.importedAt) + ' · ' + pl.productKeys.length + ' produse</span></span>' +
+                  '<span class="entry-actions"><button class="icon-link" onclick="event.stopPropagation();ptGoToExcelImport(\'' + s.id + '\')" title="Deschide importul Excel pentru acest furnizor — reîncarci fișierul cu maparea corectată, fără să ștergi nimic întâi">✏️ editează</button>' +
+                  '<button class="icon-x" onclick="event.stopPropagation();ptDeletePriceList(\'' + pl.id + '\')" title="Șterge acest price list — elimină prețurile lui de la acest furnizor, ca să poți reimporta o versiune curată">✕</button></span>' +
+                  '</div>';
+              });
+              html += '</div>';
+            }
           }
-          html += '</div>';
           html += '<div class="row" style="margin-top:14px">';
           if(pendingWipeSupplierId === s.id){
             html += '<div style="flex:1"><div class="feedback err" style="margin-bottom:6px">Sigur ștergi toate produsele acestui furnizor? Nu se poate anula automat.</div>' +
