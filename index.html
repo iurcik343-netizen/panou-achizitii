@@ -33,7 +33,7 @@
   #pt-root h1 { font-family: var(--sans); font-size: 27px; font-weight: 700; margin: 0 0 2px; letter-spacing: -0.01em; }
   #pt-root .sub { color: var(--text-soft); font-size: 13.5px; margin-bottom: 20px; }
   #pt-root .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; flex-wrap: wrap; }
-  #pt-root .tab-btn { background: none; border: none; padding: 10px 14px; font-size: 13.5px; font-weight: 600; color: var(--text-soft); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-family: var(--sans); transition: color .15s ease, border-color .15s ease; }
+  #pt-root .tab-btn { background: none; border: none; padding: 10px 14px; font-size: 13.5px; font-weight: 700; color: var(--text); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-family: var(--sans); transition: color .15s ease, border-color .15s ease; }
   #pt-root .tab-btn:hover { color: var(--accent-dark); }
   #pt-root .tab-btn.active { color: var(--accent-dark); border-bottom-color: var(--accent); }
   #pt-root .subtabs { display: flex; gap: 8px; margin-bottom: 16px; }
@@ -43,7 +43,7 @@
   #pt-root .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow-sm); }
   #pt-root .panel h2 { font-family: var(--sans); font-weight: 600; font-size: 17px; margin: 0 0 4px; }
   #pt-root .panel .hint { color: var(--text-soft); font-size: 12.5px; margin-bottom: 14px; line-height: 1.5; }
-  #pt-root label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-soft); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.02em; }
+  #pt-root label { display: block; font-size: 11.5px; font-weight: 700; color: var(--text); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.02em; }
   #pt-root input[type=text], #pt-root input[type=password], #pt-root input[type=number], #pt-root input[type=file], #pt-root select, #pt-root textarea {
     width: 100%; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 9px 11px;
     font-size: 13.5px; font-family: var(--sans); color: var(--text); margin-bottom: 14px; transition: border-color .15s ease, box-shadow .15s ease;
@@ -138,7 +138,7 @@
   #pt-root input[type=number].pt-pct-input { -moz-appearance: auto; }
   #pt-root table.pt-order-pricing-table { width: max-content; min-width: 100%; }
   #pt-root .pt-prodname-resizable { display: inline-block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 50px; max-width: 640px; vertical-align: middle; }
-  #pt-root th.pt-prodname-th { position: relative; padding-right: 16px; }
+  #pt-root th.pt-prodname-th, #pt-root th.pt-resizable-th { position: relative; padding-right: 16px; }
   #pt-root .pt-colresize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: col-resize; }
   #pt-root .pt-colresize-handle:hover, #pt-root .pt-colresize-handle.active { background: var(--accent); opacity: 0.4; }
   #pt-root .qty-input { width: 70px; padding: 5px 7px; margin-bottom: 0; }
@@ -241,6 +241,7 @@
     orders: [],
     carts: {},
     importMappings: {},
+    priceLists: [],
     settings: { exchangeRate: 17.68, krwPerUsd: 1375, eurPerUsd: 0.92, coef: 1.4, ratesUpdatedAt: null, defaultMarkup: 100, hiddenMoyskladBrandIds: [], hiddenMoyskladProductIds: [] }
   };
 
@@ -248,6 +249,50 @@
   function normName(s){ return String(s||'').toLowerCase().trim().replace(/\s+/g,' '); }
   function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
   function fmt(n){ return isFinite(n) ? Number(n).toFixed(2) : '—'; }
+
+  // ================= REDIMENSIONARE COLOANE (persistă local, per dispozitiv) =================
+  var COLWIDTH_KEY = 'pt_col_widths_v1';
+  var colWidths = (function(){
+    try { return JSON.parse(localStorage.getItem(COLWIDTH_KEY)) || {}; } catch(e){ return {}; }
+  })();
+  function getColWidth(table, col, dflt){
+    return (colWidths[table] && colWidths[table][col]) || dflt;
+  }
+  function saveColWidthsToStorage(){
+    try { localStorage.setItem(COLWIDTH_KEY, JSON.stringify(colWidths)); } catch(e){}
+  }
+  window.ptColResizeStart = function(e, table, col, dflt, min, max){
+    e.preventDefault();
+    e.stopPropagation();
+    var handle = e.currentTarget || e.target;
+    handle.classList.add('active');
+    var startX = e.clientX;
+    var startWidth = getColWidth(table, col, dflt);
+    var sel = '[data-colw="' + table + ':' + col + '"]';
+    function onMove(ev){
+      var w = Math.max(min || 40, Math.min(max || 700, startWidth + (ev.clientX - startX)));
+      if(!colWidths[table]) colWidths[table] = {};
+      colWidths[table][col] = w;
+      document.querySelectorAll(sel).forEach(function(el){ el.style.width = w + 'px'; });
+    }
+    function onUp(){
+      handle.classList.remove('active');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      saveColWidthsToStorage();
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+  function resizeHandleHtml(table, col, dflt, min, max){
+    return '<span class="pt-colresize-handle" onmousedown="ptColResizeStart(event,\'' + table + '\',\'' + col + '\',' + dflt + ',' + (min||40) + ',' + (max||700) + ')" title="Trage pentru a redimensiona coloana"></span>';
+  }
+  function resizableThHtml(table, col, label, dflt, min, max){
+    return '<th class="pt-resizable-th">' + label + resizeHandleHtml(table, col, dflt, min, max) + '</th>';
+  }
+  function colwDivHtml(table, col, dflt, innerHtml){
+    return '<div data-colw="' + table + ':' + col + '" style="width:' + getColWidth(table, col, dflt) + 'px">' + innerHtml + '</div>';
+  }
   function extractBarcodes(raw){
     if(raw === null || raw === undefined || raw === '') return [];
     var s = String(raw).trim();
@@ -297,6 +342,7 @@
         state.orders = parsed.orders || [];
         state.carts = parsed.carts || {};
         state.importMappings = parsed.importMappings || {};
+        state.priceLists = parsed.priceLists || [];
         state.settings = Object.assign(state.settings, parsed.settings || {});
         if(!parsed.settings || parsed.settings.coef === undefined){
           if(parsed.settings && parsed.settings.seaCoef !== undefined) state.settings.coef = parsed.settings.seaCoef;
@@ -310,6 +356,7 @@
     state.orders = parsed.orders || [];
     state.carts = parsed.carts || {};
     state.importMappings = parsed.importMappings || {};
+    state.priceLists = parsed.priceLists || [];
     state.settings = Object.assign(state.settings, parsed.settings || {});
   }
 
@@ -560,9 +607,14 @@
     }
     return null;
   }
+  function fmtDateDMY(iso){
+    var d = String(iso||'').slice(0,10);
+    var parts = d.split('-');
+    return parts.length === 3 ? (parts[2] + '.' + parts[1] + '.' + parts[0]) : d;
+  }
   function fmtHistoryLine(h){
-    var dateOnly = String(h.date||'').slice(0,10);
-    var supplier = h.supplier.length > 8 ? h.supplier.slice(0,8) + '...' : h.supplier;
+    var dateOnly = fmtDateDMY(h.date);
+    var supplier = h.supplier.length > 8 ? h.supplier.slice(0,8) : h.supplier;
     return dateOnly + ' · ' + supplier + ' — ' + h.quantity + ' x ' + fmt(h.price);
   }
   window.ptToggleHistoryFull = function(id){
@@ -645,10 +697,8 @@
   function historyPreviewHtml(msId){
     var hist = catalogHistoryCache[msId];
     if(!hist || hist === 'loading' || hist.error || !hist.rows || !hist.rows.length) return '';
-    var html = '<div style="font-size:12.5px;font-weight:500;color:var(--text-soft);font-family:var(--mono);text-align:left;white-space:nowrap">';
-    hist.rows.slice(0,2).forEach(function(h){ html += escAttr(fmtHistoryLine(h)) + '<br>'; });
-    html += '</div>';
-    return html;
+    var lines = hist.rows.slice(0,2).map(function(h){ return escAttr(fmtHistoryLine(h)); });
+    return '<div style="font-size:12px;font-weight:500;color:var(--text-soft);font-family:var(--mono);white-space:nowrap">' + lines.join('&nbsp;&nbsp;|&nbsp;&nbsp;') + '</div>';
   }
   function historyRestHtml(msId){
     var hist = catalogHistoryCache[msId];
@@ -961,18 +1011,24 @@
         '</div>';
     }
 
-    html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th></th><th>Produs</th><th>Preț achiziție</th><th>Stoc</th><th>Zile în depozit</th></tr></thead><tbody>';
+    html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th></th>' +
+      resizableThHtml('cat', 'name', 'Produs', 260, 160, 640) +
+      resizableThHtml('cat', 'price', 'Preț achiziție', 110, 70, 260) +
+      resizableThHtml('cat', 'stock', 'Stoc', 80, 50, 200) +
+      resizableThHtml('cat', 'days', 'Zile în depozit', 110, 60, 260) +
+      '</tr></thead><tbody>';
     visible.forEach(function(p){
       var isExpanded = expandedCatalogId === p.id;
       ensureImageUrl(p);
       html += '<tr>';
       html += '<td style="width:24px">' + (catalogShowHiddenProducts ? '<button class="secondary" style="padding:2px 6px;font-size:11px" onclick="ptUnhideProduct(\'' + p.id + '\')">↺</button>' : '<input type="checkbox" ' + (selectedProductIds[p.id]?'checked':'') + ' onchange="ptToggleProductSelect(\'' + p.id + '\')">') + '</td>';
       html += '<td style="width:40px">' + (p.imageUrl ? '<img src="' + escAttr(p.imageUrl) + '" style="width:32px;height:32px;object-fit:cover;border-radius:6px;display:block" onerror="this.style.display=\'none\'">' : '') + '</td>';
-      html += '<td><button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button> <button class="icon-link" style="padding:0 3px" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.name) + '\')">🔍</button>' +
-        '<div class="prod-meta">' + (p.barcodes && p.barcodes.length ? 'EAN ' + p.barcodes.join(', ') : 'fără barcode') + (p.article ? ' · art. ' + escAttr(p.article) : '') + '</div></td>';
-      html += '<td class="dim">' + (p.buyPrice !== null ? fmt(p.buyPrice) + ' ' + (p.buyPriceCurrency||'') : '—') + '</td>';
-      html += '<td class="dim" style="text-align:center">' + (p.stock !== null && p.stock !== undefined ? p.stock : 0) + '</td>';
-      html += '<td class="dim" style="text-align:center">' + (p.stockDays !== null && p.stockDays !== undefined ? Math.round(p.stockDays) : '—') + '</td>';
+      html += '<td>' + colwDivHtml('cat','name',260,
+        '<button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button> <button class="icon-link" style="padding:0 3px" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.name) + '\')">🔍</button>' +
+        '<div class="prod-meta">' + (p.barcodes && p.barcodes.length ? 'EAN ' + p.barcodes.join(', ') : 'fără barcode') + (p.article ? ' · art. ' + escAttr(p.article) : '') + '</div>') + '</td>';
+      html += '<td class="dim">' + colwDivHtml('cat','price',110, p.buyPrice !== null ? fmt(p.buyPrice) + ' ' + (p.buyPriceCurrency||'') : '—') + '</td>';
+      html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','stock',80, p.stock !== null && p.stock !== undefined ? p.stock : 0) + '</td>';
+      html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','days',110, p.stockDays !== null && p.stockDays !== undefined ? Math.round(p.stockDays) : '—') + '</td>';
       html += '</tr>';
       if(isExpanded){
         html += '<tr><td colspan="6"><div class="detail-panel">' + historyBlockHtml(p.id) + '</div></td></tr>';
@@ -996,6 +1052,36 @@
   var searchTerm = '';
   var brandFilter = '';
   var showArchived = false;
+  var compareSortBy = 'name';
+  var compareSortDir = 'asc';
+  window.ptSetCompareSort = function(field){
+    if(compareSortBy === field){ compareSortDir = compareSortDir === 'asc' ? 'desc' : 'asc'; }
+    else { compareSortBy = field; compareSortDir = (field === 'stock') ? 'desc' : 'asc'; }
+    renderCompare();
+  };
+  function sortBtnHtml(field, label){
+    var active = compareSortBy === field;
+    var arrow = active ? (compareSortDir === 'asc' ? '▲' : '▼') : '⇅';
+    return '<button class="subtab-btn' + (active ? ' active' : '') + '" onclick="ptSetCompareSort(\'' + field + '\')" style="white-space:nowrap">' + label + ' ' + arrow + '</button>';
+  }
+  function bestLandedFor(p){
+    var min = null;
+    Object.keys(p.bySupplier).forEach(function(sid){
+      var uc = effectiveUnitCost(p.bySupplier[sid], sid);
+      if(uc != null && !isNaN(uc) && (min === null || uc < min)) min = uc;
+    });
+    return min;
+  }
+  function stockFor(p){
+    var msProd = moyskladLookup(p);
+    return (msProd && msProd.stock !== null && msProd.stock !== undefined) ? msProd.stock : null;
+  }
+  function nullsLastCompare(a, b, dir){
+    if(a === null && b === null) return 0;
+    if(a === null) return 1;
+    if(b === null) return -1;
+    return dir === 'asc' ? a - b : b - a;
+  }
   var editingProductKey = null;
   var editingEntry = null;
   var expandedProductKey = null;
@@ -1113,7 +1199,8 @@
     ptToast(fixed > 0 ? ('Brand greșit șters la ' + fixed + ' produse (conținea „[”, semn că era de fapt o denumire de produs, nu un brand real).') : 'Niciun brand suspect găsit.', fixed > 0);
   };
   window.ptArchiveLocalBrand = function(brand){
-    var toArchive = Object.keys(state.products).filter(function(k){ return state.products[k].brand === brand && !state.products[k].archived; });
+    var brandNorm = String(brand||'').trim().toLowerCase();
+    var toArchive = Object.keys(state.products).filter(function(k){ return String(state.products[k].brand||'').trim().toLowerCase() === brandNorm && !state.products[k].archived; });
     if(!toArchive.length){ ptToast('Niciun produs activ de arhivat pentru brandul „' + brand + '".', false); return; }
     if(!confirm('Arhivezi tot brandul „' + brand + '" — ' + toArchive.length + ' produse — din Comparație produse?')) return;
     toArchive.forEach(function(k){ state.products[k].archived = true; });
@@ -1151,13 +1238,22 @@
     var prevWrap = el.querySelector('.table-wrap');
     var prevScroll = prevWrap ? prevWrap.scrollTop : 0;
     var prevPageScroll = window.scrollY;
-    var allBrands = Array.from(new Set(Object.keys(state.products).map(function(k){ return state.products[k].brand; }).filter(Boolean))).sort();
+    var allBrands = (function(){
+      var seen = {};
+      Object.keys(state.products).forEach(function(k){
+        var b = String(state.products[k].brand || '').trim();
+        if(!b) return;
+        var norm = b.toLowerCase();
+        if(!seen[norm]) seen[norm] = b;
+      });
+      return Object.keys(seen).map(function(norm){ return seen[norm]; }).sort(function(a,b){ return a.localeCompare(b, undefined, {sensitivity:'base'}); });
+    })();
     var archivedCount = Object.keys(state.products).filter(function(k){ return state.products[k].archived; }).length;
     var msOn = !!state.settings.moyskladProxyUrl;
     var keys = Object.keys(state.products).filter(function(k){
       var p = state.products[k];
       if(showArchived){ if(!p.archived) return false; } else { if(p.archived) return false; }
-      if(brandFilter && p.brand !== brandFilter) return false;
+      if(brandFilter && String(p.brand||'').trim().toLowerCase() !== brandFilter.trim().toLowerCase()) return false;
       if(!searchTerm) return true;
       var haystack = normName(p.displayName) + ' ' + normName(p.brand) + ' ' + normName(p.quantity) + ' ' + (p.barcode||'') + ' ' + (p.altBarcodes ? p.altBarcodes.join(' ') : '');
       var words = searchTerm.split(/\s+/).filter(Boolean);
@@ -1198,6 +1294,12 @@
       '<button class="secondary" onclick="ptBackfillRrpCurrency()" title="Setează moneda RRP (pentru produsele importate înainte de acest fix)" style="white-space:nowrap">🔧 monedă RRP</button>' +
       '<button class="secondary" onclick="ptCleanupBadBrands()" title="Șterge brandurile greșite provenite dintr-un bug de import (denumiri de produs salvate ca brand)" style="white-space:nowrap">🔧 curăță branduri greșite</button>' +
       '<button class="subtab-btn ' + (showArchived?'active':'') + '" onclick="ptToggleShowArchived()" style="white-space:nowrap">📦 Arhivate (' + archivedCount + ')</button></div>';
+    html += '<div class="panel" style="padding:8px 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">' +
+      '<span style="font-size:11px;color:var(--text-soft);font-weight:600;text-transform:uppercase">Sortare</span>' +
+      sortBtnHtml('name', 'Denumire') +
+      (msOn ? sortBtnHtml('stock', 'Stoc MoySklad') : '') +
+      sortBtnHtml('price', 'Preț cel mai bun') +
+      '</div>';
     if(mergeSourceKey && state.products[mergeSourceKey]){
       html += '<div class="panel" style="padding:8px 14px;background:var(--accent-soft);border-color:var(--accent);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">' +
         '<span style="font-size:12.5px;color:var(--accent-dark)">🔀 Unești <b>' + state.products[mergeSourceKey].displayName + '</b> — apasă pe orice alt produs din listă (poți și căuta) ca să-l unești cu el.</span>' +
@@ -1214,7 +1316,20 @@
     if(keys.length === 0){
       html += '<div class="panel empty">Niciun produs încă. Importă o listă de preț din tab-ul „Adaugă listă de preț”.</div>';
     } else {
-      keys.sort(function(a,b){ return state.products[a].displayName.localeCompare(state.products[b].displayName, undefined, {sensitivity:'base', numeric:true}); });
+      if(compareSortBy === 'stock'){
+        var stockCache = {};
+        keys.forEach(function(k){ stockCache[k] = stockFor(state.products[k]); });
+        keys.sort(function(a,b){ return nullsLastCompare(stockCache[a], stockCache[b], compareSortDir); });
+      } else if(compareSortBy === 'price'){
+        var priceCache = {};
+        keys.forEach(function(k){ priceCache[k] = bestLandedFor(state.products[k]); });
+        keys.sort(function(a,b){ return nullsLastCompare(priceCache[a], priceCache[b], compareSortDir); });
+      } else {
+        keys.sort(function(a,b){
+          var cmp = state.products[a].displayName.localeCompare(state.products[b].displayName, undefined, {sensitivity:'base', numeric:true});
+          return compareSortDir === 'asc' ? cmp : -cmp;
+        });
+      }
       var RENDER_LIMIT = 200;
       var truncated = keys.length > RENDER_LIMIT;
       var visibleKeys = truncated ? keys.slice(0, RENDER_LIMIT) : keys;
@@ -1224,10 +1339,12 @@
 
       var suppliersList = state.suppliers.filter(function(s){ return keys.some(function(k){ return !!state.products[k].bySupplier[s.id]; }); });
       var colspan = suppliersList.length + 3 + (msOn ? 1 : 0);
-      html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th>Produs</th>' +
-        (msOn ? '<th>MoySklad</th>' : '') +
-        suppliersList.map(function(s){ return '<th>' + s.name + '</th>'; }).join('') +
-        '<th>RRP</th><th></th></tr></thead><tbody>';
+      html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr>' +
+        resizableThHtml('cmp', 'name', 'Produs', 260, 160, 640) +
+        (msOn ? resizableThHtml('cmp', 'ms', 'MoySklad', 90, 60, 220) : '') +
+        suppliersList.map(function(s){ return resizableThHtml('cmp', 'sup_' + s.id, escAttr(s.name), 130, 70, 320); }).join('') +
+        resizableThHtml('cmp', 'rrp', 'RRP', 110, 70, 260) +
+        '<th></th></tr></thead><tbody>';
 
       visibleKeys.forEach(function(k){
         var p = state.products[k];
@@ -1248,7 +1365,7 @@
 
         var isMergeSource = mergeSourceKey === k;
         html += '<tr' + (isMergeSource ? ' style="outline:2px solid var(--accent);outline-offset:-2px"' : '') + '>';
-        html += '<td><div style="display:flex;gap:8px;align-items:flex-start">' +
+        html += '<td><div data-colw="cmp:name" style="width:' + getColWidth('cmp','name',260) + 'px;display:flex;gap:8px;align-items:flex-start">' +
           '<div style="display:flex;gap:8px;align-items:flex-start">' +
           (msOn ? (msProd && msProd.imageUrl ? '<img src="' + escAttr(msProd.imageUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0;margin-top:2px" onerror="this.style.visibility=\'hidden\'">' : '<div style="width:28px;height:28px;flex-shrink:0"></div>') : '') +
           '<div>' +
@@ -1262,7 +1379,7 @@
 
         if(msOn){
           if(!msProd){
-            html += '<td class="dim" style="text-align:center">—</td>';
+            html += '<td class="dim" style="text-align:center">' + colwDivHtml('cmp','ms',90,'—') + '</td>';
           } else {
             var stVal = (msProd.stock !== null && msProd.stock !== undefined) ? msProd.stock : 0;
             var zdHtml = '—';
@@ -1271,16 +1388,16 @@
               var zdColor = zd <= 60 ? 'var(--rank1)' : (zd <= 120 ? 'var(--rank2)' : 'var(--bad)');
               zdHtml = '<b style="font-size:13px;color:' + zdColor + '">' + zd + '</b> (zile)';
             }
-            html += '<td style="text-align:center;line-height:1.6;font-size:11px">' +
+            html += '<td style="text-align:center;line-height:1.6;font-size:11px">' + colwDivHtml('cmp','ms',90,
               '<div><b style="font-size:14.5px;font-family:var(--mono)">' + stVal + '</b></div>' +
-              '<div style="font-family:var(--mono)">' + zdHtml + '</div>' +
+              '<div style="font-family:var(--mono)">' + zdHtml + '</div>') +
               '</td>';
           }
         }
 
         suppliersList.forEach(function(s){
           var e = p.bySupplier[s.id];
-          if(!e){ html += '<td class="dim">—</td>'; return; }
+          if(!e){ html += '<td class="dim">' + colwDivHtml('cmp','sup_'+s.id,130,'—') + '</td>'; return; }
           var uc = effectiveUnitCost(e, s.id);
           var isCheapest = uc === minLanded;
           var inCart = cartQty(s.id, k);
@@ -1295,14 +1412,14 @@
           var packNote = e.packQty && e.packQty > 1 ? (' <span style="font-weight:400;color:var(--text-soft)">(×' + e.packQty + ')</span>') : '';
           var unitLine = e.packQty && e.packQty > 1 ? (' · ' + fmt(uc) + ' MDL/buc') : '';
           var costLine = discPct ? (fmt(finalLanded) + ' MDL <span style="color:var(--rank1)">(-' + discPct + '%)</span>') : (fmt(e.landedCost) + ' MDL');
-          html += '<td class="' + (isCheapest ? 'cheapest-cell' : '') + '"><button class="price-cell-btn" onclick="ptAddToCart(\'' + s.id + '\',\'' + kEsc + '\')" title="Adaugă în coșul ' + escAttr(s.name) + '">' +
+          var supCellInner = '<button class="price-cell-btn" onclick="ptAddToCart(\'' + s.id + '\',\'' + kEsc + '\')" title="Adaugă în coșul ' + escAttr(s.name) + '">' +
             mainPrice + packNote +
             '<span class="sub">' + costLine + unitLine + '</span></button>' +
-            (inCart ? '<span style="display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:2px"><b style="font-size:10.5px">🛒 ' + inCart + '</b><button class="icon-x" style="font-size:10px;padding:0 4px" onclick="ptRemoveFromCart(\'' + s.id + '\',\'' + kEsc + '\')" title="Elimină din coș">✕</button></span>' : '') +
-            '</td>';
+            (inCart ? '<span style="display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:2px"><b style="font-size:10.5px">🛒 ' + inCart + '</b><button class="icon-x" style="font-size:10px;padding:0 4px" onclick="ptRemoveFromCart(\'' + s.id + '\',\'' + kEsc + '\')" title="Elimină din coș">✕</button></span>' : '');
+          html += '<td class="' + (isCheapest ? 'cheapest-cell' : '') + '">' + colwDivHtml('cmp','sup_'+s.id,130,supCellInner) + '</td>';
         });
 
-        html += '<td class="dim" style="font-size:10px">' + rrpCellHtml(p, minLanded) + '</td>';
+        html += '<td class="dim" style="font-size:10px">' + colwDivHtml('cmp','rrp',110,rrpCellHtml(p, minLanded)) + '</td>';
         html += '<td>' + (p.archived ?
           '<button class="icon-link" onclick="ptUnarchiveProduct(\'' + kEsc + '\')" title="Scoate din arhivă">↩ dezarhivează</button>' :
           '<button class="icon-link" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">📦</button> <button class="icon-x" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">✕</button>') + '</td>';
@@ -1953,6 +2070,7 @@
 
     filesToProcess.forEach(function(file){
       var fileBrand = file.detectedBrand || defBrand;
+      var touchedKeys = [];
       file.rows.forEach(function(r, i){
         var name = m.name>=0 ? String(r[m.name]||'').trim() : '';
         var priceRaw = m.price>=0 ? r[m.price] : '';
@@ -1969,11 +2087,15 @@
         var packQtyVal = m.packQty>=0 ? parseInt(String(r[m.packQty]).replace(/[^0-9]/g,''), 10) : NaN;
         var weightVal = m.weight>=0 ? parseFloat(String(r[m.weight]).replace(',','.')) : NaN;
 
-        var existedBefore = !!state.products[makeKey(barcode, name, quantity)] &&
-          !!(state.products[makeKey(barcode, name, quantity)].bySupplier[sid]);
+        var key = makeKey(barcode, name, quantity);
+        var existedBefore = !!state.products[key] && !!(state.products[key].bySupplier[sid]);
         var wasIncrease = upsertProduct({ name: name, brand: brand, quantity: quantity, barcode: barcode, altBarcodes: altBarcodes, price: price, currency: currency, freight: defFreight, rrp: isNaN(rrpVal) ? null : rrpVal, moq: isNaN(moqVal) ? null : moqVal, packQty: isNaN(packQtyVal) ? null : packQtyVal, weightGrams: isNaN(weightVal) ? null : weightVal }, sid, today);
         if(existedBefore){ updated++; if(wasIncrease) increases++; } else { added++; }
+        touchedKeys.push(key);
       });
+      if(touchedKeys.length){
+        state.priceLists.push({ id: uid(), supplierId: sid, fileName: file.fileName, brand: fileBrand || '', importedAt: today, productKeys: touchedKeys });
+      }
     });
 
     state.importMappings[sid] = { mapping: m, defBrand: defBrand, defCurrency: defCurrency, defFreight: defFreight };
@@ -2445,25 +2567,6 @@
     keys.sort(function(a,b){ return state.products[a].displayName.localeCompare(state.products[b].displayName, undefined, {sensitivity:'base', numeric:true}); });
     return keys;
   }
-  var prodNameColWidth = 230;
-  window.ptStartColResize = function(e){
-    e.preventDefault();
-    var handle = e.target;
-    handle.classList.add('active');
-    var startX = e.clientX, startWidth = prodNameColWidth;
-    function onMove(ev){
-      var w = Math.max(50, Math.min(640, startWidth + (ev.clientX - startX)));
-      prodNameColWidth = w;
-      document.querySelectorAll('.pt-prodname-resizable').forEach(function(el){ el.style.width = w + 'px'; });
-    }
-    function onUp(){
-      handle.classList.remove('active');
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    }
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  };
   function orderLineQtyMap(o){
     var map = {};
     o.lines.forEach(function(l){ map[l.key] = (map[l.key] || 0) + l.qty; });
@@ -2472,7 +2575,13 @@
   function buildOrderPricingTableHtml(keys, qtyMap){
     qtyMap = qtyMap || {};
     if(keys.length === 0) return '<div class="panel empty">Niciun produs cunoscut din această comandă.</div>';
-    var html = '<div class="table-wrap"><table class="sticky-col-table pt-order-pricing-table"><thead><tr><th class="pt-prodname-th">Produs<span class="pt-colresize-handle" onmousedown="ptStartColResize(event)" title="Trage pentru a redimensiona coloana"></span></th><th>Cant. comandată</th><th>Achiziție (USD)</th><th>Preț de vânzare</th><th>Sinecost (MDL)</th><th>Preț secundar</th><th>Pachet 1 (-30%)</th><th>Pachet 2</th><th>Pachet 3</th></tr></thead><tbody>';
+    var html = '<div class="table-wrap"><table class="sticky-col-table pt-order-pricing-table"><thead><tr>' +
+      resizableThHtml('inv', 'name', 'Produs', 230, 150, 640) +
+      resizableThHtml('inv', 'qty', 'Cant. comandată', 110, 60, 220) +
+      resizableThHtml('inv', 'buy', 'Achiziție (USD)', 110, 70, 220) +
+      '<th>Preț de vânzare</th>' +
+      resizableThHtml('inv', 'cost', 'Sinecost (MDL)', 110, 70, 220) +
+      '<th>Preț secundar</th><th>Pachet 1 (-30%)</th><th>Pachet 2</th><th>Pachet 3</th></tr></thead><tbody>';
     keys.forEach(function(k){
       var p = state.products[k];
       var sc = getSinecost(k);
@@ -2497,14 +2606,14 @@
 
       html += '<tr><td style="font-family:var(--sans)"><div style="display:flex;align-items:center;gap:4px">' +
         (msProd && msProd.imageUrl ? '<img src="' + escAttr(msProd.imageUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0" onerror="this.style.visibility=\'hidden\'">' : '<div style="width:28px;height:28px;flex-shrink:0"></div>') +
-        '<span class="pt-prodname-resizable" style="width:' + prodNameColWidth + 'px" title="' + jsAttrEscape(p.displayName) + '">' + p.displayName + (p.quantity?' <span style="color:var(--text-soft)">('+p.quantity+')</span>':'') + '</span>' +
+        '<span class="pt-prodname-resizable" data-colw="inv:name" style="width:' + getColWidth('inv','name',230) + 'px" title="' + jsAttrEscape(p.displayName) + '">' + p.displayName + (p.quantity?' <span style="color:var(--text-soft)">('+p.quantity+')</span>':'') + '</span>' +
         ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button></div>' +
         (sc.source ? '<br><span style="font-size:10px;color:var(--text-soft)">sinecost: '+sc.source+'</span>' : '<br><span style="font-size:10px;color:var(--bad)">fără cost cunoscut</span>') + '</td>' +
-        '<td style="text-align:center;font-weight:700">' + (qtyMap[k] != null ? qtyMap[k] : '—') + '</td>' +
-        '<td>' + (sc.usdPrice!=null?fmt(sc.usdPrice)+' $':'—') + '</td>' +
+        '<td style="text-align:center;font-weight:700">' + colwDivHtml('inv','qty',110, qtyMap[k] != null ? qtyMap[k] : '—') + '</td>' +
+        '<td>' + colwDivHtml('inv','buy',110, sc.usdPrice!=null?fmt(sc.usdPrice)+' $':'—') + '</td>' +
         '<td><input class="qty-input pt-sell-price-input" style="width:calc(6ch + 16px)" type="number" step="0.01" value="' + sellVal + '" onchange="ptSetSellPrice(\'' + kEsc + '\',this.value)">' +
           '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">' + (markupPct!=null?('ad '+(markupPct>=0?'+':'')+Math.round(markupPct)+'%'):'—') + '</div></td>' +
-        '<td>' + (sc.cost!=null?fmt(sc.cost):'—') + '</td>' +
+        '<td>' + colwDivHtml('inv','cost',110, sc.cost!=null?fmt(sc.cost):'—') + '</td>' +
         '<td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input class="qty-input" style="width:calc(6ch + 16px)" type="number" step="0.01" value="' + secondaryVal + '" onchange="ptSetSecondaryPrice(\'' + kEsc + '\',this.value)">' +
           '<input class="qty-input pt-pct-input" style="width:42px;padding:9px 4px;text-align:center" type="number" step="1" title="Procent reducere pentru prețul secundar" value="' + secondaryPct + '" onchange="ptSetSecondaryPct(\'' + kEsc + '\',this.value)">%</div></td>' +
         pkgCellHtml(kEsc, 1, pachet1, p.pachet1Price, 30, sc.cost, p.sellPrice, null, false) +
@@ -2689,7 +2798,22 @@
           html += '</div>';
           html += '<div class="row"><div><button class="primary" onclick="ptSaveSupplierDetails(\'' + s.id + '\')" style="width:100%">Salvează</button></div>' +
             '<div><button class="secondary" onclick="ptCopySupplierData(\'' + s.id + '\')" style="width:100%">Copiază toate datele</button></div></div>';
-          html += '<div class="row" style="margin-top:2px">';
+          var supPriceLists = state.priceLists.filter(function(pl){ return pl.supplierId === s.id; }).sort(function(a,b){ return b.importedAt.localeCompare(a.importedAt); });
+          html += '<div style="margin-top:14px"><label>Price listuri adăugate (' + supPriceLists.length + ')</label>';
+          if(!supPriceLists.length){
+            html += '<div class="hint" style="margin-bottom:0">Niciun price list urmărit încă pentru acest furnizor — apar aici pe măsură ce importi Excel-uri din tab-ul „Adaugă listă de preț”.</div>';
+          } else {
+            html += '<div class="panel" style="padding:0;margin-bottom:0">';
+            supPriceLists.forEach(function(pl){
+              html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
+                '<span>' + escAttr(pl.fileName) + (pl.brand ? ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + escAttr(pl.brand) + ')</span>' : '') + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + fmtDateDMY(pl.importedAt) + ' · ' + pl.productKeys.length + ' produse</span></span>' +
+                '<button class="icon-x" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge acest price list — elimină prețurile lui de la acest furnizor, ca să poți reimporta o versiune curată">✕</button>' +
+                '</div>';
+            });
+            html += '</div>';
+          }
+          html += '</div>';
+          html += '<div class="row" style="margin-top:14px">';
           if(pendingWipeSupplierId === s.id){
             html += '<div style="flex:1"><div class="feedback err" style="margin-bottom:6px">Sigur ștergi toate produsele acestui furnizor? Nu se poate anula automat.</div>' +
               '<div class="row"><div><button class="secondary" style="width:100%;background:var(--bad);color:#fff;border-color:var(--bad)" onclick="ptConfirmWipeSupplierProducts(\'' + s.id + '\')">Da, șterge definitiv</button></div>' +
@@ -2715,8 +2839,23 @@
   window.ptDeleteSupplier = function(id){
     state.suppliers = state.suppliers.filter(function(s){ return s.id !== id; });
     Object.keys(state.products).forEach(function(k){ delete state.products[k].bySupplier[id]; if(Object.keys(state.products[k].bySupplier).length===0) delete state.products[k]; });
+    state.priceLists = state.priceLists.filter(function(pl){ return pl.supplierId !== id; });
     if(expandedSupplierId === id) expandedSupplierId = null;
     save(); renderSuppliers(); renderCompare();
+  };
+  window.ptDeletePriceList = function(id){
+    var pl = state.priceLists.find(function(x){ return x.id === id; });
+    if(!pl) return;
+    if(!confirm('Ștergi price list-ul „' + pl.fileName + '" (' + pl.productKeys.length + ' produse) de la ' + supplierName(pl.supplierId) + '?\n\nPrețurile acestor produse de la acest furnizor vor fi eliminate din Comparație produse — poți reimporta oricând o versiune curată.')) return;
+    var removed = 0;
+    pl.productKeys.forEach(function(k){
+      var p = state.products[k];
+      if(p && p.bySupplier[pl.supplierId]){ delete p.bySupplier[pl.supplierId]; removed++; }
+    });
+    state.priceLists = state.priceLists.filter(function(x){ return x.id !== id; });
+    save();
+    renderSuppliers(); renderCompare();
+    ptToast('Price list șters — ' + removed + ' produse eliminate de la ' + supplierName(pl.supplierId) + '.', true);
   };
   window.ptAskWipeSupplierProducts = function(id){ pendingWipeSupplierId = id; renderSuppliers(); };
   window.ptCancelWipe = function(){ pendingWipeSupplierId = null; renderSuppliers(); };
@@ -2729,6 +2868,7 @@
         if(Object.keys(state.products[k].bySupplier).length===0) delete state.products[k];
       }
     });
+    state.priceLists = state.priceLists.filter(function(pl){ return pl.supplierId !== id; });
     pendingWipeSupplierId = null;
     save(); renderCompare(); renderSuppliers();
     ptToast(removed > 0 ? ('Șters: ' + removed + ' produse de la ' + supplierName(id) + '.') : 'Acest furnizor nu avea produse de șters.', true);
