@@ -1182,7 +1182,7 @@
 
     html += hiddenColsChipsHtml('cat', [ { col:'price', label:'Preț achiziție' }, { col:'stock', label:'Stoc' }, { col:'days', label:'Zile în depozit' } ]);
     var catColspan = 2 + 1 + (isColHidden('cat','price')?0:1) + (isColHidden('cat','stock')?0:1) + (isColHidden('cat','days')?0:1);
-    html += '<div class="panel" style="padding:0"><div class="pt-vscroll" style="max-height:70vh;overflow-y:auto"><div class="table-wrap"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th></th>' +
+    html += '<div class="panel" style="padding:0"><div class="table-wrap pt-vscroll" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th></th>' +
       resizableThHtml('cat', 'name', 'Produs', 260, 160, 640, false) +
       (isColHidden('cat','price') ? '' : resizableThHtml('cat', 'price', 'Preț achiziție', 110, 40, 260)) +
       (isColHidden('cat','stock') ? '' : resizableThHtml('cat', 'stock', 'Stoc', 80, 40, 200)) +
@@ -1205,7 +1205,7 @@
         html += '<tr><td colspan="' + catColspan + '"><div class="detail-panel">' + historyBlockHtml(p.id) + '</div></td></tr>';
       }
     });
-    html += '</tbody></table></div></div></div>';
+    html += '</tbody></table></div></div>';
     setInnerHtmlKeepingFocus(el, html);
 
     var searchEl = document.getElementById('pt-catalog-search');
@@ -1563,7 +1563,7 @@
       var cmpHiddenColDefs = [ { col:'ms', label:'MoySklad' }, { col:'hist', label:'Istoric' }, { col:'rrp', label:'RRP' } ]
         .concat(suppliersList.map(function(s){ return { col:'sup_'+s.id, label:s.name }; }));
       html += hiddenColsChipsHtml('cmp', cmpHiddenColDefs);
-      html += '<div class="panel" style="padding:0"><div class="pt-vscroll" style="max-height:70vh;overflow-y:auto"><div class="table-wrap"><table class="cmp-table sticky-col-table"><thead><tr>' +
+      html += '<div class="panel" style="padding:0"><div class="table-wrap pt-vscroll" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr>' +
         resizableThHtml('cmp', 'name', 'Produs', 260, 160, 640, false) +
         (msOn && !isColHidden('cmp','hist') ? resizableThHtml('cmp', 'hist', 'Istoric', 220, 26, 500) : '') +
         (msOn && !isColHidden('cmp','ms') ? resizableThHtml('cmp', 'ms', 'MoySklad', 90, 26, 220) : '') +
@@ -1735,7 +1735,7 @@
           html += '</div></td></tr>';
         }
       });
-      html += '</tbody></table></div></div></div>';
+      html += '</tbody></table></div></div>';
     }
     setInnerHtmlKeepingFocus(el, html);
     var s = document.getElementById('pt-search');
