@@ -140,8 +140,8 @@
   #pt-root table.pt-order-pricing-table { width: max-content; min-width: 100%; }
   #pt-root .pt-prodname-resizable { display: inline-block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 50px; max-width: 640px; vertical-align: middle; }
   #pt-root th.pt-prodname-th, #pt-root th.pt-resizable-th { position: relative; padding-right: 24px; }
-  #pt-root .pt-colresize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: col-resize; }
-  #pt-root .pt-colresize-handle:hover, #pt-root .pt-colresize-handle.active { background: var(--accent); opacity: 0.4; }
+  #pt-root .pt-colresize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 10px; cursor: col-resize; border-right: 2px solid var(--border); }
+  #pt-root .pt-colresize-handle:hover, #pt-root .pt-colresize-handle.active { background: var(--accent); opacity: 0.4; border-right-color: var(--accent); }
   #pt-root .pt-colhide-btn { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-soft); font-size: 9px; line-height: 1; cursor: pointer; padding: 3px; border-radius: 3px; }
   #pt-root .pt-colhide-btn:hover { background: var(--bad); color: #fff; }
   #pt-root .qty-input { width: 70px; padding: 5px 7px; margin-bottom: 0; }
@@ -1502,10 +1502,10 @@
       html += hiddenColsChipsHtml('cmp', cmpHiddenColDefs);
       html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr>' +
         resizableThHtml('cmp', 'name', 'Produs', 260, 160, 640, false) +
-        (msOn && !isColHidden('cmp','hist') ? resizableThHtml('cmp', 'hist', 'Istoric', 220, 40, 500) : '') +
-        (msOn && !isColHidden('cmp','ms') ? resizableThHtml('cmp', 'ms', 'MoySklad', 90, 40, 220) : '') +
-        visibleSuppliers.map(function(s){ return resizableThHtml('cmp', 'sup_' + s.id, escAttr(s.name), 130, 40, 320); }).join('') +
-        (!isColHidden('cmp','rrp') ? resizableThHtml('cmp', 'rrp', 'RRP', 110, 40, 260) : '') +
+        (msOn && !isColHidden('cmp','hist') ? resizableThHtml('cmp', 'hist', 'Istoric', 220, 26, 500) : '') +
+        (msOn && !isColHidden('cmp','ms') ? resizableThHtml('cmp', 'ms', 'MoySklad', 90, 26, 220) : '') +
+        visibleSuppliers.map(function(s){ return resizableThHtml('cmp', 'sup_' + s.id, escAttr(s.name), 130, 26, 320); }).join('') +
+        (!isColHidden('cmp','rrp') ? resizableThHtml('cmp', 'rrp', 'RRP', 110, 26, 260) : '') +
         '<th></th></tr></thead><tbody>';
 
       visibleKeys.forEach(function(k){
@@ -1734,6 +1734,7 @@
   var preselectImportSupplier = null;
   var editingPriceListId = null;
   var pendingRawBuffers = {};
+  var justAppliedIds = {};
   window.ptEditPriceList = function(plId){
     var pl = state.priceLists.find(function(x){ return x.id === plId; });
     if(!pl) return;
@@ -2199,13 +2200,16 @@
   function renderExcelImport(){
     var body = document.getElementById('pt-add-body');
     var html = '<div class="panel"><h2>Importă din Excel</h2><div class="hint">Poți încărca mai multe fișiere deodată (ex: câte unul per brand). Fișierele NU creează produse imediat — rămân „în așteptare" până verifici maparea coloanelor pentru fiecare, mai jos, și apeși „Importă produsele" pe rând.</div>';
-    if(editingPriceListId){
-      html += '<div class="feedback ok">✏️ Verifici price list-ul „' + escAttr(importState.fileName) + '" — corectează maparea de mai jos și apasă „Importă produsele", <b>fără să mai selectezi fișierul din nou</b>. <button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button></div>';
-    }
     html += '<label>Furnizor</label><select id="pt-imp-supplier">' + supplierOptions(preselectImportSupplier) + '</select>';
     html += '<label>Fișiere' + (editingPriceListId ? ' (opțional — completează doar dacă vrei să încarci o versiune nouă a fișierului)' : ' (poți selecta mai multe)') + '</label><input type="file" id="pt-imp-file" accept=".xlsx,.xls,.csv" multiple>';
+    // Maparea se deschide chiar sub fișierul editat (dacă e unul „în așteptare"), nu la capătul
+    // paginii — altfel, cu 24 de fișiere în listă, trebuia să derulezi mult ca s-o găsești.
+    var editingIsPending = editingPriceListId && state.priceLists.some(function(pl){ return pl.id === editingPriceListId && pl.pending; });
+    if(editingPriceListId && !editingIsPending){
+      html += '<div class="feedback ok">✏️ Verifici price list-ul „' + escAttr(importState.fileName) + '" — corectează maparea de mai jos și apasă „Importă produsele", <b>fără să mai selectezi fișierul din nou</b>. <button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button></div>' +
+        '<div id="pt-imp-mapping"></div>';
+    }
     html += '<div id="pt-imp-pending"></div>';
-    html += '<div id="pt-imp-mapping"></div>';
     html += '</div>';
     body.innerHTML = html;
     preselectImportSupplier = null;
@@ -2214,23 +2218,32 @@
       var box = document.getElementById('pt-imp-pending');
       if(!box) return;
       var sidNow = document.getElementById('pt-imp-supplier').value;
-      var pendingHere = state.priceLists.filter(function(pl){ return pl.pending && (!sidNow || pl.supplierId === sidNow); });
-      if(!pendingHere.length){ box.innerHTML = ''; return; }
+      var pendingHere = state.priceLists.filter(function(pl){ return pl.pending && (pl.id === editingPriceListId || !sidNow || pl.supplierId === sidNow); });
+      var justAppliedHere = state.priceLists.filter(function(pl){ return justAppliedIds[pl.id] && (!sidNow || pl.supplierId === sidNow); });
+      if(!pendingHere.length && !justAppliedHere.length){ box.innerHTML = ''; return; }
+      var rowsHtml = pendingHere.map(function(pl){
+        var isEditingThis = editingPriceListId === pl.id;
+        var row = '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
+          '<span>' + escAttr(pl.fileName) + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + (pl.rows ? pl.rows.length : 0) + ' rânduri</span></span>' +
+          (isEditingThis ? '<button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button>' : '<button class="secondary" onclick="ptEditPriceList(\'' + pl.id + '\')">Verifică și importă</button>') +
+          '</div>';
+        if(isEditingThis) row += '<div id="pt-imp-mapping" style="padding:12px 14px;border-bottom:1px solid var(--border)"></div>';
+        return row;
+      }).join('');
+      var doneHtml = justAppliedHere.map(function(pl){
+        return '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;background:var(--rank1-bg)">' +
+          '<span style="color:var(--rank1);font-weight:600">✓ ' + escAttr(pl.fileName) + ' — importat (' + pl.productKeys.length + ' produse)</span>' +
+          '</div>';
+      }).join('');
       box.innerHTML = '<div class="panel" style="background:var(--rank3-bg);border-color:var(--rank3)">' +
-        '<h2 style="margin:0 0 8px;font-size:15px">⏳ În așteptare (' + pendingHere.length + ')</h2>' +
-        '<div class="panel" style="padding:0;margin-bottom:0;background:var(--panel)">' +
-        pendingHere.map(function(pl){
-          return '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
-            '<span>' + escAttr(pl.fileName) + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + (pl.rows ? pl.rows.length : 0) + ' rânduri</span></span>' +
-            '<button class="secondary" onclick="ptEditPriceList(\'' + pl.id + '\')">Verifică și importă</button>' +
-            '</div>';
-        }).join('') + '</div></div>';
+        (pendingHere.length ? '<h2 style="margin:0 0 8px;font-size:15px">⏳ În așteptare (' + pendingHere.length + ')</h2>' : '<h2 style="margin:0 0 8px;font-size:15px">✓ Gata</h2>') +
+        '<div class="panel" style="padding:0;margin-bottom:0;background:var(--panel)">' + doneHtml + rowsHtml + '</div></div>';
     }
     renderPendingList();
 
     document.getElementById('pt-imp-supplier').addEventListener('change', function(){
-      if(importState) renderMapping();
       renderPendingList();
+      if(importState) renderMapping();
     });
     if(editingPriceListId && importState) renderMapping();
 
@@ -2327,6 +2340,7 @@
 
   function renderMapping(){
     var wrap = document.getElementById('pt-imp-mapping');
+    if(!wrap) return;
     var headers = importState.headers;
     var guesses = {
       name: guessColumn(headers, ['name english','english name'], ['korean']) !== -1
@@ -2510,6 +2524,7 @@
             if(!oldKeySet[k]){ state.products[k].isNew = true; state.products[k].newAt = today; }
             else { state.products[k].isNew = false; }
           });
+          var wasPending = existingPL.pending;
           existingPL.fileName = file.fileName;
           existingPL.brand = fileBrand || '';
           existingPL.importedAt = today;
@@ -2520,6 +2535,7 @@
           existingPL.mapping = m;
           existingPL.pending = false;
           delete pendingRawBuffers[existingPL.id];
+          if(wasPending) justAppliedIds[existingPL.id] = true;
         } else {
           state.priceLists.push({ id: uid(), supplierId: sid, fileName: file.fileName, brand: fileBrand || '', importedAt: today, productKeys: touchedKeys, headers: file.headers, rows: file.rows, skippedRows: file.skippedRows || 0, mapping: m, pending: false });
         }
@@ -2541,6 +2557,7 @@
     fb.className = 'feedback ok'; fb.textContent = msg;
     importFiles = null; importState = null; editingPriceListId = null;
     renderCompare();
+    renderExcelImport();
   }
 
   function renderPasteImport(){
