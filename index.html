@@ -138,9 +138,11 @@
   #pt-root input[type=number].pt-pct-input { -moz-appearance: auto; }
   #pt-root table.pt-order-pricing-table { width: max-content; min-width: 100%; }
   #pt-root .pt-prodname-resizable { display: inline-block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 50px; max-width: 640px; vertical-align: middle; }
-  #pt-root th.pt-prodname-th, #pt-root th.pt-resizable-th { position: relative; padding-right: 16px; }
+  #pt-root th.pt-prodname-th, #pt-root th.pt-resizable-th { position: relative; padding-right: 24px; }
   #pt-root .pt-colresize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: col-resize; }
   #pt-root .pt-colresize-handle:hover, #pt-root .pt-colresize-handle.active { background: var(--accent); opacity: 0.4; }
+  #pt-root .pt-colhide-btn { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-soft); font-size: 9px; line-height: 1; cursor: pointer; padding: 3px; border-radius: 3px; }
+  #pt-root .pt-colhide-btn:hover { background: var(--bad); color: #fff; }
   #pt-root .qty-input { width: 70px; padding: 5px 7px; margin-bottom: 0; }
   #pt-root .map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px,1fr)); gap: 10px 14px; margin-bottom: 14px; }
   #pt-root .map-grid label { margin-bottom: 4px; }
@@ -242,7 +244,7 @@
     carts: {},
     importMappings: {},
     priceLists: [],
-    settings: { exchangeRate: 17.68, krwPerUsd: 1375, eurPerUsd: 0.92, coef: 1.4, ratesUpdatedAt: null, defaultMarkup: 100, hiddenMoyskladBrandIds: [], hiddenMoyskladProductIds: [] }
+    settings: { exchangeRate: 17.68, krwPerUsd: 1375, eurPerUsd: 0.92, coef: 1.4, ratesUpdatedAt: null, defaultMarkup: 100, hiddenMoyskladBrandIds: [], hiddenMoyskladProductIds: [], pinnedBrands: [] }
   };
 
   var autoFetchFailed = false;
@@ -285,13 +287,50 @@
     document.addEventListener('mouseup', onUp);
   };
   function resizeHandleHtml(table, col, dflt, min, max){
-    return '<span class="pt-colresize-handle" onmousedown="ptColResizeStart(event,\'' + table + '\',\'' + col + '\',' + dflt + ',' + (min||40) + ',' + (max||700) + ')" title="Trage pentru a redimensiona coloana"></span>';
+    return '<span class="pt-colresize-handle" onmousedown="ptColResizeStart(event,\'' + table + '\',\'' + col + '\',' + dflt + ',' + (min||30) + ',' + (max||700) + ')" title="Trage pentru a redimensiona coloana"></span>';
   }
-  function resizableThHtml(table, col, label, dflt, min, max){
-    return '<th class="pt-resizable-th">' + label + resizeHandleHtml(table, col, dflt, min, max) + '</th>';
+  var HIDDEN_COLS_KEY = 'pt_hidden_cols_v1';
+  var hiddenCols = (function(){
+    try { return JSON.parse(localStorage.getItem(HIDDEN_COLS_KEY)) || {}; } catch(e){ return {}; }
+  })();
+  function isColHidden(table, col){
+    return !!(hiddenCols[table] && hiddenCols[table][col]);
+  }
+  function saveHiddenColsToStorage(){
+    try { localStorage.setItem(HIDDEN_COLS_KEY, JSON.stringify(hiddenCols)); } catch(e){}
+  }
+  function rerenderForColChange(){
+    var cmp = document.getElementById('tab-compare');
+    if(cmp && cmp.style.display !== 'none') renderCompare();
+    var cat = document.getElementById('tab-catalog');
+    if(cat && cat.style.display !== 'none') renderCatalog();
+    if(typeof renderOrderDetailTable === 'function') renderOrderDetailTable();
+  }
+  window.ptHideCol = function(table, col){
+    if(!hiddenCols[table]) hiddenCols[table] = {};
+    hiddenCols[table][col] = true;
+    saveHiddenColsToStorage();
+    rerenderForColChange();
+  };
+  window.ptShowCol = function(table, col){
+    if(hiddenCols[table]) delete hiddenCols[table][col];
+    saveHiddenColsToStorage();
+    rerenderForColChange();
+  };
+  function resizableThHtml(table, col, label, dflt, min, max, hideable){
+    var hideBtn = hideable === false ? '' : '<button class="pt-colhide-btn" onmousedown="event.stopPropagation()" onclick="event.stopPropagation();ptHideCol(\'' + table + '\',\'' + col + '\')" title="Ascunde coloana">✕</button>';
+    return '<th class="pt-resizable-th">' + label + hideBtn + resizeHandleHtml(table, col, dflt, min, max) + '</th>';
+  }
+  function hiddenColsChipsHtml(table, cols){
+    var hidden = cols.filter(function(c){ return isColHidden(table, c.col); });
+    if(!hidden.length) return '';
+    return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px">' +
+      '<span style="font-size:11px;color:var(--text-soft);font-weight:600;text-transform:uppercase">🙈 Ascunse</span>' +
+      hidden.map(function(c){ return '<button class="subtab-btn" onclick="ptShowCol(\'' + table + '\',\'' + c.col + '\')">+ ' + escAttr(c.label) + '</button>'; }).join('') +
+      '</div>';
   }
   function colwDivHtml(table, col, dflt, innerHtml){
-    return '<div data-colw="' + table + ':' + col + '" style="width:' + getColWidth(table, col, dflt) + 'px">' + innerHtml + '</div>';
+    return '<div data-colw="' + table + ':' + col + '" style="width:' + getColWidth(table, col, dflt) + 'px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + innerHtml + '</div>';
   }
   function extractBarcodes(raw){
     if(raw === null || raw === undefined || raw === '') return [];
@@ -721,7 +760,22 @@
   }
   var historyQueue = [];
   var historyActive = 0;
-  var HISTORY_CONCURRENCY = 3;
+  var HISTORY_CONCURRENCY = 6;
+  var HISTORY_CACHE_KEY = 'pt_history_cache_v1';
+  var historyCacheSaveTimer = null;
+  function saveHistoryCacheDebounced(){
+    if(historyCacheSaveTimer) clearTimeout(historyCacheSaveTimer);
+    historyCacheSaveTimer = setTimeout(function(){
+      try {
+        var toSave = {};
+        Object.keys(catalogHistoryCache).forEach(function(id){
+          var v = catalogHistoryCache[id];
+          if(v && typeof v === 'object' && v.rows) toSave[id] = v;
+        });
+        localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(toSave));
+      } catch(e){ /* localStorage indisponibil sau plin — istoricul rămâne doar în memorie */ }
+    }, 800);
+  }
   function ensureHistoryLoaded(msId){
     if(catalogHistoryCache[msId]) return;
     catalogHistoryCache[msId] = 'loading';
@@ -734,6 +788,7 @@
         historyActive++;
         fetch(catalogProxyUrl('history=' + encodeURIComponent(msId))).then(function(r){ return r.json(); }).then(function(data){
           catalogHistoryCache[msId] = (data && data.error) ? { error: data.detail || data.error } : { rows: (data && data.history) || [] };
+          saveHistoryCacheDebounced();
         }).catch(function(err){
           catalogHistoryCache[msId] = { error: err && err.message ? err.message : String(err) };
         }).then(function(){
@@ -753,7 +808,9 @@
   var catalogSearchTerm = '';
   var selectedBrandId = null;
   var expandedCatalogId = null;
-  var catalogHistoryCache = {};
+  var catalogHistoryCache = (function(){
+    try { return JSON.parse(localStorage.getItem(HISTORY_CACHE_KEY)) || {}; } catch(e){ return {}; }
+  })();
   var selectedProductIds = {};
   var bulkBusy = false;
   var NO_BRAND = '__no_brand__';
@@ -803,7 +860,6 @@
         catalogProducts = data.products || [];
         catalogFolders = data.folders || [];
         catalogUpdatedAt = data.updatedAt || new Date().toISOString();
-        catalogHistoryCache = {};
         selectedProductIds = {};
         rebuildMoyskladIndex();
         saveCatalogCache();
@@ -1011,11 +1067,13 @@
         '</div>';
     }
 
+    html += hiddenColsChipsHtml('cat', [ { col:'price', label:'Preț achiziție' }, { col:'stock', label:'Stoc' }, { col:'days', label:'Zile în depozit' } ]);
+    var catColspan = 2 + 1 + (isColHidden('cat','price')?0:1) + (isColHidden('cat','stock')?0:1) + (isColHidden('cat','days')?0:1);
     html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th></th><th></th>' +
-      resizableThHtml('cat', 'name', 'Produs', 260, 160, 640) +
-      resizableThHtml('cat', 'price', 'Preț achiziție', 110, 70, 260) +
-      resizableThHtml('cat', 'stock', 'Stoc', 80, 50, 200) +
-      resizableThHtml('cat', 'days', 'Zile în depozit', 110, 60, 260) +
+      resizableThHtml('cat', 'name', 'Produs', 260, 160, 640, false) +
+      (isColHidden('cat','price') ? '' : resizableThHtml('cat', 'price', 'Preț achiziție', 110, 40, 260)) +
+      (isColHidden('cat','stock') ? '' : resizableThHtml('cat', 'stock', 'Stoc', 80, 40, 200)) +
+      (isColHidden('cat','days') ? '' : resizableThHtml('cat', 'days', 'Zile în depozit', 110, 40, 260)) +
       '</tr></thead><tbody>';
     visible.forEach(function(p){
       var isExpanded = expandedCatalogId === p.id;
@@ -1024,14 +1082,14 @@
       html += '<td style="width:24px">' + (catalogShowHiddenProducts ? '<button class="secondary" style="padding:2px 6px;font-size:11px" onclick="ptUnhideProduct(\'' + p.id + '\')">↺</button>' : '<input type="checkbox" ' + (selectedProductIds[p.id]?'checked':'') + ' onchange="ptToggleProductSelect(\'' + p.id + '\')">') + '</td>';
       html += '<td style="width:40px">' + (p.imageUrl ? '<img src="' + escAttr(p.imageUrl) + '" style="width:32px;height:32px;object-fit:cover;border-radius:6px;display:block" onerror="this.style.display=\'none\'">' : '') + '</td>';
       html += '<td>' + colwDivHtml('cat','name',260,
-        '<button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button> <button class="icon-link" style="padding:0 3px" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.name) + '\')">🔍</button>' +
+        '<button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')" title="' + jsAttrEscape(p.name) + '">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button> <button class="icon-link" style="padding:0 3px" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.name) + '\')">🔍</button>' +
         '<div class="prod-meta">' + (p.barcodes && p.barcodes.length ? 'EAN ' + p.barcodes.join(', ') : 'fără barcode') + (p.article ? ' · art. ' + escAttr(p.article) : '') + '</div>') + '</td>';
-      html += '<td class="dim">' + colwDivHtml('cat','price',110, p.buyPrice !== null ? fmt(p.buyPrice) + ' ' + (p.buyPriceCurrency||'') : '—') + '</td>';
-      html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','stock',80, p.stock !== null && p.stock !== undefined ? p.stock : 0) + '</td>';
-      html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','days',110, p.stockDays !== null && p.stockDays !== undefined ? Math.round(p.stockDays) : '—') + '</td>';
+      if(!isColHidden('cat','price')) html += '<td class="dim">' + colwDivHtml('cat','price',110, p.buyPrice !== null ? fmt(p.buyPrice) + ' ' + (p.buyPriceCurrency||'') : '—') + '</td>';
+      if(!isColHidden('cat','stock')) html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','stock',80, p.stock !== null && p.stock !== undefined ? p.stock : 0) + '</td>';
+      if(!isColHidden('cat','days')) html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','days',110, p.stockDays !== null && p.stockDays !== undefined ? Math.round(p.stockDays) : '—') + '</td>';
       html += '</tr>';
       if(isExpanded){
-        html += '<tr><td colspan="6"><div class="detail-panel">' + historyBlockHtml(p.id) + '</div></td></tr>';
+        html += '<tr><td colspan="' + catColspan + '"><div class="detail-panel">' + historyBlockHtml(p.id) + '</div></td></tr>';
       }
     });
     html += '</tbody></table></div></div>';
@@ -1054,6 +1112,27 @@
   var showArchived = false;
   var compareSortBy = 'name';
   var compareSortDir = 'asc';
+  function pinnedBrandsList(){ return state.settings.pinnedBrands || (state.settings.pinnedBrands = []); }
+  window.ptTogglePinSearch = function(){
+    var term = searchTerm.trim();
+    if(!term){ ptToast('Scrie mai întâi ceva în căutare ca să-l poți fixa.', false); return; }
+    var list = pinnedBrandsList();
+    var idx = list.indexOf(term);
+    if(idx !== -1) list.splice(idx, 1); else list.push(term);
+    save();
+    renderCompare();
+  };
+  window.ptApplyPinnedSearch = function(term){
+    searchTerm = term;
+    renderCompare();
+  };
+  window.ptUnpinSearch = function(term){
+    var list = pinnedBrandsList();
+    var idx = list.indexOf(term);
+    if(idx !== -1) list.splice(idx, 1);
+    save();
+    renderCompare();
+  };
   window.ptSetCompareSort = function(field){
     if(compareSortBy === field){ compareSortDir = compareSortDir === 'asc' ? 'desc' : 'asc'; }
     else { compareSortBy = field; compareSortDir = (field === 'stock') ? 'desc' : 'asc'; }
@@ -1286,6 +1365,7 @@
         '</div>';
     }
     html += '<div class="search-row"><input type="text" id="pt-search" placeholder="Caută după nume, brand, barcode sau mărime…" value="' + searchTerm.replace(/"/g,'') + '" style="flex:2">' +
+      '<button class="secondary" onclick="ptTogglePinSearch()" title="Fixează această căutare ca acces rapid" style="white-space:nowrap;flex:none">' + (searchTerm && pinnedBrandsList().indexOf(searchTerm) !== -1 ? '📌 fixat' : '📌 fixează') + '</button>' +
       '<select id="pt-brand-filter" style="flex:1;margin-bottom:0"><option value="">Toate brandurile' + (allBrands.length ? ' (' + allBrands.length + ')' : '') + '</option>' +
       allBrands.map(function(b){ return '<option value="' + escAttr(b) + '" ' + (brandFilter===b?'selected':'') + '>' + b + '</option>'; }).join('') +
       '</select>' +
@@ -1294,6 +1374,14 @@
       '<button class="secondary" onclick="ptBackfillRrpCurrency()" title="Setează moneda RRP (pentru produsele importate înainte de acest fix)" style="white-space:nowrap">🔧 monedă RRP</button>' +
       '<button class="secondary" onclick="ptCleanupBadBrands()" title="Șterge brandurile greșite provenite dintr-un bug de import (denumiri de produs salvate ca brand)" style="white-space:nowrap">🔧 curăță branduri greșite</button>' +
       '<button class="subtab-btn ' + (showArchived?'active':'') + '" onclick="ptToggleShowArchived()" style="white-space:nowrap">📦 Arhivate (' + archivedCount + ')</button></div>';
+    if(pinnedBrandsList().length){
+      html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:-6px 0 12px">' +
+        pinnedBrandsList().slice().sort(function(a,b){ return a.localeCompare(b, undefined, {sensitivity:'base'}); }).map(function(term){
+          return '<span class="subtab-btn ' + (searchTerm === term ? 'active' : '') + '" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px" onclick="ptApplyPinnedSearch(\'' + jsAttrEscape(term) + '\')">📌 ' + escAttr(term) +
+            '<button class="icon-x" style="padding:0 2px" onclick="event.stopPropagation();ptUnpinSearch(\'' + jsAttrEscape(term) + '\')" title="Scoate din fixate">✕</button></span>';
+        }).join('') +
+        '</div>';
+    }
     html += '<div class="panel" style="padding:8px 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">' +
       '<span style="font-size:11px;color:var(--text-soft);font-weight:600;text-transform:uppercase">Sortare</span>' +
       sortBtnHtml('name', 'Denumire') +
@@ -1338,12 +1426,20 @@
       }
 
       var suppliersList = state.suppliers.filter(function(s){ return keys.some(function(k){ return !!state.products[k].bySupplier[s.id]; }); });
-      var colspan = suppliersList.length + 3 + (msOn ? 1 : 0);
+      var visibleSuppliers = suppliersList.filter(function(s){ return !isColHidden('cmp', 'sup_' + s.id); });
+      var colspan = visibleSuppliers.length + 2 +
+        (msOn && !isColHidden('cmp','hist') ? 1 : 0) +
+        (msOn && !isColHidden('cmp','ms') ? 1 : 0) +
+        (!isColHidden('cmp','rrp') ? 1 : 0);
+      var cmpHiddenColDefs = [ { col:'ms', label:'MoySklad' }, { col:'hist', label:'Istoric' }, { col:'rrp', label:'RRP' } ]
+        .concat(suppliersList.map(function(s){ return { col:'sup_'+s.id, label:s.name }; }));
+      html += hiddenColsChipsHtml('cmp', cmpHiddenColDefs);
       html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr>' +
-        resizableThHtml('cmp', 'name', 'Produs', 260, 160, 640) +
-        (msOn ? resizableThHtml('cmp', 'ms', 'MoySklad', 90, 60, 220) : '') +
-        suppliersList.map(function(s){ return resizableThHtml('cmp', 'sup_' + s.id, escAttr(s.name), 130, 70, 320); }).join('') +
-        resizableThHtml('cmp', 'rrp', 'RRP', 110, 70, 260) +
+        resizableThHtml('cmp', 'name', 'Produs', 260, 160, 640, false) +
+        (msOn && !isColHidden('cmp','hist') ? resizableThHtml('cmp', 'hist', 'Istoric', 220, 40, 500) : '') +
+        (msOn && !isColHidden('cmp','ms') ? resizableThHtml('cmp', 'ms', 'MoySklad', 90, 40, 220) : '') +
+        visibleSuppliers.map(function(s){ return resizableThHtml('cmp', 'sup_' + s.id, escAttr(s.name), 130, 40, 320); }).join('') +
+        (!isColHidden('cmp','rrp') ? resizableThHtml('cmp', 'rrp', 'RRP', 110, 40, 260) : '') +
         '<th></th></tr></thead><tbody>';
 
       visibleKeys.forEach(function(k){
@@ -1356,7 +1452,13 @@
         var transit = getInTransitInfo(k);
         var isExpanded = expandedProductKey === k;
         var msProd = msOn ? moyskladLookup(p) : null;
-        if(msProd){ ensureImageUrl(msProd); ensureHistoryLoaded(msProd.id); }
+        if(msProd){
+          ensureImageUrl(msProd);
+          // Istoricul de achiziții e cel mai costisitor de adus (o căutare separată în MoySklad per
+          // produs) — îl aducem doar cînd lista e deja restrînsă (căutare sau brand ales), nu cînd se
+          // răsfoiesc mii de produse deodată, ca să nu îngreunăm degeaba sistemul.
+          if(brandFilter || searchTerm) ensureHistoryLoaded(msProd.id);
+        }
         var canonicalMoq = null, canonicalMoqDate = null;
         Object.keys(p.bySupplier).forEach(function(sid){
           var e2 = p.bySupplier[sid];
@@ -1365,19 +1467,23 @@
 
         var isMergeSource = mergeSourceKey === k;
         html += '<tr' + (isMergeSource ? ' style="outline:2px solid var(--accent);outline-offset:-2px"' : '') + '>';
-        html += '<td><div data-colw="cmp:name" style="width:' + getColWidth('cmp','name',260) + 'px;display:flex;gap:8px;align-items:flex-start">' +
-          '<div style="display:flex;gap:8px;align-items:flex-start">' +
+        html += '<td><div style="display:flex;gap:8px;align-items:flex-start">' +
           (msOn ? (msProd && msProd.imageUrl ? '<img src="' + escAttr(msProd.imageUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0;margin-top:2px" onerror="this.style.visibility=\'hidden\'">' : '<div style="width:28px;height:28px;flex-shrink:0"></div>') : '') +
-          '<div>' +
-          '<button class="prod-title-btn" style="' + (mergeSourceKey && !isMergeSource ? 'color:var(--accent)' : '') + '" onclick="ptProductClick(\'' + kEsc + '\')">' + (isMergeSource ? '🔀 ' : (isExpanded ? '▾' : '▸') + ' ') + p.displayName + '</button> <button class="icon-link" style="padding:0 3px" title="Copiază denumirea" onclick="event.stopPropagation();ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button> <button class="icon-link" style="padding:0 3px" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">🔍</button> <button class="icon-link" style="padding:0 3px" title="Unește cu alt produs" onclick="event.stopPropagation();ptStartMerge(\'' + kEsc + '\')">🔀</button>' +
+          '<div style="min-width:0;flex:1">' +
+          '<div style="display:flex;align-items:center;gap:2px">' +
+          '<button class="prod-title-btn pt-prodname-resizable" data-colw="cmp:name" style="width:' + getColWidth('cmp','name',260) + 'px;' + (mergeSourceKey && !isMergeSource ? 'color:var(--accent)' : '') + '" onclick="ptProductClick(\'' + kEsc + '\')" title="' + jsAttrEscape(p.displayName) + '">' + (isMergeSource ? '🔀 ' : (isExpanded ? '▾' : '▸') + ' ') + p.displayName + '</button>' +
+          ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="event.stopPropagation();ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">🔍</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Unește cu alt produs" onclick="event.stopPropagation();ptStartMerge(\'' + kEsc + '\')">🔀</button>' +
+          '</div>' +
           '<div class="prod-meta">' + (p.brand ? p.brand + ' · ' : '') + (p.quantity ? p.quantity + ' · ' : '') + (p.barcode ? 'EAN ' + p.barcode : 'fără barcode') + (p.altBarcodes && p.altBarcodes.length ? ' (+' + p.altBarcodes.length + ' cod' + (p.altBarcodes.length>1?'uri':'') + ': ' + p.altBarcodes.join(', ') + ')' : '') + (canonicalMoq ? ' · MOQ ' + canonicalMoq : '') + '</div>' +
           perSupplierBarcodeLine(p) +
           (transit.qty > 0 ? '<div style="margin-top:3px"><span class="rrp" style="background:' + (transit.overdue ? 'var(--bad)' : 'var(--rank2)') + ';color:#fff;font-size:12.5px;padding:3px 9px">' + (transit.overdue ? 'Întârziat · ' : 'Pe drum (' + (transit.freight === 'air' ? 'avia' : 'mare') + ') · ') + '<b style="font-size:14px">' + transit.qty + '</b> buc' + '</span></div>' : '') +
-          '</div></div>' +
-          (msProd ? '<div style="flex-shrink:0;padding-left:18px">' + historyPreviewHtml(msProd.id) + '</div>' : '') +
-          '</div></td>';
+          '</div></div></td>';
 
-        if(msOn){
+        if(msOn && !isColHidden('cmp','hist')){
+          html += '<td>' + colwDivHtml('cmp','hist',220, msProd ? (historyPreviewHtml(msProd.id) || '<span class="dim" style="font-size:11px">—</span>') : '<span class="dim" style="font-size:11px">—</span>') + '</td>';
+        }
+
+        if(msOn && !isColHidden('cmp','ms')){
           if(!msProd){
             html += '<td class="dim" style="text-align:center">' + colwDivHtml('cmp','ms',90,'—') + '</td>';
           } else {
@@ -1395,7 +1501,7 @@
           }
         }
 
-        suppliersList.forEach(function(s){
+        visibleSuppliers.forEach(function(s){
           var e = p.bySupplier[s.id];
           if(!e){ html += '<td class="dim">' + colwDivHtml('cmp','sup_'+s.id,130,'—') + '</td>'; return; }
           var uc = effectiveUnitCost(e, s.id);
@@ -1419,7 +1525,7 @@
           html += '<td class="' + (isCheapest ? 'cheapest-cell' : '') + '">' + colwDivHtml('cmp','sup_'+s.id,130,supCellInner) + '</td>';
         });
 
-        html += '<td class="dim" style="font-size:10px">' + colwDivHtml('cmp','rrp',110,rrpCellHtml(p, minLanded)) + '</td>';
+        if(!isColHidden('cmp','rrp')) html += '<td class="dim" style="font-size:10px">' + colwDivHtml('cmp','rrp',110,rrpCellHtml(p, minLanded)) + '</td>';
         html += '<td>' + (p.archived ?
           '<button class="icon-link" onclick="ptUnarchiveProduct(\'' + kEsc + '\')" title="Scoate din arhivă">↩ dezarhivează</button>' :
           '<button class="icon-link" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">📦</button> <button class="icon-x" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">✕</button>') + '</td>';
@@ -2575,12 +2681,13 @@
   function buildOrderPricingTableHtml(keys, qtyMap){
     qtyMap = qtyMap || {};
     if(keys.length === 0) return '<div class="panel empty">Niciun produs cunoscut din această comandă.</div>';
-    var html = '<div class="table-wrap"><table class="sticky-col-table pt-order-pricing-table"><thead><tr>' +
-      resizableThHtml('inv', 'name', 'Produs', 230, 150, 640) +
-      resizableThHtml('inv', 'qty', 'Cant. comandată', 110, 60, 220) +
-      resizableThHtml('inv', 'buy', 'Achiziție (USD)', 110, 70, 220) +
+    var html = hiddenColsChipsHtml('inv', [ { col:'qty', label:'Cant. comandată' }, { col:'buy', label:'Achiziție (USD)' }, { col:'cost', label:'Sinecost (MDL)' } ]);
+    html += '<div class="table-wrap"><table class="sticky-col-table pt-order-pricing-table"><thead><tr>' +
+      resizableThHtml('inv', 'name', 'Produs', 230, 150, 640, false) +
+      (isColHidden('inv','qty') ? '' : resizableThHtml('inv', 'qty', 'Cant. comandată', 110, 40, 220)) +
+      (isColHidden('inv','buy') ? '' : resizableThHtml('inv', 'buy', 'Achiziție (USD)', 110, 40, 220)) +
       '<th>Preț de vânzare</th>' +
-      resizableThHtml('inv', 'cost', 'Sinecost (MDL)', 110, 70, 220) +
+      (isColHidden('inv','cost') ? '' : resizableThHtml('inv', 'cost', 'Sinecost (MDL)', 110, 40, 220)) +
       '<th>Preț secundar</th><th>Pachet 1 (-30%)</th><th>Pachet 2</th><th>Pachet 3</th></tr></thead><tbody>';
     keys.forEach(function(k){
       var p = state.products[k];
@@ -2609,11 +2716,11 @@
         '<span class="pt-prodname-resizable" data-colw="inv:name" style="width:' + getColWidth('inv','name',230) + 'px" title="' + jsAttrEscape(p.displayName) + '">' + p.displayName + (p.quantity?' <span style="color:var(--text-soft)">('+p.quantity+')</span>':'') + '</span>' +
         ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button></div>' +
         (sc.source ? '<br><span style="font-size:10px;color:var(--text-soft)">sinecost: '+sc.source+'</span>' : '<br><span style="font-size:10px;color:var(--bad)">fără cost cunoscut</span>') + '</td>' +
-        '<td style="text-align:center;font-weight:700">' + colwDivHtml('inv','qty',110, qtyMap[k] != null ? qtyMap[k] : '—') + '</td>' +
-        '<td>' + colwDivHtml('inv','buy',110, sc.usdPrice!=null?fmt(sc.usdPrice)+' $':'—') + '</td>' +
+        (isColHidden('inv','qty') ? '' : '<td style="text-align:center;font-weight:700">' + colwDivHtml('inv','qty',110, qtyMap[k] != null ? qtyMap[k] : '—') + '</td>') +
+        (isColHidden('inv','buy') ? '' : '<td>' + colwDivHtml('inv','buy',110, sc.usdPrice!=null?fmt(sc.usdPrice)+' $':'—') + '</td>') +
         '<td><input class="qty-input pt-sell-price-input" style="width:calc(6ch + 16px)" type="number" step="0.01" value="' + sellVal + '" onchange="ptSetSellPrice(\'' + kEsc + '\',this.value)">' +
           '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">' + (markupPct!=null?('ad '+(markupPct>=0?'+':'')+Math.round(markupPct)+'%'):'—') + '</div></td>' +
-        '<td>' + colwDivHtml('inv','cost',110, sc.cost!=null?fmt(sc.cost):'—') + '</td>' +
+        (isColHidden('inv','cost') ? '' : '<td>' + colwDivHtml('inv','cost',110, sc.cost!=null?fmt(sc.cost):'—') + '</td>') +
         '<td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input class="qty-input" style="width:calc(6ch + 16px)" type="number" step="0.01" value="' + secondaryVal + '" onchange="ptSetSecondaryPrice(\'' + kEsc + '\',this.value)">' +
           '<input class="qty-input pt-pct-input" style="width:42px;padding:9px 4px;text-align:center" type="number" step="1" title="Procent reducere pentru prețul secundar" value="' + secondaryPct + '" onchange="ptSetSecondaryPct(\'' + kEsc + '\',this.value)">%</div></td>' +
         pkgCellHtml(kEsc, 1, pachet1, p.pachet1Price, 30, sc.cost, p.sellPrice, null, false) +
