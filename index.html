@@ -1682,11 +1682,27 @@
   var importState = null;
   var importFiles = null;
   var preselectImportSupplier = null;
-  window.ptGoToExcelImport = function(sid){
-    preselectImportSupplier = sid;
+  var editingPriceListId = null;
+  window.ptEditPriceList = function(plId){
+    var pl = state.priceLists.find(function(x){ return x.id === plId; });
+    if(!pl) return;
+    if(!pl.rows){
+      ptToast('Acest price list a fost adăugat înainte să existe editarea directă — șterge-l și reimportă fișierul.', false);
+      return;
+    }
+    importFiles = null;
+    importState = { fileName: pl.fileName, headers: pl.headers, rows: pl.rows, skippedRows: pl.skippedRows || 0, detectedBrand: null };
+    editingPriceListId = plId;
+    preselectImportSupplier = pl.supplierId;
     addSubtab = 'excel';
     var btn = document.querySelector('.tab-btn[data-tab="add"]');
     if(btn) btn.click();
+  };
+  window.ptCancelEditPriceList = function(){
+    editingPriceListId = null;
+    importState = null;
+    importFiles = null;
+    renderExcelImport();
   };
 
   function renderAdd(){
@@ -1806,6 +1822,11 @@
             var sel = document.getElementById('pt-ord-map-' + key);
             if(sel) sel.value = String(idx);
           });
+          // „Cantitate comandată" conține cuvântul „cantitate", care se potrivește din greșeală
+          // cu ghicitorul automat pentru mărimea produsului (quantity) — dezactivăm explicit
+          // acea mapare, comanda adusă din MoySklad n-are o coloană reală de mărime.
+          var qtySel = document.getElementById('pt-ord-map-quantity');
+          if(qtySel) qtySel.value = '-1';
           var curEl = document.getElementById('pt-ord-def-currency');
           if(curEl) curEl.value = 'MDL';
           window.ptRenderOrderPreview();
@@ -2127,16 +2148,20 @@
   function renderExcelImport(){
     var body = document.getElementById('pt-add-body');
     var html = '<div class="panel"><h2>Importă din Excel</h2><div class="hint">Poți încărca mai multe fișiere deodată (ex: câte unul per brand) — toate vor folosi aceeași mapare de coloane. Dacă ai mai importat de la acest furnizor, maparea folosită ultima dată se completează automat.</div>';
+    if(editingPriceListId){
+      html += '<div class="feedback ok">✏️ Editezi price list-ul „' + escAttr(importState.fileName) + '" — maparea de mai jos e cea folosită la import. Corecteaz-o și apasă „Importă produsele", <b>fără să mai selectezi fișierul din nou</b>. <button class="icon-link" onclick="ptCancelEditPriceList()">Anulează editarea</button></div>';
+    }
     html += '<label>Furnizor</label><select id="pt-imp-supplier">' + supplierOptions(preselectImportSupplier) + '</select>';
-    html += '<label>Fișiere (poți selecta mai multe)</label><input type="file" id="pt-imp-file" accept=".xlsx,.xls,.csv" multiple>';
+    html += '<label>Fișiere' + (editingPriceListId ? ' (opțional — completează doar dacă vrei să încarci o versiune nouă a fișierului)' : ' (poți selecta mai multe)') + '</label><input type="file" id="pt-imp-file" accept=".xlsx,.xls,.csv" multiple>';
     html += '<div id="pt-imp-mapping"></div>';
     html += '</div>';
     body.innerHTML = html;
     preselectImportSupplier = null;
 
     document.getElementById('pt-imp-supplier').addEventListener('change', function(){
-      if(importFiles && importFiles.length) renderMapping();
+      if(importState) renderMapping();
     });
+    if(editingPriceListId && importState) renderMapping();
 
     document.getElementById('pt-imp-file').addEventListener('change', function(ev){
       var fileList = Array.prototype.slice.call(ev.target.files || []);
@@ -2239,7 +2264,10 @@
 
     var supSel = document.getElementById('pt-imp-supplier');
     var currentSid = supSel ? supSel.value : '';
-    var saved = currentSid ? state.importMappings[currentSid] : null;
+    var editingPL = editingPriceListId ? state.priceLists.find(function(pl){ return pl.id === editingPriceListId; }) : null;
+    // La editare, maparea salvată chiar pe acest price list e mai exactă decât cea generică
+    // pe furnizor (care poate fi alta dacă furnizorul trimite fișiere cu structuri diferite).
+    var saved = (editingPL && editingPL.mapping) ? { mapping: editingPL.mapping } : (currentSid ? state.importMappings[currentSid] : null);
 
     var html = '';
     if(importFiles && importFiles.length > 1){
@@ -2372,9 +2400,11 @@
         rowKeyMap[i] = key;
       });
       if(touchedKeys.length){
-        // Dacă reimporți același fișier la același furnizor (ex: ca să corectezi o mapare
-        // greșită), actualizăm price list-ul existent în loc să adăugăm unul duplicat.
-        var existingPL = state.priceLists.find(function(pl){ return pl.supplierId === sid && pl.fileName === file.fileName; });
+        // La editare directă țintim exact price list-ul respectiv (după id). Altfel, dacă
+        // reimporți un fișier cu același nume la același furnizor, actualizăm price list-ul
+        // existent în loc să adăugăm unul duplicat.
+        var existingPL = editingPriceListId ? state.priceLists.find(function(pl){ return pl.id === editingPriceListId; }) :
+          state.priceLists.find(function(pl){ return pl.supplierId === sid && pl.fileName === file.fileName; });
         if(existingPL){
           // Produsele care n-au fost în versiunea anterioară a acestui price list sunt noi —
           // le marcăm ca „NEW" în Comparație produse; cele care erau deja acolo nu mai sunt noi.
@@ -2385,11 +2415,16 @@
             if(!oldKeySet[k]){ state.products[k].isNew = true; state.products[k].newAt = today; }
             else { state.products[k].isNew = false; }
           });
+          existingPL.fileName = file.fileName;
           existingPL.brand = fileBrand || '';
           existingPL.importedAt = today;
           existingPL.productKeys = touchedKeys;
+          existingPL.headers = file.headers;
+          existingPL.rows = file.rows;
+          existingPL.skippedRows = file.skippedRows || 0;
+          existingPL.mapping = m;
         } else {
-          state.priceLists.push({ id: uid(), supplierId: sid, fileName: file.fileName, brand: fileBrand || '', importedAt: today, productKeys: touchedKeys });
+          state.priceLists.push({ id: uid(), supplierId: sid, fileName: file.fileName, brand: fileBrand || '', importedAt: today, productKeys: touchedKeys, headers: file.headers, rows: file.rows, skippedRows: file.skippedRows || 0, mapping: m });
         }
       }
       // Extragerea și urcarea pozelor lipite în Excel se face în fundal, fără să blocheze
@@ -2402,12 +2437,12 @@
     state.importMappings[sid] = { mapping: m, defCurrency: defCurrency, defFreight: defFreight };
     save();
     var fb = document.getElementById('pt-imp-feedback');
-    var msg = added + ' produse noi, ' + updated + ' actualizate';
+    var msg = (editingPriceListId ? 'Price list actualizat: ' : '') + added + ' produse noi, ' + updated + ' actualizate';
     if(filesToProcess.length > 1) msg += ' (din ' + filesToProcess.length + ' fișiere)';
     if(increases>0) msg += ', ' + increases + ' cu preț crescut';
     if(errors>0) msg += ', ' + errors + ' rânduri ignorate (lipsă produs/preț)';
     fb.className = 'feedback ok'; fb.textContent = msg;
-    importFiles = null; importState = null;
+    importFiles = null; importState = null; editingPriceListId = null;
     renderCompare();
   }
 
@@ -3118,7 +3153,7 @@
               supPriceLists.forEach(function(pl){
                 html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
                   '<span>' + escAttr(pl.fileName) + (pl.brand ? ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + escAttr(pl.brand) + ')</span>' : '') + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + fmtDateDMY(pl.importedAt) + ' · ' + pl.productKeys.length + ' produse</span></span>' +
-                  '<span class="entry-actions"><button class="icon-link" onclick="event.stopPropagation();ptGoToExcelImport(\'' + s.id + '\')" title="Deschide importul Excel pentru acest furnizor — reîncarci fișierul cu maparea corectată, fără să ștergi nimic întâi">✏️ editează</button>' +
+                  '<span class="entry-actions"><button class="icon-link" onclick="event.stopPropagation();ptEditPriceList(\'' + pl.id + '\')" title="Corectează maparea coloanelor pentru acest price list, fără să reîncarci fișierul">✏️ editează</button>' +
                   '<button class="icon-x" onclick="event.stopPropagation();ptDeletePriceList(\'' + pl.id + '\')" title="Șterge acest price list — elimină prețurile lui de la acest furnizor, ca să poți reimporta o versiune curată">✕</button></span>' +
                   '</div>';
               });
