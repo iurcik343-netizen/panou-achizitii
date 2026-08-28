@@ -1907,12 +1907,22 @@
         try {
           var data = new Uint8Array(e.target.result);
           var wb = XLSX.read(data, { type: 'array' });
-          var sheet = wb.Sheets[wb.SheetNames[0]];
-          var rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-          rows = rows.filter(function(r){ return r.some(function(c){ return String(c).trim() !== ''; }); });
-          if(rows.length < 1){ ptToast('Fișierul pare gol.', false); return; }
-          var headerIdx = detectHeaderRowIndex(rows);
-          importOrderFile = { fileName: file.name, headers: rows[headerIdx], rows: rows.slice(headerIdx+1), skippedRows: headerIdx };
+          // Facturile vin uneori cu mai multe foi (ex: cîte una per brand/secțiune) — citirea doar
+          // a primei foi lăsa produsele de pe celelalte foi complet neimportate, fără niciun
+          // avertisment. Citim toate foile și le combinăm într-un singur tabel de rînduri.
+          var combinedRows = [], headers = null, skippedTotal = 0;
+          wb.SheetNames.forEach(function(sheetName){
+            var sheetRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' });
+            sheetRows = sheetRows.filter(function(r){ return r.some(function(c){ return String(c).trim() !== ''; }); });
+            if(!sheetRows.length) return;
+            var hIdx = detectHeaderRowIndex(sheetRows);
+            if(headers === null) headers = sheetRows[hIdx];
+            combinedRows = combinedRows.concat(sheetRows.slice(hIdx+1));
+            skippedTotal += hIdx;
+          });
+          if(combinedRows.length < 1){ ptToast('Fișierul pare gol.', false); return; }
+          importOrderFile = { fileName: file.name, headers: headers, rows: combinedRows, skippedRows: skippedTotal };
+          if(wb.SheetNames.length > 1) ptToast('Fișierul are ' + wb.SheetNames.length + ' foi — au fost citite toate (' + combinedRows.length + ' rânduri în total).', true);
           renderOrderMapping();
         } catch(err){ ptToast('Nu am putut citi fișierul: ' + err.message, false); }
       };
