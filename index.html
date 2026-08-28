@@ -110,9 +110,9 @@
   #pt-root .cmp-table .prod-meta { font-size: 9.5px; color: var(--text-soft); font-family: var(--mono); margin-top: 1px; }
   #pt-root .prod-title-btn { background: none; border: none; cursor: pointer; text-align: left; padding: 0; font-family: var(--sans); font-weight: 700; font-size: 13px; color: var(--text); line-height: 1.3; }
   #pt-root .prod-title-btn:hover { color: var(--accent-dark); }
-  #pt-root .price-cell-btn { background: none; border: none; cursor: pointer; font-family: var(--mono); font-size: 12px; text-align: left; padding: 3px 5px; border-radius: 5px; width: 100%; color: var(--text); }
+  #pt-root .price-cell-btn { background: none; border: none; cursor: pointer; font-family: var(--mono); font-size: 14px; text-align: left; padding: 3px 5px; border-radius: 5px; width: 100%; color: var(--text); }
   #pt-root .price-cell-btn:hover { background: var(--accent-soft); }
-  #pt-root .price-cell-btn .sub { display: block; font-size: 9.5px; color: var(--text-soft); }
+  #pt-root .price-cell-btn .sub { display: block; font-size: 11px; color: var(--text-soft); }
   #pt-root td.cheapest-cell { background: var(--rank1-bg); }
   #pt-root td.dim { color: var(--text-soft); text-align: center; font-size: 11px; }
   #pt-root .detail-panel { padding: 10px 12px; background: var(--bg); border-radius: 8px; }
@@ -728,11 +728,15 @@
 
   // ================= MOYSKLAD PARTAJAT (folosit de Comparație produse și Produse MoySklad) =================
   var moyskladByBarcode = {};
+  var moyskladByName = {};
   var expandedHistoryFull = {};
   function rebuildMoyskladIndex(){
     moyskladByBarcode = {};
+    moyskladByName = {};
     catalogProducts.forEach(function(mp){
       (mp.barcodes||[]).forEach(function(bc){ moyskladByBarcode[bc] = mp; });
+      var n = normName(mp.name);
+      if(n && !moyskladByName[n]) moyskladByName[n] = mp;
     });
   }
   function moyskladLookup(p){
@@ -2084,6 +2088,14 @@
       var barcodeList = m.barcode>=0 ? extractBarcodes(r[m.barcode]) : [];
       var barcode = barcodeList.length ? barcodeList[0] : '';
       var altBarcodes = barcodeList.slice(1);
+      // Facturile de comandă nu au mereu coloană de barcode — fără el, produsul e înregistrat cu
+      // o cheie separată (după nume), ruptă de intrarea deja legată de MoySklad (poză/istoric/etc).
+      // Dacă numele se potrivește exact cu unul din catalogul MoySklad sincronizat, preluăm
+      // barcode-ul de-acolo, ca produsul din comandă să rămână legat de același produs.
+      if(!barcode && moyskladByName[normName(name)]){
+        var nameMatch = moyskladByName[normName(name)];
+        if(nameMatch.barcodes && nameMatch.barcodes.length) barcode = nameMatch.barcodes[0];
+      }
       var quantity = m.quantity>=0 ? String(r[m.quantity]||'').trim() : '';
       var brand = m.brand>=0 ? String(r[m.brand]||'').trim() : '';
       var rrpVal = m.rrp>=0 ? parseFloat(String(r[m.rrp]).replace(',','.')) : NaN;
@@ -3179,6 +3191,7 @@
         '<span class="pt-prodname-resizable" data-colw="inv:name" style="width:' + getColWidth('inv','name',230) + 'px" title="' + jsAttrEscape(p.displayName) + '">' + p.displayName + (p.quantity?' <span style="color:var(--text-soft)">('+p.quantity+')</span>':'') + '</span>' +
         ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button>' +
         ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Caută denumirea pe Google" onclick="ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">🔍</button></div>' +
+        '<br><span style="font-size:10px;color:var(--text-soft)">' + (p.barcode ? 'EAN ' + escAttr(p.barcode) : '<span style="color:var(--bad)">fără barcode — nu poate fi legat de MoySklad</span>') + '</span>' +
         (sc.source ? '<br><span style="font-size:10px;color:var(--text-soft)">sinecost: '+sc.source+'</span>' : '<br><span style="font-size:10px;color:var(--bad)">fără cost cunoscut</span>') + '</td>' +
         (msOnInv && !isColHidden('inv','hist') ? '<td>' + colwDivHtml('inv','hist',220, msProd ? (historyPreviewHtml(msProd.id) || '<span class="dim" style="font-size:11px">—</span>') : '<span class="dim" style="font-size:11px">—</span>') + '</td>' : '') +
         (isColHidden('inv','qty') ? '' : '<td style="text-align:center;font-weight:700">' + colwDivHtml('inv','qty',110, qtyMap[k] != null ? qtyMap[k] : '—') + '</td>') +
