@@ -103,7 +103,7 @@
   #pt-root .merge-box { padding: 8px 12px; background: var(--bg); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
   #pt-root .merge-box select { margin-bottom: 0; flex: 1; }
   #pt-root .cmp-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; table-layout: fixed; }
-  #pt-root .cmp-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--bg); position: sticky; top: 0; z-index: 1; }
+  #pt-root .cmp-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--bg); }
   #pt-root .sticky-col-table td:first-child, #pt-root .sticky-col-table th:first-child { position: sticky; left: 0; background: var(--panel); z-index: 2; box-shadow: 2px 0 4px rgba(0,0,0,0.05); }
   #pt-root .sticky-col-table th:first-child { background: var(--bg); z-index: 3; }
   #pt-root .cmp-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -125,7 +125,11 @@
   #pt-root .tag { font-family: var(--sans); font-weight: 700; font-size: 10px; text-transform: uppercase; }
   #pt-root .price-up { color: var(--bad); font-weight: 700; }
   #pt-root .empty { text-align: center; padding: 40px 20px; color: var(--text-soft); font-size: 13.5px; }
-  #pt-root .table-wrap { overflow-x: auto; cursor: grab; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg); }
+  #pt-root .table-wrap { position: relative; overflow-x: auto; cursor: grab; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg); }
+  #pt-root .cmp-sticky-header { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 4; background: var(--bg); border-bottom: 1px solid var(--border); pointer-events: none; }
+  #pt-root .cmp-sticky-header.active { display: flex; }
+  #pt-root .cmp-sticky-header-cell { flex: 0 0 auto; box-sizing: border-box; padding: 7px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); white-space: normal; word-break: break-word; line-height: 1.2; overflow: hidden; }
+  #pt-root .cmp-sticky-header-cell:first-child { position: sticky; left: 0; background: var(--bg); box-shadow: 2px 0 4px rgba(0,0,0,0.05); }
   #pt-root .table-wrap.dragging { cursor: grabbing; user-select: none; }
   #pt-root .table-wrap::-webkit-scrollbar { height: 11px; }
   #pt-root .table-wrap::-webkit-scrollbar-track { background: var(--bg); }
@@ -752,6 +756,42 @@
           try { restored.setSelectionRange(focusInfo.start, focusInfo.end); } catch(e){}
         }
       }
+    }
+    Array.prototype.forEach.call(el.querySelectorAll('.table-wrap'), mountStickyHeader);
+  }
+  // position:sticky pe <th> are un bug de randare cunoscut in Chrome: textul antetului dispare
+  // intermitent la scroll. Il evitam complet: antetul real ramine neschimbat (nesticky, dar tot
+  // functional pentru resize/ascundere coloane), iar aici construim un antet "fantoma" — un <div>
+  // normal, in afara tabelului, care copiaza etichetele si latimile coloanelor si e pozitionat
+  // manual (nu prin position:sticky) sa ramina sus cind se face scroll.
+  function mountStickyHeader(wrapEl){
+    var table = wrapEl.querySelector('table.cmp-table');
+    var headRow = table && table.querySelector('thead tr');
+    if(!headRow) return;
+    var overlay = document.createElement('div');
+    overlay.className = 'cmp-sticky-header';
+    Array.prototype.forEach.call(headRow.children, function(th){
+      var cell = document.createElement('div');
+      cell.className = 'cmp-sticky-header-cell';
+      cell.textContent = th.getAttribute('title') || '';
+      overlay.appendChild(cell);
+    });
+    wrapEl.insertBefore(overlay, wrapEl.firstChild);
+    function syncWidths(){
+      Array.prototype.forEach.call(headRow.children, function(th, i){
+        if(overlay.children[i]) overlay.children[i].style.width = th.offsetWidth + 'px';
+      });
+    }
+    function syncPosition(){
+      overlay.classList.toggle('active', wrapEl.scrollTop > 0);
+      overlay.style.transform = 'translateY(' + wrapEl.scrollTop + 'px)';
+    }
+    syncWidths();
+    syncPosition();
+    wrapEl.addEventListener('scroll', syncPosition);
+    if(window.ResizeObserver){
+      var ro = new ResizeObserver(syncWidths);
+      Array.prototype.forEach.call(headRow.children, function(th){ ro.observe(th); });
     }
   }
   // ================= ÎNCĂRCARE TREPTATĂ A IMAGINILOR LIPSĂ =================
