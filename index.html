@@ -728,15 +728,11 @@
 
   // ================= MOYSKLAD PARTAJAT (folosit de Comparație produse și Produse MoySklad) =================
   var moyskladByBarcode = {};
-  var moyskladByName = {};
   var expandedHistoryFull = {};
   function rebuildMoyskladIndex(){
     moyskladByBarcode = {};
-    moyskladByName = {};
     catalogProducts.forEach(function(mp){
       (mp.barcodes||[]).forEach(function(bc){ moyskladByBarcode[bc] = mp; });
-      var n = normName(mp.name);
-      if(n && !moyskladByName[n]) moyskladByName[n] = mp;
     });
   }
   function moyskladLookup(p){
@@ -2088,14 +2084,13 @@
       var barcodeList = m.barcode>=0 ? extractBarcodes(r[m.barcode]) : [];
       var barcode = barcodeList.length ? barcodeList[0] : '';
       var altBarcodes = barcodeList.slice(1);
-      // Facturile de comandă nu au mereu coloană de barcode — fără el, produsul e înregistrat cu
-      // o cheie separată (după nume), ruptă de intrarea deja legată de MoySklad (poză/istoric/etc).
-      // Dacă numele se potrivește exact cu unul din catalogul MoySklad sincronizat, preluăm
-      // barcode-ul de-acolo, ca produsul din comandă să rămână legat de același produs.
-      if(!barcode && moyskladByName[normName(name)]){
-        var nameMatch = moyskladByName[normName(name)];
-        if(nameMatch.barcodes && nameMatch.barcodes.length) barcode = nameMatch.barcodes[0];
-      }
+      // NU mai substituim automat barcode-ul lipsă cu unul găsit după nume în catalogul MoySklad —
+      // am încercat asta, dar când barcode-ul din MoySklad e el însuși greșit/neactualizat pentru
+      // acel produs, substituirea lega factura de un produs GREȘIT (alt barcode = altă cheie =
+      // rescriere silențioasă a numelui după produsul greșit din MoySklad), motiv pentru care unele
+      // produse (ex: ELROEL) preau ca „lipsesc" — de fapt fuseseră redenumite pe ascuns. Datele din
+      // factură rămân sursa de adevăr aici; legarea de MoySklad se face doar dacă factura însăși are
+      // barcode corect, sau manual prin „unește" din Comparație produse.
       var quantity = m.quantity>=0 ? String(r[m.quantity]||'').trim() : '';
       var brand = m.brand>=0 ? String(r[m.brand]||'').trim() : '';
       var rrpVal = m.rrp>=0 ? parseFloat(String(r[m.rrp]).replace(',','.')) : NaN;
@@ -3072,8 +3067,12 @@
     renderOrderHistory();
   };
   window.ptDeleteOrder = function(id){
+    var o = state.orders.find(function(x){ return x.id === id; });
+    if(!o) return;
+    if(!confirm('Ștergi comanda din ' + o.date + ' — ' + supplierName(o.supplierId) + ' (' + o.lines.length + ' produse)?\n\nAcțiunea nu poate fi anulată.')) return;
     if(openOrderId === id) openOrderId = null;
-    state.orders = state.orders.filter(function(o){ return o.id !== id; }); save(); renderOrderHistory(); renderCompare(); renderOrderRows();
+    state.orders = state.orders.filter(function(x){ return x.id !== id; }); save(); renderOrderHistory(); renderCompare(); renderOrderRows();
+    ptToast('Comanda din ' + o.date + ' — ' + supplierName(o.supplierId) + ' a fost ștearsă.', true);
   };
   window.ptSetOrderStatus = function(id, status){
     var o = state.orders.find(function(x){ return x.id === id; });
