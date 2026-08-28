@@ -1394,14 +1394,23 @@
     editingEntry = null;
     save(); renderCompare();
   };
-  function cartQty(sid, key){ return (state.carts[sid] && state.carts[sid][key]) || 0; }
+  // Coșurile sînt personale — fiecare cont logat are propriile coșuri, separate de ale colegilor,
+  // ca să nu se suprascrie reciproc cînd lucrează simultan la aceeași comandă/furnizor.
+  function myCart(sid){
+    var email = currentUserEmail || '_';
+    if(!state.carts[email]) state.carts[email] = {};
+    if(!state.carts[email][sid]) state.carts[email][sid] = {};
+    return state.carts[email][sid];
+  }
+  function myCartsRoot(){ return state.carts[currentUserEmail || '_'] || {}; }
+  function cartQty(sid, key){ return myCart(sid)[key] || 0; }
   window.ptAddToCart = function(sid, key){
-    if(!state.carts[sid]) state.carts[sid] = {};
-    state.carts[sid][key] = (state.carts[sid][key] || 0) + 1;
+    var cart = myCart(sid);
+    cart[key] = (cart[key] || 0) + 1;
     save(); renderCompare();
   };
   window.ptRemoveFromCart = function(sid, key){
-    if(state.carts[sid]) delete state.carts[sid][key];
+    delete myCart(sid)[key];
     save(); renderCompare();
   };
   window.ptGoToOrderCart = function(sid){
@@ -1410,11 +1419,12 @@
     if(btn) btn.click();
   };
   function activeCartsSummary(){
-    return Object.keys(state.carts).filter(function(sid){
-      var c = state.carts[sid];
+    var root = myCartsRoot();
+    return Object.keys(root).filter(function(sid){
+      var c = root[sid];
       return c && Object.keys(c).some(function(k){ return c[k] > 0; });
     }).map(function(sid){
-      var c = state.carts[sid];
+      var c = root[sid];
       var count = Object.keys(c).reduce(function(sum,k){ return sum + c[k]; }, 0);
       return { sid: sid, count: count };
     });
@@ -2769,7 +2779,8 @@
     if(!currentOrderSupplier) currentOrderSupplier = state.suppliers[0].id;
 
     var html = '<div class="panel"><label>Furnizor pentru comandă</label><select id="pt-order-supplier">' + state.suppliers.map(function(s){
-      var cnt = Object.keys(state.carts[s.id]||{}).reduce(function(sum,k){ return sum + (state.carts[s.id][k]||0); }, 0);
+      var supCart = myCart(s.id);
+      var cnt = Object.keys(supCart).reduce(function(sum,k){ return sum + (supCart[k]||0); }, 0);
       return '<option value="' + s.id + '">' + s.name + (cnt ? ' — ' + cnt + ' în coș' : '') + '</option>';
     }).join('') + '</select></div>';
     html += '<div class="panel"><button class="secondary" onclick="ptToggleInvoiceImport()">' + (showInvoiceImport ? '▲ Ascunde' : '▼ Sau înregistrează direct din factura furnizorului (Excel)') + '</button>';
@@ -2817,7 +2828,7 @@
   function renderOrderRows(){
     var tbody = document.getElementById('pt-order-rows');
     var items = productsForSupplier(currentOrderSupplier);
-    var cart = state.carts[currentOrderSupplier] || {};
+    var cart = myCart(currentOrderSupplier);
     var cartKeys = Object.keys(cart).filter(function(k){ return cart[k] > 0; });
     if(cartKeys.length === 0){ tbody.innerHTML = '<tr><td colspan="5" style="font-family:var(--sans);color:var(--text-soft);padding:16px 14px">Coșul e gol. Adaugă produse de mai jos sau direct din tab-ul Comparație produse.</td></tr>'; return; }
     tbody.innerHTML = cartKeys.map(function(key){
@@ -2842,7 +2853,7 @@
     if(!box) return;
     var q = normName(query);
     if(q.length < 2){ box.innerHTML = ''; return; }
-    var cart = state.carts[currentOrderSupplier] || {};
+    var cart = myCart(currentOrderSupplier);
     var matches = productsForSupplier(currentOrderSupplier).filter(function(it){
       return !cart[it.key] && normName(it.p.displayName).indexOf(q) !== -1;
     }).slice(0, 8);
@@ -2852,8 +2863,8 @@
     }).join('');
   };
   window.ptAddOrderProduct = function(key){
-    if(!state.carts[currentOrderSupplier]) state.carts[currentOrderSupplier] = {};
-    state.carts[currentOrderSupplier][key] = (state.carts[currentOrderSupplier][key] || 0) + 1;
+    var cart = myCart(currentOrderSupplier);
+    cart[key] = (cart[key] || 0) + 1;
     save(); renderOrderRows(); renderOrderSummary();
     var box = document.getElementById('pt-order-search-results'); if(box) box.innerHTML = '';
     var inp = document.getElementById('pt-order-search'); if(inp) inp.value = '';
@@ -2861,14 +2872,14 @@
 
   window.ptSetOrderQty = function(key, val){
     var n = parseInt(val, 10);
-    if(!state.carts[currentOrderSupplier]) state.carts[currentOrderSupplier] = {};
-    if(!n || n <= 0) delete state.carts[currentOrderSupplier][key]; else state.carts[currentOrderSupplier][key] = n;
+    var cart = myCart(currentOrderSupplier);
+    if(!n || n <= 0) delete cart[key]; else cart[key] = n;
     save(); renderOrderRows(); renderOrderSummary();
   };
 
   function getOrderLines(){
     var items = productsForSupplier(currentOrderSupplier);
-    var cart = state.carts[currentOrderSupplier] || {};
+    var cart = myCart(currentOrderSupplier);
     var discPct = supplierDiscountPct(currentOrderSupplier);
     return Object.keys(cart).map(function(key){
       var it = items.find(function(x){ return x.key === key; });
@@ -2950,7 +2961,7 @@
       }
     });
     save();
-    state.carts[currentOrderSupplier] = {};
+    state.carts[currentUserEmail || '_'][currentOrderSupplier] = {};
     renderOrderRows(); renderOrderSummary(); renderOrderHistory(); renderCompare();
   }
 
