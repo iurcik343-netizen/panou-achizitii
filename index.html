@@ -323,10 +323,12 @@
     var hideBtn = hideable === false ? '' : '<button class="pt-colhide-btn" onmousedown="event.stopPropagation()" onclick="event.stopPropagation();ptHideCol(\'' + table + '\',\'' + col + '\')" title="Ascunde coloana">✕</button>';
     // Testat izolat: dacă textul etichetei stă într-un <span> din interiorul <th>, tabelul
     // ignoră lățimea fixă și coloana rămâne lată (o particularitate specifică table-layout,
-    // separată de restul CSS). Textul trebuie să fie direct în <th> — fără span — ca overflow:
-    // hidden + word-break să limiteze cu adevărat lățimea minimă la ce am setat.
+    // separată de restul CSS) — textul trebuie să fie direct în <th>, fără span. Testat separat:
+    // overflow:hidden NU e de fapt necesar pentru micșorare (word-break singur e suficient) —
+    // și overflow:hidden pe <th> readuce bug-ul de dispariție la scroll cu antetul sticky, deci
+    // îl evităm complet aici.
     var w = getColWidth(table, col, dflt);
-    return '<th class="pt-resizable-th" data-colw="' + table + ':' + col + '" style="width:' + w + 'px;box-sizing:border-box;overflow:hidden;white-space:normal;word-break:break-word;line-height:1.2" title="' + label + '">' + label + hideBtn + resizeHandleHtml(table, col, dflt, min, max) + '</th>';
+    return '<th class="pt-resizable-th" data-colw="' + table + ':' + col + '" style="width:' + w + 'px;box-sizing:border-box;white-space:normal;word-break:break-word;line-height:1.2" title="' + label + '">' + label + hideBtn + resizeHandleHtml(table, col, dflt, min, max) + '</th>';
   }
   function hiddenColsChipsHtml(table, cols){
     var hidden = cols.filter(function(c){ return isColHidden(table, c.col); });
