@@ -738,13 +738,26 @@
     if(q.length < 2){ box.innerHTML = ''; return; }
     var matches = Object.keys(state.products).filter(function(k2){
       return k2 !== key && !state.products[k2].archived && normName(state.products[k2].displayName).indexOf(q) !== -1;
-    }).slice(0, 8);
-    if(matches.length === 0){ box.innerHTML = '<span style="font-size:11.5px;color:var(--text-soft)">Niciun rezultat</span>'; return; }
-    box.innerHTML = matches.map(function(k2){
+    }).slice(0, 6);
+    // Cauta si direct in catalogul MoySklad sincronizat — de multe ori produsul corect exista deja
+    // acolo cu barcode-ul corect, dar n-a fost niciodata importat ca produs urmarit in aplicatie,
+    // deci nu apare printre rezultatele de mai sus. Aici doar preluam barcode-ul, nu unim doua
+    // produse (nu exista un al doilea produs urmarit cu care sa unim).
+    var msMatches = catalogProducts.filter(function(mp){
+      return mp.barcodes && mp.barcodes.length && normName(mp.name).indexOf(q) !== -1;
+    }).slice(0, 6);
+    if(matches.length === 0 && msMatches.length === 0){ box.innerHTML = '<span style="font-size:11.5px;color:var(--text-soft)">Niciun rezultat</span>'; return; }
+    var html = matches.map(function(k2){
       var p2 = state.products[k2];
       var label = p2.displayName + (p2.quantity ? ' (' + p2.quantity + ')' : '') + (p2.barcode ? ' — EAN ' + escAttr(p2.barcode) : '');
       return '<button class="icon-link" style="display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-top:4px" onclick="ptMergeProducts(\'' + key.replace(/'/g,"\\'") + '\', \'' + k2.replace(/'/g,"\\'") + '\')">' + label + '</button>';
     }).join('');
+    html += msMatches.map(function(mp){
+      var bc = mp.barcodes[0];
+      var label = '🏷 ' + escAttr(mp.name) + ' — EAN ' + escAttr(bc) + ' <span style="color:var(--text-soft)">(din MoySklad)</span>';
+      return '<button class="icon-link" style="display:block;width:100%;text-align:left;border:1px solid var(--accent);border-radius:6px;padding:6px 10px;margin-top:4px" onclick="ptSetProductBarcode(\'' + key.replace(/'/g,"\\'") + '\', \'' + bc.replace(/'/g,"\\'") + '\')" title="Preia acest barcode din MoySklad pentru produsul curent">' + label + '</button>';
+    }).join('');
+    box.innerHTML = html;
   };
   window.ptMergeProducts = function(sourceKey, targetKey){
     if(!targetKey || sourceKey === targetKey) return;
@@ -836,6 +849,10 @@
     var cat = document.getElementById('tab-catalog');
     if(cmp && cmp.style.display !== 'none') renderCompare();
     if(cat && cat.style.display !== 'none') renderCatalog();
+    // Poza/istoricul se încarcă în fundal și pot ajunge oricînd — inclusiv cît utilizatorul are o
+    // comandă deschisă în Comenzi. Fără asta, datele soseau corect în cache dar rămâneau ascunse
+    // pînă la o acțiune care re-randa manual tabelul comenzii.
+    renderOrderDetailTable();
   }
   function setInnerHtmlKeepingFocus(el, html){
     var active = document.activeElement;
@@ -1336,6 +1353,7 @@
   var searchTerm = '';
   var brandFilter = '';
   var showArchived = false;
+  var filteredKeysForArchive = [];
   var compareSortBy = 'name';
   var compareSortDir = 'asc';
   function pinnedBrandsList(){ return state.settings.pinnedBrands || (state.settings.pinnedBrands = []); }
@@ -1483,11 +1501,11 @@
   window.ptAddToCart = function(sid, key){
     var cart = myCart(sid);
     cart[key] = (cart[key] || 0) + 1;
-    doSaveNow(); renderCompare();
+    doSaveNow(true); renderCompare();
   };
   window.ptRemoveFromCart = function(sid, key){
     delete myCart(sid)[key];
-    doSaveNow(); renderCompare();
+    doSaveNow(true); renderCompare();
   };
   window.ptGoToOrderCart = function(sid){
     currentOrderSupplier = sid;
@@ -1505,14 +1523,16 @@
       return { sid: sid, count: count };
     });
   }
-  window.ptArchiveLocalBrand = function(brand){
-    var brandNorm = String(brand||'').trim().toLowerCase();
-    var toArchive = Object.keys(state.products).filter(function(k){ return String(state.products[k].brand||'').trim().toLowerCase() === brandNorm && !state.products[k].archived; });
-    if(!toArchive.length){ ptToast('Niciun produs activ de arhivat pentru brandul „' + brand + '".', false); return; }
-    if(!confirm('Arhivezi tot brandul „' + brand + '" — ' + toArchive.length + ' produse — din Comparație produse?')) return;
-    toArchive.forEach(function(k){ state.products[k].archived = true; });
+  // Arhivează tot ce e vizibil sub filtrul curent (căutare și/sau brand) — nu doar brandul, ca
+  // înainte, ca să meargă și pentru o căutare simplă (ex: "apieu") fără brand ales din meniu.
+  window.ptArchiveFilteredProducts = function(){
+    var toArchive = filteredKeysForArchive.slice();
+    if(!toArchive.length){ ptToast('Niciun produs de arhivat în acest filtru.', false); return; }
+    var filterDesc = [searchTerm ? '„' + searchTerm + '"' : null, brandFilter ? 'brand „' + brandFilter + '"' : null].filter(Boolean).join(' + ') || 'filtrul curent';
+    if(!confirm('Arhivezi ' + toArchive.length + ' produse din ' + filterDesc + '?')) return;
+    toArchive.forEach(function(k){ if(state.products[k]) state.products[k].archived = true; });
     save(); renderCompare();
-    ptToast('Brand „' + brand + '" arhivat (' + toArchive.length + ' produse).', true);
+    ptToast(toArchive.length + ' produse arhivate.', true);
   };
   window.ptClearFilters = function(){ searchTerm = ''; brandFilter = ''; renderCompare(); };
   function perSupplierBarcodeLine(p){
@@ -1551,6 +1571,7 @@
       var words = searchTerm.split(/\s+/).filter(Boolean);
       return words.every(function(w){ return haystack.indexOf(w) !== -1; });
     });
+    filteredKeysForArchive = keys;
 
     var totalIncreases = 0;
     keys.forEach(function(k){
@@ -1579,7 +1600,7 @@
       '<select id="pt-brand-filter" style="flex:1;margin-bottom:0"><option value="">Toate brandurile' + (allBrands.length ? ' (' + allBrands.length + ')' : '') + '</option>' +
       allBrands.map(function(b){ return '<option value="' + escAttr(b) + '" ' + (brandFilter===b?'selected':'') + '>' + b + '</option>'; }).join('') +
       '</select>' +
-      (brandFilter ? '<button class="secondary" onclick="ptArchiveLocalBrand(\'' + jsAttrEscape(brandFilter) + '\')" style="white-space:nowrap">📦 Arhivează tot brandul „' + escAttr(brandFilter) + '"</button>' : '') +
+      ((!showArchived && (searchTerm || brandFilter) && keys.length > 0) ? '<button class="secondary" onclick="ptArchiveFilteredProducts()" style="white-space:nowrap">📦 Arhivează toate din acest filtru (' + keys.length + ')</button>' : '') +
       '<button class="subtab-btn ' + (showArchived?'active':'') + '" onclick="ptToggleShowArchived()" style="white-space:nowrap">📦 Arhivate (' + archivedCount + ')</button>' +
       '<span style="width:1px;align-self:stretch;background:var(--border);flex:none"></span>' +
       '<span style="font-size:11px;color:var(--text-soft);font-weight:600;text-transform:uppercase;flex:none">Sortare</span>' +
@@ -2949,7 +2970,7 @@
   window.ptAddOrderProduct = function(key){
     var cart = myCart(currentOrderSupplier);
     cart[key] = (cart[key] || 0) + 1;
-    doSaveNow(); renderOrderRows(); renderOrderSummary();
+    doSaveNow(true); renderOrderRows(); renderOrderSummary();
     var box = document.getElementById('pt-order-search-results'); if(box) box.innerHTML = '';
     var inp = document.getElementById('pt-order-search'); if(inp) inp.value = '';
   };
@@ -2958,7 +2979,7 @@
     var n = parseInt(val, 10);
     var cart = myCart(currentOrderSupplier);
     if(!n || n <= 0) delete cart[key]; else cart[key] = n;
-    doSaveNow(); renderOrderRows(); renderOrderSummary();
+    doSaveNow(true); renderOrderRows(); renderOrderSummary();
   };
 
   function getOrderLines(){
