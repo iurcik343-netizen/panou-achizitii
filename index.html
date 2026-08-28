@@ -126,9 +126,8 @@
   #pt-root .price-up { color: var(--bad); font-weight: 700; }
   #pt-root .empty { text-align: center; padding: 40px 20px; color: var(--text-soft); font-size: 13.5px; }
   #pt-root .table-wrap { position: relative; overflow-x: auto; cursor: grab; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg); }
-  #pt-root .cmp-sticky-header { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 4; background: var(--bg); border-bottom: 1px solid var(--border); pointer-events: none; }
-  #pt-root .cmp-sticky-header.active { display: flex; }
-  #pt-root .cmp-sticky-header-cell { flex: 0 0 auto; box-sizing: border-box; padding: 7px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); white-space: normal; word-break: break-word; line-height: 1.2; overflow: hidden; }
+  #pt-root .cmp-sticky-header { display: flex; position: absolute; top: 0; left: 0; right: 0; z-index: 4; background: var(--bg); border-bottom: 1px solid var(--border); pointer-events: none; }
+  #pt-root .cmp-sticky-header-cell { flex: 0 0 auto; box-sizing: border-box; padding: 7px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); white-space: normal; word-break: break-word; line-height: 1.2; overflow: hidden; }
   #pt-root .cmp-sticky-header-cell:first-child { position: sticky; left: 0; background: var(--bg); box-shadow: 2px 0 4px rgba(0,0,0,0.05); }
   #pt-root .table-wrap.dragging { cursor: grabbing; user-select: none; }
   #pt-root .table-wrap::-webkit-scrollbar { height: 11px; }
@@ -762,8 +761,10 @@
   // position:sticky pe <th> are un bug de randare cunoscut in Chrome: textul antetului dispare
   // intermitent la scroll. Il evitam complet: antetul real ramine neschimbat (nesticky, dar tot
   // functional pentru resize/ascundere coloane), iar aici construim un antet "fantoma" — un <div>
-  // normal, in afara tabelului, care copiaza etichetele si latimile coloanelor si e pozitionat
-  // manual (nu prin position:sticky) sa ramina sus cind se face scroll.
+  // normal, in afara tabelului, care copiaza etichetele si latimile coloanelor. E afisat permanent
+  // (nu doar dupa ce incepe scroll-ul, ca sa nu apara un "flash" la trecerea intre ele) si suprapus
+  // exact peste antetul real; are pointer-events:none ca butoanele de resize/ascundere din antetul
+  // real sa ramina clickabile prin el.
   function mountStickyHeader(wrapEl){
     var table = wrapEl.querySelector('table.cmp-table');
     var headRow = table && table.querySelector('thead tr');
@@ -783,7 +784,6 @@
       });
     }
     function syncPosition(){
-      overlay.classList.toggle('active', wrapEl.scrollTop > 0);
       overlay.style.transform = 'translateY(' + wrapEl.scrollTop + 'px)';
     }
     syncWidths();
