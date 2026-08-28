@@ -127,7 +127,7 @@
   #pt-root .empty { text-align: center; padding: 40px 20px; color: var(--text-soft); font-size: 13.5px; }
   #pt-root .table-wrap { position: relative; overflow-x: auto; cursor: grab; scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg); }
   #pt-root .cmp-sticky-header { display: flex; position: absolute; top: 0; left: 0; right: 0; z-index: 4; background: var(--bg); border-bottom: 1px solid var(--border); pointer-events: none; }
-  #pt-root .cmp-sticky-header-cell { flex: 0 0 auto; box-sizing: border-box; padding: 7px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); white-space: normal; word-break: break-word; line-height: 1.2; overflow: hidden; }
+  #pt-root .cmp-sticky-header-cell { position: relative; flex: 0 0 auto; box-sizing: border-box; padding: 7px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); white-space: normal; word-break: break-word; line-height: 1.2; overflow: hidden; }
   #pt-root .cmp-sticky-header-cell:first-child { position: sticky; left: 0; background: var(--bg); box-shadow: 2px 0 4px rgba(0,0,0,0.05); }
   #pt-root .table-wrap.dragging { cursor: grabbing; user-select: none; }
   #pt-root .table-wrap::-webkit-scrollbar { height: 11px; }
@@ -143,8 +143,8 @@
   #pt-root table.pt-order-pricing-table { width: max-content; min-width: 100%; }
   #pt-root .pt-prodname-resizable { display: inline-block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 50px; max-width: 640px; vertical-align: middle; }
   #pt-root th.pt-prodname-th, #pt-root th.pt-resizable-th { position: relative; }
-  #pt-root .pt-colresize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 10px; cursor: col-resize; }
-  #pt-root .pt-colresize-handle:hover, #pt-root .pt-colresize-handle.active { background: var(--accent); opacity: 0.4; }
+  #pt-root .pt-colresize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 10px; cursor: col-resize; border-right: 2px solid var(--border); }
+  #pt-root .pt-colresize-handle:hover, #pt-root .pt-colresize-handle.active { background: var(--accent); opacity: 0.4; border-right-color: var(--accent); }
   #pt-root .pt-colhide-btn { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: var(--bg); border: none; color: var(--text-soft); font-size: 9px; line-height: 1; cursor: pointer; padding: 3px; border-radius: 3px; }
   #pt-root .pt-colhide-btn:hover { background: var(--bad); color: #fff; }
   #pt-root .qty-input { width: 70px; padding: 5px 7px; margin-bottom: 0; }
@@ -596,10 +596,10 @@
   function rrpCellHtml(p, minLanded){
     if(!p.rrp) return '—';
     var rrpMdl = convertToMDL(p.rrp, p.rrpCurrency);
-    var out = fmt(rrpMdl);
+    var out = String(Math.round(rrpMdl));
     if(minLanded){
       var markup = ((rrpMdl - minLanded) / minLanded) * 100;
-      out += '<br><span style="color:' + (markup >= 0 ? 'var(--rank1)' : 'var(--bad)') + '">' + (markup >= 0 ? '+' : '') + fmt(markup) + '%</span>';
+      out += '<br><span style="color:' + (markup >= 0 ? 'var(--rank1)' : 'var(--bad)') + '">' + (markup >= 0 ? '+' : '') + Math.round(markup) + '%</span>';
     }
     return out;
   }
@@ -774,7 +774,8 @@
     Array.prototype.forEach.call(headRow.children, function(th){
       var cell = document.createElement('div');
       cell.className = 'cmp-sticky-header-cell';
-      cell.textContent = th.getAttribute('title') || '';
+      cell.innerHTML = th.innerHTML;
+      if(th.getAttribute('title')) cell.title = th.getAttribute('title');
       overlay.appendChild(cell);
     });
     wrapEl.insertBefore(overlay, wrapEl.firstChild);
@@ -1367,27 +1368,6 @@
       return { sid: sid, count: count };
     });
   }
-  window.ptBackfillBrands = function(){
-    var fixed = 0;
-    Object.keys(state.products).forEach(function(k){
-      var p = state.products[k];
-      if(!p.brand){
-        var m = p.displayName.match(/^\[([^\]]+)\]/);
-        if(m){ p.brand = m[1].trim(); fixed++; }
-      }
-    });
-    save(); renderCompare();
-    ptToast(fixed > 0 ? ('Brand completat pentru ' + fixed + ' produse.') : 'Niciun produs cu format „[Brand] Nume” găsit fără brand.', fixed > 0);
-  };
-  window.ptCleanupBadBrands = function(){
-    var fixed = 0;
-    Object.keys(state.products).forEach(function(k){
-      var p = state.products[k];
-      if(p.brand && p.brand.indexOf('[') !== -1){ p.brand = ''; fixed++; }
-    });
-    save(); renderCompare();
-    ptToast(fixed > 0 ? ('Brand greșit șters la ' + fixed + ' produse (conținea „[”, semn că era de fapt o denumire de produs, nu un brand real).') : 'Niciun brand suspect găsit.', fixed > 0);
-  };
   window.ptArchiveLocalBrand = function(brand){
     var brandNorm = String(brand||'').trim().toLowerCase();
     var toArchive = Object.keys(state.products).filter(function(k){ return String(state.products[k].brand||'').trim().toLowerCase() === brandNorm && !state.products[k].archived; });
@@ -1397,22 +1377,7 @@
     save(); renderCompare();
     ptToast('Brand „' + brand + '" arhivat (' + toArchive.length + ' produse).', true);
   };
-  window.ptBackfillRrpCurrency = function(){
-    var fixed = 0;
-    Object.keys(state.products).forEach(function(k){
-      var p = state.products[k];
-      if(p.rrp && !p.rrpCurrency){
-        var latestSid = null, latestDate = null;
-        Object.keys(p.bySupplier).forEach(function(sid){
-          var e = p.bySupplier[sid];
-          if(!latestDate || e.updatedAt > latestDate){ latestDate = e.updatedAt; latestSid = sid; }
-        });
-        if(latestSid){ p.rrpCurrency = p.bySupplier[latestSid].currency; fixed++; }
-      }
-    });
-    save(); renderCompare();
-    ptToast(fixed > 0 ? ('Monedă RRP setată pentru ' + fixed + ' produse (după moneda celei mai recente actualizări).') : 'Niciun RRP fără monedă găsit.', fixed > 0);
-  };
+  window.ptClearFilters = function(){ searchTerm = ''; brandFilter = ''; renderCompare(); };
   function perSupplierBarcodeLine(p){
     var sids = Object.keys(p.bySupplier);
     if(sids.length < 2) return '';
@@ -1481,9 +1446,7 @@
       allBrands.map(function(b){ return '<option value="' + escAttr(b) + '" ' + (brandFilter===b?'selected':'') + '>' + b + '</option>'; }).join('') +
       '</select>' +
       (brandFilter ? '<button class="secondary" onclick="ptArchiveLocalBrand(\'' + jsAttrEscape(brandFilter) + '\')" style="white-space:nowrap">📦 Arhivează tot brandul „' + escAttr(brandFilter) + '"</button>' : '') +
-      '<button class="secondary" onclick="ptBackfillBrands()" title="Completează brandul lipsă din nume, ex: [BBIA] Produs → brand BBIA" style="white-space:nowrap">🔧 brand din nume</button>' +
-      '<button class="secondary" onclick="ptBackfillRrpCurrency()" title="Setează moneda RRP (pentru produsele importate înainte de acest fix)" style="white-space:nowrap">🔧 monedă RRP</button>' +
-      '<button class="secondary" onclick="ptCleanupBadBrands()" title="Șterge brandurile greșite provenite dintr-un bug de import (denumiri de produs salvate ca brand)" style="white-space:nowrap">🔧 curăță branduri greșite</button>' +
+      ((searchTerm || brandFilter) ? '<button class="secondary" onclick="ptClearFilters()" title="Golește căutarea și filtrul de brand" style="white-space:nowrap">✕ curăță filtrele</button>' : '') +
       '<button class="subtab-btn ' + (showArchived?'active':'') + '" onclick="ptToggleShowArchived()" style="white-space:nowrap">📦 Arhivate (' + archivedCount + ')</button></div>';
     if(pinnedBrandsList().length){
       html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:-6px 0 12px">' +
@@ -1551,16 +1514,16 @@
         (msOn && !isColHidden('cmp','hist') ? 1 : 0) +
         (msOn && !isColHidden('cmp','ms') ? 1 : 0) +
         (!isColHidden('cmp','rrp') ? 1 : 0);
-      var cmpHiddenColDefs = [ { col:'ms', label:'MoySklad' }, { col:'hist', label:'Istoric' }, { col:'rrp', label:'RRP' } ]
+      var cmpHiddenColDefs = [ { col:'ms', label:'Stoc' }, { col:'hist', label:'Istoric' }, { col:'rrp', label:'RRP' } ]
         .concat(suppliersList.map(function(s){ return { col:'sup_'+s.id, label:s.name }; }));
       html += hiddenColsChipsHtml('cmp', cmpHiddenColDefs);
       html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr>' +
         resizableThHtml('cmp', 'name', 'Produs', 260, 160, 640, false) +
         (msOn && !isColHidden('cmp','hist') ? resizableThHtml('cmp', 'hist', 'Istoric', 220, 26, 500) : '') +
-        (msOn && !isColHidden('cmp','ms') ? resizableThHtml('cmp', 'ms', 'MoySklad', 90, 26, 220) : '') +
+        (msOn && !isColHidden('cmp','ms') ? resizableThHtml('cmp', 'ms', 'Stoc', 90, 26, 220) : '') +
         visibleSuppliers.map(function(s){ return resizableThHtml('cmp', 'sup_' + s.id, escAttr(s.name), 130, 26, 320); }).join('') +
         (!isColHidden('cmp','rrp') ? resizableThHtml('cmp', 'rrp', 'RRP', 110, 26, 260) : '') +
-        '<th style="width:64px"></th></tr></thead><tbody>';
+        '<th style="width:32px"></th></tr></thead><tbody>';
 
       visibleKeys.forEach(function(k){
         var p = state.products[k];
@@ -1648,9 +1611,9 @@
         });
 
         if(!isColHidden('cmp','rrp')) html += '<td class="dim" style="font-size:10px">' + colwDivHtml('cmp','rrp',110,rrpCellHtml(p, minLanded)) + '</td>';
-        html += '<td>' + (p.archived ?
-          '<button class="icon-link" onclick="ptUnarchiveProduct(\'' + kEsc + '\')" title="Scoate din arhivă">↩ dezarhivează</button>' :
-          '<button class="icon-link" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">📦</button> <button class="icon-x" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">✕</button>') + '</td>';
+        html += '<td style="padding:6px 4px;text-align:center">' + (p.archived ?
+          '<button class="icon-link" onclick="ptUnarchiveProduct(\'' + kEsc + '\')" title="Scoate din arhivă">↩</button>' :
+          '<div style="display:flex;flex-direction:column;align-items:center;gap:0"><button class="icon-link" style="padding:1px" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">📦</button><button class="icon-x" style="padding:1px" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">✕</button></div>') + '</td>';
         html += '</tr>';
 
         if(isExpanded){
@@ -1729,7 +1692,7 @@
     var s = document.getElementById('pt-search');
     if(s){ s.addEventListener('input', function(ev){ searchTerm = normName(ev.target.value); renderCompare(); var i=document.getElementById('pt-search'); i.focus(); i.setSelectionRange(i.value.length,i.value.length); }); }
     var bf = document.getElementById('pt-brand-filter');
-    if(bf){ bf.addEventListener('change', function(ev){ brandFilter = ev.target.value; renderCompare(); }); }
+    if(bf){ bf.addEventListener('change', function(ev){ brandFilter = ev.target.value; searchTerm = ''; renderCompare(); }); }
     var qr = document.getElementById('pt-quick-rate');
     if(qr){ qr.addEventListener('change', function(ev){ state.settings.exchangeRate = parseFloat(ev.target.value) || state.settings.exchangeRate; recomputeAllLandedCosts(); save(); renderCompare(); }); }
     var qk = document.getElementById('pt-quick-krw');
