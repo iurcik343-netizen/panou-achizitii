@@ -399,6 +399,7 @@
   var saveTimer = null;
   var lastKnownUpdatedAt = null;
   var staleWarningShown = false;
+  var sizeWarningShown = false;
   function save(){
     if(saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(doSaveNow, 400);
@@ -419,7 +420,11 @@
         } catch(e){ /* verificarea e doar o măsură de siguranță — dacă eșuează, continuăm cu salvarea */ }
       }
       var payload = JSON.stringify(state);
-      if(payload.length > 4200000){
+      // Pragul e generos — un rând JSONB în Postgres/Supabase duce fără probleme mult peste atît;
+      // avertizăm doar ca semnal timpuriu, nu pentru că am fi aproape de o limită reală. Avertizăm
+      // o singură dată per sesiune, nu la fiecare salvare, ca să nu enerveze degeaba.
+      if(payload.length > 15000000 && !sizeWarningShown){
+        sizeWarningShown = true;
         ptToast('Atenție: baza de date e mare (~' + Math.round(payload.length/1024) + ' KB). Ia în calcul să ștergi cataloage vechi nefolosite.', false);
       }
       var nowIso = new Date().toISOString();
@@ -451,6 +456,15 @@
         state.settings = Object.assign(state.settings, parsed.settings || {});
         if(!parsed.settings || parsed.settings.coef === undefined){
           if(parsed.settings && parsed.settings.seaCoef !== undefined) state.settings.coef = parsed.settings.seaCoef;
+        }
+        // Migrare unică: un bug marca greșit aproape toate produsele ca „NEW” la prima încărcare
+        // a unui price list (nu doar la actualizări ulterioare). Curățăm o singură dată etichetele
+        // greșite deja salvate — logica de mai jos (doExcelImport) e reparată, deci de acum înainte
+        // se marchează corect doar produsele apărute la o actualizare reală.
+        if(!state.settings.newBadgeMigrated){
+          Object.keys(state.products).forEach(function(k){ state.products[k].isNew = false; });
+          state.settings.newBadgeMigrated = true;
+          save();
         }
       }
     } catch(e){ /* first run */ }
@@ -596,10 +610,10 @@
   function rrpCellHtml(p, minLanded){
     if(!p.rrp) return '—';
     var rrpMdl = convertToMDL(p.rrp, p.rrpCurrency);
-    var out = String(Math.round(rrpMdl));
+    var out = '<span style="font-size:14px;font-weight:700">' + Math.round(rrpMdl) + '</span>';
     if(minLanded){
       var markup = ((rrpMdl - minLanded) / minLanded) * 100;
-      out += '<br><span style="color:' + (markup >= 0 ? 'var(--rank1)' : 'var(--bad)') + '">' + (markup >= 0 ? '+' : '') + Math.round(markup) + '%</span>';
+      out += '<br><span style="font-size:11px;color:' + (markup >= 0 ? 'var(--rank1)' : 'var(--bad)') + '">' + (markup >= 0 ? '+' : '') + Math.round(markup) + '%</span>';
     }
     return out;
   }
@@ -756,7 +770,24 @@
         }
       }
     }
-    Array.prototype.forEach.call(el.querySelectorAll('.table-wrap'), mountStickyHeader);
+    Array.prototype.forEach.call(el.querySelectorAll('.table-wrap'), function(w){ mountStickyHeader(w); fitTableWrapHeight(w); });
+    ensureTableWrapResizeListener();
+  }
+  // Tabelele foloseau o înălțime fixă (70vh) indiferent de cît spațiu era liber sub ele pe ecran —
+  // dacă fereastra e mare sau bara de sus e scurtă, rămînea o zonă goală degeaba. În loc de asta,
+  // calculăm exact cît spațiu mai e disponibil pînă la baza ferestrei și întindem tabelul pînă acolo.
+  var tableWrapResizeBound = false;
+  function fitTableWrapHeight(wrapEl){
+    var rect = wrapEl.getBoundingClientRect();
+    var available = window.innerHeight - rect.top - 16;
+    wrapEl.style.maxHeight = Math.max(240, available) + 'px';
+  }
+  function ensureTableWrapResizeListener(){
+    if(tableWrapResizeBound) return;
+    tableWrapResizeBound = true;
+    window.addEventListener('resize', function(){
+      Array.prototype.forEach.call(document.querySelectorAll('#pt-root .table-wrap'), fitTableWrapHeight);
+    });
   }
   // position:sticky pe <th> are un bug de randare cunoscut in Chrome: textul antetului dispare
   // intermitent la scroll. Il evitam complet: antetul real ramine neschimbat (nesticky, dar tot
@@ -1267,6 +1298,16 @@
     var msProd = moyskladLookup(p);
     return (msProd && msProd.stock !== null && msProd.stock !== undefined) ? msProd.stock : null;
   }
+  // Grup explicit pentru sortarea după stoc: (0) are stoc acum, (1) stoc gol dar are istoric în
+  // MoySklad, (2) niciodată în MoySklad. Grupurile nu se amestecă la schimbarea direcției —
+  // doar ordinea DIN interiorul grupului 0 (după cantitate) se inversează.
+  function stockRank(p){
+    var msProd = moyskladLookup(p);
+    if(!msProd) return 2;
+    var st = (msProd.stock !== null && msProd.stock !== undefined) ? msProd.stock : null;
+    if(st === null) return 2;
+    return st > 0 ? 0 : 1;
+  }
   function nullsLastCompare(a, b, dir){
     if(a === null && b === null) return 0;
     if(a === null) return 1;
@@ -1440,13 +1481,14 @@
         '<span style="font-size:11.5px;color:var(--text-soft)">' + (catalogUpdatedAt ? ('Ultima actualizare: ' + new Date(catalogUpdatedAt).toLocaleString('ro-RO') + ' · ' + catalogProducts.length + ' produse') : 'Nesincronizat încă') + '</span>' +
         '</div>';
     }
+    var isPinned = searchTerm && pinnedBrandsList().indexOf(searchTerm) !== -1;
     html += '<div class="search-row"><input type="text" id="pt-search" placeholder="Caută după nume, brand, barcode sau mărime…" value="' + searchTerm.replace(/"/g,'') + '" style="flex:2">' +
-      '<button class="secondary" onclick="ptTogglePinSearch()" title="Fixează această căutare ca acces rapid" style="white-space:nowrap;flex:none">' + (searchTerm && pinnedBrandsList().indexOf(searchTerm) !== -1 ? '📌 fixat' : '📌 fixează') + '</button>' +
+      ((searchTerm || brandFilter) ? '<button class="secondary" onclick="ptClearFilters()" title="Golește căutarea și filtrul de brand" style="white-space:nowrap;flex:none">✕ curăță filtrele</button>' : '') +
+      '<button class="subtab-btn' + (isPinned ? ' active' : '') + '" onclick="ptTogglePinSearch()" title="' + (isPinned ? 'Fixată — scoate din acces rapid' : 'Fixează această căutare ca acces rapid') + '" style="flex:none">📌</button>' +
       '<select id="pt-brand-filter" style="flex:1;margin-bottom:0"><option value="">Toate brandurile' + (allBrands.length ? ' (' + allBrands.length + ')' : '') + '</option>' +
       allBrands.map(function(b){ return '<option value="' + escAttr(b) + '" ' + (brandFilter===b?'selected':'') + '>' + b + '</option>'; }).join('') +
       '</select>' +
       (brandFilter ? '<button class="secondary" onclick="ptArchiveLocalBrand(\'' + jsAttrEscape(brandFilter) + '\')" style="white-space:nowrap">📦 Arhivează tot brandul „' + escAttr(brandFilter) + '"</button>' : '') +
-      ((searchTerm || brandFilter) ? '<button class="secondary" onclick="ptClearFilters()" title="Golește căutarea și filtrul de brand" style="white-space:nowrap">✕ curăță filtrele</button>' : '') +
       '<button class="subtab-btn ' + (showArchived?'active':'') + '" onclick="ptToggleShowArchived()" style="white-space:nowrap">📦 Arhivate (' + archivedCount + ')</button></div>';
     if(pinnedBrandsList().length){
       html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:-6px 0 12px">' +
@@ -1488,9 +1530,12 @@
         };
       }
       if(compareSortBy === 'stock'){
-        var stockCache = {};
-        keys.forEach(function(k){ stockCache[k] = stockFor(state.products[k]); });
-        keys.sort(newFirst(function(a,b){ return nullsLastCompare(stockCache[a], stockCache[b], compareSortDir); }));
+        var stockCache = {}, rankCache = {};
+        keys.forEach(function(k){ var p = state.products[k]; stockCache[k] = stockFor(p); rankCache[k] = stockRank(p); });
+        keys.sort(newFirst(function(a,b){
+          if(rankCache[a] !== rankCache[b]) return rankCache[a] - rankCache[b];
+          return nullsLastCompare(stockCache[a], stockCache[b], compareSortDir);
+        }));
       } else if(compareSortBy === 'price'){
         var priceCache = {};
         keys.forEach(function(k){ priceCache[k] = bestLandedFor(state.products[k]); });
@@ -1573,15 +1618,13 @@
             html += '<td class="dim" style="text-align:center">' + colwDivHtml('cmp','ms',90,'—') + '</td>';
           } else {
             var stVal = (msProd.stock !== null && msProd.stock !== undefined) ? msProd.stock : 0;
-            var zdHtml = '—';
+            var zdHtml = '';
             if(msProd.stockDays !== null && msProd.stockDays !== undefined){
-              var zd = Math.round(msProd.stockDays);
-              var zdColor = zd <= 60 ? 'var(--rank1)' : (zd <= 120 ? 'var(--rank2)' : 'var(--bad)');
-              zdHtml = '<b style="font-size:13px;color:' + zdColor + '">' + zd + '</b> (zile)';
+              zdHtml = '<span style="font-size:9px;color:var(--text-soft)">' + Math.round(msProd.stockDays) + '</span>';
             }
             html += '<td style="text-align:center;line-height:1.6;font-size:11px">' + colwDivHtml('cmp','ms',90,
               '<div><b style="font-size:14.5px;font-family:var(--mono)">' + stVal + '</b></div>' +
-              '<div style="font-family:var(--mono)">' + zdHtml + '</div>') +
+              '<div style="font-family:var(--mono);margin-top:4px">' + zdHtml + '</div>') +
               '</td>';
           }
         }
@@ -1610,7 +1653,7 @@
           html += '<td class="' + (isCheapest ? 'cheapest-cell' : '') + '">' + colwDivHtml('cmp','sup_'+s.id,130,supCellInner) + '</td>';
         });
 
-        if(!isColHidden('cmp','rrp')) html += '<td class="dim" style="font-size:10px">' + colwDivHtml('cmp','rrp',110,rrpCellHtml(p, minLanded)) + '</td>';
+        if(!isColHidden('cmp','rrp')) html += '<td class="dim">' + colwDivHtml('cmp','rrp',110,rrpCellHtml(p, minLanded)) + '</td>';
         html += '<td style="padding:6px 4px;text-align:center">' + (p.archived ?
           '<button class="icon-link" onclick="ptUnarchiveProduct(\'' + kEsc + '\')" title="Scoate din arhivă">↩</button>' :
           '<div style="display:flex;flex-direction:column;align-items:center;gap:0"><button class="icon-link" style="padding:1px" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">📦</button><button class="icon-x" style="padding:1px" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">✕</button></div>') + '</td>';
@@ -2549,16 +2592,21 @@
         // iar potrivirea după nume a dus la pierderea unor liste distincte).
         var existingPL = editingPriceListId ? state.priceLists.find(function(pl){ return pl.id === editingPriceListId; }) : null;
         if(existingPL){
+          var wasPending = existingPL.pending;
           // Produsele care n-au fost în versiunea anterioară a acestui price list sunt noi —
           // le marcăm ca „NEW" în Comparație produse; cele care erau deja acolo nu mai sunt noi.
+          // La PRIMA aplicare a unei liste (wasPending true) productKeys e mereu gol, deci fără
+          // acest control totul ar ieși „nou" — de-asta NEW apărea practic la toate produsele.
           var oldKeySet = {};
           existingPL.productKeys.forEach(function(k){ oldKeySet[k] = true; });
           var newKeySet = {};
           touchedKeys.forEach(function(k){
             newKeySet[k] = true;
             if(!state.products[k]) return;
-            if(!oldKeySet[k]){ state.products[k].isNew = true; state.products[k].newAt = today; }
-            else { state.products[k].isNew = false; }
+            if(!oldKeySet[k]){
+              if(wasPending){ state.products[k].isNew = false; }
+              else { state.products[k].isNew = true; state.products[k].newAt = today; }
+            } else { state.products[k].isNew = false; }
           });
           // Produsele care erau în versiunea anterioară a acestei liste dar au dispărut din cea
           // nouă — furnizorul nu le mai oferă — nu mai primesc preț de la acest furnizor, ca să
@@ -2569,7 +2617,6 @@
             var p = state.products[k];
             if(p && p.bySupplier[sid]){ delete p.bySupplier[sid]; removedFromSupplier++; }
           });
-          var wasPending = existingPL.pending;
           existingPL.fileName = file.fileName;
           existingPL.brand = fileBrand || '';
           existingPL.importedAt = today;
