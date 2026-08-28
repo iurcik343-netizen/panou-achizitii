@@ -21,6 +21,8 @@
     --rank2: #1B6FA8; --rank2-bg: #E6F1FB;
     --rank3: #A9762B; --rank3-bg: #FAEEDA;
     --bad: #C23B3B; --bad-bg: #FBEAEA;
+    --pink: #B23570; --pink-bg: #FBEAF2;
+    --violet: #6B4FA0; --violet-bg: #EFEAFB;
     --mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
     --serif: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
     --sans: 'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
@@ -110,9 +112,9 @@
   #pt-root .cmp-table .prod-meta { font-size: 9.5px; color: var(--text-soft); font-family: var(--mono); margin-top: 1px; }
   #pt-root .prod-title-btn { background: none; border: none; cursor: pointer; text-align: left; padding: 0; font-family: var(--sans); font-weight: 700; font-size: 13px; color: var(--text); line-height: 1.3; }
   #pt-root .prod-title-btn:hover { color: var(--accent-dark); }
-  #pt-root .price-cell-btn { background: none; border: none; cursor: pointer; font-family: var(--mono); font-size: 14px; text-align: left; padding: 3px 5px; border-radius: 5px; width: 100%; color: var(--text); }
+  #pt-root .price-cell-btn { background: none; border: none; cursor: pointer; font-family: var(--mono); font-size: 12px; text-align: left; padding: 3px 5px; border-radius: 5px; width: 100%; color: var(--text); }
   #pt-root .price-cell-btn:hover { background: var(--accent-soft); }
-  #pt-root .price-cell-btn .sub { display: block; font-size: 11px; color: var(--text-soft); }
+  #pt-root .price-cell-btn .sub { display: block; font-size: 9.5px; color: var(--text-soft); }
   #pt-root td.cheapest-cell { background: var(--rank1-bg); }
   #pt-root td.dim { color: var(--text-soft); text-align: center; font-size: 11px; }
   #pt-root .detail-panel { padding: 10px 12px; background: var(--bg); border-radius: 8px; }
@@ -402,8 +404,17 @@
   var sizeWarningShown = false;
   function save(){
     if(saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(doSaveNow, 400);
+    saveTimer = setTimeout(doSaveNow, 200);
   }
+  // Dacă pagina se închide/reîncarcă exact în fereastra de 200ms de debounce (ex: adaugi în coș
+  // la mai mulți furnizori, apoi dai F5 imediat), timer-ul programat e anulat de navigare înainte
+  // să apuce să se declanșeze — ultimele modificări se pierd fără nicio eroare vizibilă. Pornim
+  // salvarea imediat, fără să mai așteptăm restul debounce-ului, cînd pagina chiar pleacă.
+  function flushPendingSave(){
+    if(saveTimer){ clearTimeout(saveTimer); saveTimer = null; doSaveNow(); }
+  }
+  window.addEventListener('beforeunload', flushPendingSave);
+  window.addEventListener('pagehide', flushPendingSave);
   async function doSaveNow(){
     try {
       // Verificăm dacă altcineva (alt tab, alt calculator) a salvat între timp — cu o singură
@@ -571,6 +582,46 @@
       });
     });
     return { qty: qty, eta: eta, overdue: !!(eta && eta < todayStr()), freight: freight, sid: sid };
+  }
+  // Un produs poate fi „pe drum” prin mai multe comenzi active deodată — de la furnizori diferiți,
+  // sau de la ACELAȘI furnizor dar cu tipuri de transport diferite (ex: una pe avion, una pe vapor).
+  // Grupăm pe furnizor+transport, ca fiecare grup să-și arate propria cantitate/ETA, în loc să le
+  // amestecăm într-un singur total care ar ascunde care parte vine cum și de unde.
+  function getInTransitGroups(key){
+    var groups = {};
+    var today = todayStr();
+    state.orders.forEach(function(o){
+      if(o.status === 'received') return;
+      o.lines.forEach(function(l){
+        if(l.key !== key) return;
+        var gk = o.supplierId + '|' + o.freight;
+        if(!groups[gk]) groups[gk] = { qty: 0, eta: null, sid: o.supplierId, freight: o.freight };
+        groups[gk].qty += l.qty;
+        if(o.eta && (!groups[gk].eta || o.eta < groups[gk].eta)) groups[gk].eta = o.eta;
+      });
+    });
+    return Object.keys(groups).map(function(gk){
+      var g = groups[gk];
+      g.overdue = !!(g.eta && g.eta < today);
+      return g;
+    });
+  }
+  // Culoare stabilă per (furnizor + tip transport) — ca aceeași combinație să arate mereu la fel,
+  // și combinații diferite (alt furnizor sau alt transport) să se deosebească dintr-o privire, fără
+  // să mai citești textul. Roșu (bad) rămâne rezervat exclusiv pentru avertismentul de întârziere.
+  var TRANSIT_PALETTE = [
+    { fg: 'var(--rank2)', bg: 'var(--rank2-bg)' },
+    { fg: 'var(--rank3)', bg: 'var(--rank3-bg)' },
+    { fg: 'var(--pink)', bg: 'var(--pink-bg)' },
+    { fg: 'var(--violet)', bg: 'var(--violet-bg)' },
+    { fg: 'var(--rank1)', bg: 'var(--rank1-bg)' }
+  ];
+  function transitColorFor(g){
+    if(g.overdue) return { fg: 'var(--bad)', bg: 'var(--bad-bg)' };
+    var str = String(g.sid) + '|' + String(g.freight);
+    var h = 0;
+    for(var i=0;i<str.length;i++){ h = (h*31 + str.charCodeAt(i)) | 0; }
+    return TRANSIT_PALETTE[Math.abs(h) % TRANSIT_PALETTE.length];
   }
 
   // Verifică automat, în fundal, dacă o comandă adusă din MoySklad (status „Pe drum") a fost
@@ -1612,7 +1663,7 @@
         var entries = suppliersList.map(function(s){ return p.bySupplier[s.id] || null; });
         var minLanded = null;
         suppliersList.forEach(function(s){ var e = p.bySupplier[s.id]; if(e){ var uc = effectiveUnitCost(e, s.id); if(minLanded === null || uc < minLanded) minLanded = uc; } });
-        var transit = getInTransitInfo(k);
+        var transitGroups = getInTransitGroups(k);
         var isExpanded = expandedProductKey === k;
         var msProd = msOn ? moyskladLookup(p) : null;
         if(msProd){
@@ -1641,7 +1692,10 @@
           '</div>' +
           '<div class="prod-meta">' + (p.brand ? p.brand + ' · ' : '') + (p.quantity ? p.quantity + ' · ' : '') + (p.barcode ? 'EAN ' + p.barcode : 'fără barcode') + (p.altBarcodes && p.altBarcodes.length ? ' (+' + p.altBarcodes.length + ' cod' + (p.altBarcodes.length>1?'uri':'') + ': ' + p.altBarcodes.join(', ') + ')' : '') + (canonicalMoq ? ' · MOQ ' + canonicalMoq : '') + '</div>' +
           perSupplierBarcodeLine(p) +
-          (transit.qty > 0 ? '<div style="margin-top:3px"><span class="rrp" style="background:' + (transit.overdue ? 'var(--bad)' : 'var(--rank2)') + ';color:#fff;font-size:12.5px;padding:3px 9px">' + (transit.overdue ? 'Întârziat · ' : 'Pe drum (' + (transit.sid ? supplierName(transit.sid).slice(0,6) + ' · ' : '') + freightLabel(transit.freight) + ') · ') + '<b style="font-size:14px">' + transit.qty + '</b> buc' + '</span></div>' : '') +
+          (transitGroups.length ? '<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap">' + transitGroups.map(function(g){
+            var c = transitColorFor(g);
+            return '<span style="background:' + c.bg + ';color:' + c.fg + ';font-weight:600;font-size:12px;padding:3px 9px;border-radius:12px;white-space:nowrap">' + (g.overdue ? 'Întârziat (' : '(') + (g.sid ? supplierName(g.sid).slice(0,6) + ' · ' : '') + freightLabel(g.freight) + ') · <b style="font-size:13px">' + g.qty + '</b> buc</span>';
+          }).join('') + '</div>' : '') +
           '</div></div></td>';
 
         if(msOn && !isColHidden('cmp','hist')){
@@ -3050,6 +3104,30 @@
     renderOrderHistory(); renderCompare(); renderOrderRows();
     ptToast('Coeficient real aplicat: ' + fmt(realCoef) + '. Sinecosturile produselor din comandă au fost actualizate.', true);
   };
+  window.ptSetOrderFreight = function(id, val){
+    var o = state.orders.find(function(x){ return x.id === id; });
+    if(!o) return;
+    o.freight = val;
+    save(); renderOrderHistory(); renderCompare();
+  };
+  window.ptSetOrderCoef = function(id, val){
+    var o = state.orders.find(function(x){ return x.id === id; });
+    if(!o) return;
+    var n = parseFloat(val);
+    if(isNaN(n) || n <= 0){ ptToast('Coeficientul trebuie să fie un număr pozitiv.', false); renderOrderHistory(); return; }
+    o.coef = n;
+    o.appliedRealCoef = null;
+    o.landedTotal = orderInvoiceUSD(o) * state.settings.exchangeRate * n;
+    o.lines.forEach(function(l){
+      var prod = state.products[l.key];
+      if(prod && prod.bySupplier[o.supplierId] && prod.bySupplier[o.supplierId].lastPurchase && prod.bySupplier[o.supplierId].lastPurchase.date === o.date){
+        prod.bySupplier[o.supplierId].lastPurchase.landedCost = toUSD(l.price, l.currency) * state.settings.exchangeRate * n;
+      }
+    });
+    save();
+    renderOrderHistory(); renderCompare(); renderOrderRows();
+    ptToast('Coeficient actualizat: ' + fmt(n) + '. Sinecosturile produselor din comandă au fost recalculate.', true);
+  };
 
   function renderOrderHistory(){
     var box = document.getElementById('pt-order-history');
@@ -3070,6 +3148,8 @@
       if(!isOpen) return row;
       var keys = orderProductKeys(o);
       var detail = '<div class="panel" style="margin-top:-8px;border-top:none;border-top-left-radius:0;border-top-right-radius:0">' +
+        '<div class="row" style="margin-bottom:10px"><div><label>Tip transport</label><select onchange="ptSetOrderFreight(\'' + o.id + '\',this.value)">' + freightOptionsHtml(o.freight) + '</select></div>' +
+        '<div><label>Coeficient comandă</label><input type="number" step="0.01" value="' + o.coef + '" onchange="ptSetOrderCoef(\'' + o.id + '\',this.value)"></div></div>' +
         buildRealFreightPanelHtml(o) +
         '<div class="row" style="margin-bottom:10px"><div><label>Adaos implicit (%)</label><input type="number" step="1" id="pt-def-markup" value="' + state.settings.defaultMarkup + '"></div>' +
         '<div style="display:flex;align-items:flex-end"><button class="secondary" id="pt-apply-markup" style="width:100%">Aplică la produsele fără preț setat</button></div>' +
