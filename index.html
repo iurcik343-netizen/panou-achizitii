@@ -3362,6 +3362,11 @@
 
   // ================= SINCRONIZARE PREȚURI CU CÎMPURILE PERSONALIZATE DIN MOYSKLAD =================
   // UUID-urile atributelor personalizate configurate pe produs în MoySklad, date de utilizator.
+  // Test de siguranță, TEMPORAR: pînă confirmăm (via ?attrdefs) că toate cele 7 ID-uri de mai jos
+  // sînt corecte, trimitem la MoySklad UN SINGUR cîmp (Pachet 3) în loc de toate deodată — dacă
+  // ceva merge greșit pe o comandă întreagă, e mult mai ușor de reparat un singur cîmp per produs
+  // decît toate 7. Pune pe false cînd toate ID-urile sînt confirmate corecte.
+  var PUSH_ONLY_PACHET3_TEST = true;
   var MS_PRICE_ATTRS = {
     buyPriceMdl: 'bd72d8fc-55bc-11d9-848a-00112f43529a',    // Закупочная цена — sinecost final (MDL)
     buyPriceUsd: '0a55a9b4-0646-411d-a5f5-48fa88114a7d',    // Pret furnizor in $ — ultimul preț de achiziție (USD)
@@ -3435,8 +3440,9 @@
     if(!base){ ptToast('MoySklad nu e configurat în Setări.', false); return; }
     var keys = orderProductKeys(o).filter(function(k){ return moyskladLookup(state.products[k]); });
     if(!keys.length){ ptToast('Niciun produs din comandă nu e legat de MoySklad.', false); return; }
-    if(!confirm('Trimiți prețurile curente pentru ' + keys.length + ' produse direct în MoySklad? Suprascrie cîmpurile de preț existente acolo pentru aceste produse.')) return;
-    ptToast('Se trimit prețurile în MoySklad (' + keys.length + ' produse)…', true);
+    var testNote = PUSH_ONLY_PACHET3_TEST ? ' TEST DE SIGURANȚĂ: se trimite doar cîmpul Pachet 3, restul rămîn neatinse.' : '';
+    if(!confirm('Trimiți prețurile curente pentru ' + keys.length + ' produse direct în MoySklad?' + testNote + ' Suprascrie cîmpurile de preț existente acolo pentru aceste produse.')) return;
+    ptToast('Se trimit prețurile în MoySklad (' + keys.length + ' produse)' + (PUSH_ONLY_PACHET3_TEST ? ' — doar Pachet 3, test' : '') + '…', true);
     var sent = 0, failed = 0, firstErr = null;
     await runWithConcurrency(keys, 4, async function(k){
       var p = state.products[k];
@@ -3444,12 +3450,14 @@
       var sc = getSinecost(k);
       var pachete = computeOrderRowPachete(p, sc);
       var attrsToSet = [];
-      if(sc.cost != null) attrsToSet.push({ id: MS_PRICE_ATTRS.buyPriceMdl, value: Math.round(sc.cost) });
-      if(sc.usdPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.buyPriceUsd, value: sc.usdPrice });
-      if(p.sellPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.sellPrice, value: p.sellPrice });
-      if(p.secondaryPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.secondaryPrice, value: p.secondaryPrice });
-      if(pachete.pachet1 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet1, value: Math.round(pachete.pachet1) });
-      if(pachete.pachet2 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet2, value: Math.round(pachete.pachet2) });
+      if(!PUSH_ONLY_PACHET3_TEST){
+        if(sc.cost != null) attrsToSet.push({ id: MS_PRICE_ATTRS.buyPriceMdl, value: Math.round(sc.cost) });
+        if(sc.usdPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.buyPriceUsd, value: sc.usdPrice });
+        if(p.sellPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.sellPrice, value: p.sellPrice });
+        if(p.secondaryPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.secondaryPrice, value: p.secondaryPrice });
+        if(pachete.pachet1 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet1, value: Math.round(pachete.pachet1) });
+        if(pachete.pachet2 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet2, value: Math.round(pachete.pachet2) });
+      }
       if(pachete.pachet3 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet3, value: Math.round(pachete.pachet3) });
       if(!attrsToSet.length) return;
       try {
