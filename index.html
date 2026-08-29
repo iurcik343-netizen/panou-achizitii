@@ -3362,11 +3362,11 @@
 
   // ================= SINCRONIZARE PREȚURI CU CÎMPURILE PERSONALIZATE DIN MOYSKLAD =================
   // UUID-urile atributelor personalizate configurate pe produs în MoySklad, date de utilizator.
-  // Test de siguranță, TEMPORAR: pînă confirmăm (via ?attrdefs) că toate cele 7 ID-uri de mai jos
-  // sînt corecte, trimitem la MoySklad UN SINGUR cîmp (Pachet 3) în loc de toate deodată — dacă
-  // ceva merge greșit pe o comandă întreagă, e mult mai ușor de reparat un singur cîmp per produs
-  // decît toate 7. Pune pe false cînd toate ID-urile sînt confirmate corecte.
-  var PUSH_ONLY_PACHET3_TEST = true;
+  // Test de siguranță (dezactivat): a confirmat că sincronizarea funcționează corect (verificat
+  // atît import cît și push, pe Pachet 3) după ce am descoperit adevărata structură a cîmpurilor
+  // (tipuri de preț — salePrices — nu atribute personalizate). Las flag-ul, ca să poată fi repornit
+  // rapid dacă apare vreodată un motiv nou să testăm izolat un singur cîmp.
+  var PUSH_ONLY_PACHET3_TEST = false;
   var MS_PRICE_ATTRS = {
     buyPriceMdl: 'bd72d8fc-55bc-11d9-848a-00112f43529a',    // Закупочная цена — sinecost final (MDL)
     buyPriceUsd: '0a55a9b4-0646-411d-a5f5-48fa88114a7d',    // Pret furnizor in $ — ultimul preț de achiziție (USD)
@@ -3427,6 +3427,15 @@
         if(a[MS_PRICE_ATTRS.pachet1] != null) p.pachet1Price = a[MS_PRICE_ATTRS.pachet1];
         if(a[MS_PRICE_ATTRS.pachet2] != null) p.pachet2Price = a[MS_PRICE_ATTRS.pachet2];
         if(a[MS_PRICE_ATTRS.pachet3] != null) p.pachet3Price = a[MS_PRICE_ATTRS.pachet3];
+        // Reținem și procentul echivalent (relativ la prețul de vînzare importat), la fel ca la
+        // o editare manuală — altfel, la prima modificare ulterioară a prețului de vînzare,
+        // valorile tocmai importate ar fi înlocuite cu formula generică în loc să urmeze
+        // reducerea reală adusă din MoySklad.
+        if(p.sellPrice != null && p.sellPrice > 0){
+          if(p.secondaryPrice != null) p.secondaryPct = Math.round((1 - p.secondaryPrice/p.sellPrice)*100);
+          if(p.pachet2Price != null) p.pachet2Pct = Math.round((1 - p.pachet2Price/p.sellPrice)*100);
+          if(p.pachet3Price != null) p.pachet3Pct = Math.round((1 - p.pachet3Price/p.sellPrice)*100);
+        }
         imported++;
       } catch(e){ failed++; }
     });
@@ -3475,7 +3484,7 @@
   };
 
   // ================= PREȚURI PE PRODUSELE UNEI COMENZI (în Istoric comenzi) =================
-  function pkgCellHtml(key, idx, tierVal, manualVal, tierDiscPct, cost, sellPrice, manualPct, editablePct){
+  function pkgCellHtml(key, idx, tierVal, manualVal, tierDiscPct, cost, sellPrice, manualPct, editablePct, reviewed){
     var effPct = (manualPct != null) ? manualPct : tierDiscPct;
     var pctComputedVal = (sellPrice != null && effPct != null) ? sellPrice * (1 - effPct/100) : tierVal;
     var effVal = (manualVal != null) ? manualVal : pctComputedVal;
@@ -3483,10 +3492,11 @@
     var marginPct = (effVal != null && cost) ? Math.round(((effVal - cost)/cost)*100) : null;
     var profitLei = (effVal != null && cost != null) ? Math.round(effVal - cost) : null;
     var displayDiscPct = (effVal != null && sellPrice) ? Math.round((1 - effVal/sellPrice)*100) : effPct;
+    var borderStyle = reviewed ? 'border-color:var(--rank1);' : '';
     // Reducerea (-30% etc.) stătea inline lîngă cîmp doar la pachetul needitabil, dar jos la
     // celelalte — inconsecvent. Acum stă mereu jos, la fel ca "ad +Y%", indiferent de pachet.
     var pctControl = editablePct
-      ? ' <input class="qty-input pt-pct-input" style="width:40px;padding:9px 4px;text-align:center" type="number" step="1" title="Procent reducere" value="' + (effPct!=null?Math.round(effPct):'') + '" onchange="ptSetPachetPct(\'' + key + '\',' + idx + ',this.value)">%'
+      ? ' <input class="qty-input pt-pct-input" style="width:40px;padding:9px 4px;text-align:center;' + borderStyle + '" type="number" step="1" title="Procent reducere" value="' + (effPct!=null?Math.round(effPct):'') + '" onchange="ptSetPachetPct(\'' + key + '\',' + idx + ',this.value)">%'
       : '';
     var bottomParts = [];
     if(editablePct){
@@ -3501,7 +3511,7 @@
     // se poate selecta/copia, ceea ce bloca exact fluxul pentru care exista cîmpul.
     var shownVal = effVal != null ? Math.round(effVal) : '';
     return '<td' + (isAlert ? ' style="background:var(--bad-bg);color:var(--bad);font-weight:700"' : '') + '>' +
-      '<div style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input class="qty-input" style="width:calc(' + Math.max(6, String(shownVal).length + 2) + 'ch + 16px)" type="number" step="0.01" value="' + shownVal + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetPachetPrice(\'' + key + '\',' + idx + ',this.value)">' + pctControl + '</div>' +
+      '<div style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input class="qty-input" style="width:calc(' + Math.max(6, String(shownVal).length + 2) + 'ch + 16px);' + borderStyle + '" type="number" step="0.01" value="' + shownVal + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetPachetPrice(\'' + key + '\',' + idx + ',this.value)">' + pctControl + '</div>' +
       (bottomParts.length ? '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">' + bottomParts.join(' · ') + '</div>' : '') +
       (isAlert ? '<div style="font-size:10.5px">⚠ aproape/sub sinecost</div>' : '') + '</td>';
   }
@@ -3522,7 +3532,6 @@
   function buildOrderPricingTableHtml(o){
     var keys = orderProductKeys(o);
     var qtyMap = orderLineQtyMap(o);
-    var reviewedKeys = o.reviewedKeys || {};
     if(keys.length === 0) return '<div class="panel empty">Niciun produs cunoscut din această comandă.</div>';
     var msOnInv = !!state.settings.moyskladProxyUrl;
     var html = hiddenColsChipsHtml('inv', [ { col:'qty', label:'Cant. comandată' }, { col:'buy', label:'Achiziție (USD)' }, { col:'cost', label:'Sinecost (MDL)' } ].concat(msOnInv ? [{ col:'hist', label:'Istoric' }] : []));
@@ -3572,9 +3581,7 @@
         '</div>' +
         (orderMergeOpenKey === k ? ('<div style="margin-top:4px;max-width:230px"><input type="text" placeholder="Scrie măcar 2 litere din numele produsului…" style="font-size:11px;margin:0" oninput="ptMergeSearch(\'' + kEsc + '\', this.value, \'inv-\')"><div id="inv-merge-results-' + idSafe + '"></div></div>') : '');
 
-      var isReviewed = !!reviewedKeys[k];
       html += '<tr><td style="font-family:var(--sans)"><div style="display:flex;align-items:center;gap:4px">' +
-        (isReviewed ? '<span style="color:var(--rank1);flex-shrink:0" title="Prețuri setate">✅</span>' : '') +
         (invImgUrl ? '<img src="' + escAttr(invImgUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0" onerror="this.style.visibility=\'hidden\'">' : '<div style="width:28px;height:28px;flex-shrink:0"></div>') +
         '<span class="pt-prodname-resizable" data-colw="inv:name" style="width:' + getColWidth('inv','name',230) + 'px;font-weight:700" title="' + jsAttrEscape(p.displayName) + '">' + p.displayName + (p.quantity?' <span style="color:var(--text-soft);font-weight:400">('+p.quantity+')</span>':'') + '</span>' +
         ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button>' +
@@ -3583,47 +3590,62 @@
         (sc.source ? '<br><span style="font-size:10px;color:var(--text-soft)">sinecost: '+sc.source+'</span>' : '<br><span style="font-size:10px;color:var(--bad)">fără cost cunoscut</span>') + '</td>' +
         (msOnInv && !isColHidden('inv','hist') ? '<td>' + colwDivHtml('inv','hist',220, msProd ? (historyPreviewHtml(msProd.id) || '<span class="dim" style="font-size:11px">—</span>') : '<span class="dim" style="font-size:11px">—</span>') + '</td>' : '') +
         (isColHidden('inv','qty') ? '' : '<td style="text-align:center"><input class="qty-input" style="width:calc(' + Math.max(5, String(qtyMap[k]!=null?qtyMap[k]:'').length + 2) + 'ch + 16px);text-align:center;font-weight:700" type="number" step="1" value="' + (qtyMap[k] != null ? qtyMap[k] : '') + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetOrderLineQty(\'' + kEsc + '\',this.value)"></td>') +
-        (isColHidden('inv','buy') ? '' : '<td><input class="qty-input" style="width:calc(' + Math.max(6, (sc.usdPrice!=null?fmt(sc.usdPrice):'').length + 2) + 'ch + 16px)" type="number" step="0.01" value="' + (sc.usdPrice!=null?sc.usdPrice:'') + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetBuyPriceOverride(\'' + kEsc + '\',this.value)" title="Corectează dacă prețul de achiziție e greșit sau nesincronizat"></td>') +
-        '<td><input class="qty-input pt-sell-price-input" style="width:calc(' + Math.max(6, String(sellVal).length + 2) + 'ch + 16px)" type="number" step="0.01" value="' + sellVal + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetSellPrice(\'' + kEsc + '\',this.value)">' +
+        (isColHidden('inv','buy') ? '' : '<td><input class="qty-input" style="width:calc(' + Math.max(6, (sc.usdPrice!=null?fmt(sc.usdPrice):'').length + 2) + 'ch + 16px);' + reviewedBorder(o,k,'buy') + '" type="number" step="0.01" value="' + (sc.usdPrice!=null?sc.usdPrice:'') + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetBuyPriceOverride(\'' + kEsc + '\',this.value)" title="Corectează dacă prețul de achiziție e greșit sau nesincronizat"></td>') +
+        '<td><input class="qty-input pt-sell-price-input" style="width:calc(' + Math.max(6, String(sellVal).length + 2) + 'ch + 16px);' + reviewedBorder(o,k,'sell') + '" type="number" step="0.01" value="' + sellVal + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetSellPrice(\'' + kEsc + '\',this.value)">' +
           '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">' + (markupPct!=null?('ad '+(markupPct>=0?'+':'')+Math.round(markupPct)+'%'):'—') + '</div></td>' +
         (isColHidden('inv','cost') ? '' : '<td>' + colwDivHtml('inv','cost',110, sc.cost!=null?fmt(sc.cost):'—') + '</td>') +
-        '<td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input class="qty-input" style="width:calc(' + Math.max(6, String(secondaryVal).length + 2) + 'ch + 16px)" type="number" step="0.01" value="' + secondaryVal + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetSecondaryPrice(\'' + kEsc + '\',this.value)">' +
-          '<input class="qty-input pt-pct-input" style="width:42px;padding:9px 4px;text-align:center" type="number" step="1" title="Procent reducere pentru prețul secundar" value="' + secondaryPct + '" onchange="ptSetSecondaryPct(\'' + kEsc + '\',this.value)">%</div></td>' +
-        pkgCellHtml(kEsc, 1, pachet1, p.pachet1Price, 30, sc.cost, p.sellPrice, null, false) +
-        pkgCellHtml(kEsc, 2, pachet2, p.pachet2Price, disc2, sc.cost, p.sellPrice, p.pachet2Pct, true) +
-        pkgCellHtml(kEsc, 3, pachet3, p.pachet3Price, disc3, sc.cost, p.sellPrice, p.pachet3Pct, true) +
+        '<td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input class="qty-input" style="width:calc(' + Math.max(6, String(secondaryVal).length + 2) + 'ch + 16px);' + reviewedBorder(o,k,'secondary') + '" type="number" step="0.01" value="' + secondaryVal + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetSecondaryPrice(\'' + kEsc + '\',this.value)">' +
+          '<input class="qty-input pt-pct-input" style="width:42px;padding:9px 4px;text-align:center;' + reviewedBorder(o,k,'secondary') + '" type="number" step="1" title="Procent reducere pentru prețul secundar" value="' + secondaryPct + '" onchange="ptSetSecondaryPct(\'' + kEsc + '\',this.value)">%</div></td>' +
+        pkgCellHtml(kEsc, 1, pachet1, p.pachet1Price, 30, sc.cost, p.sellPrice, null, false, isFieldReviewed(o,k,'pachet1')) +
+        pkgCellHtml(kEsc, 2, pachet2, p.pachet2Price, disc2, sc.cost, p.sellPrice, p.pachet2Pct, true, isFieldReviewed(o,k,'pachet2')) +
+        pkgCellHtml(kEsc, 3, pachet3, p.pachet3Price, disc3, sc.cost, p.sellPrice, p.pachet3Pct, true, isFieldReviewed(o,k,'pachet3')) +
         '</tr>';
     });
     html += '</tbody></table></div>';
     return html;
   }
-  // Marchează produsul ca „trecut prin” în comanda curent deschisă — orice atingere a unui cîmp
-  // de preț contează, nu doar prețul de vînzare, ca bifa să reflecte munca reală făcută pe rînd.
-  function markRowReviewed(key){
+  // Marchează UN CÎMP anume ca „trecut prin” (editat) în comanda curent deschisă — per cîmp, nu
+  // per rînd, ca marginea verde din tabel să arate exact ce a fost deja setat, cîmp cu cîmp.
+  function markFieldReviewed(key, field){
     var o = state.orders.find(function(x){ return x.id === openOrderId; });
     if(!o) return;
-    if(!o.reviewedKeys) o.reviewedKeys = {};
-    o.reviewedKeys[key] = true;
+    if(!o.reviewedFields) o.reviewedFields = {};
+    if(!o.reviewedFields[key]) o.reviewedFields[key] = {};
+    o.reviewedFields[key][field] = true;
+  }
+  function isFieldReviewed(o, key, field){
+    return !!(o.reviewedFields && o.reviewedFields[key] && o.reviewedFields[key][field]);
+  }
+  function reviewedBorder(o, key, field){
+    return isFieldReviewed(o, key, field) ? 'border-color:var(--rank1);' : '';
   }
   window.ptSetBuyPriceOverride = function(key, val){
     var p = state.products[key];
     if(!p) return;
     var n = parseFloat(val);
     p.buyPriceOverrideUsd = isNaN(n) ? null : n;
-    markRowReviewed(key);
+    markFieldReviewed(key, 'buy');
     save(); renderOrderDetailTable();
   };
   window.ptSetSellPrice = function(key, val){
     var n = parseFloat(val);
     var p = state.products[key];
     p.sellPrice = isNaN(n) ? null : Math.round(n);
-    // Prețul secundar urmărește automat procentul curent (implicit -15%) ori de cîte ori se
-    // schimbă prețul de bază — altfel rămînea "înghețat" la valoarea calculată prima dată.
+    // Prețul secundar și pachetele urmăresc automat procentul curent (implicit sau moștenit
+    // dintr-o editare/import anterior) ori de cîte ori se schimbă prețul de bază — altfel
+    // rămîneau "înghețate" la valoarea calculată/importată prima dată.
     if(p.sellPrice != null){
       var pct = (p.secondaryPct != null) ? p.secondaryPct : 15;
       p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100));
+      p.pachet1Price = Math.round(p.sellPrice * 0.70); // Pachet 1 e mereu -30% fix, fără procent propriu.
+      var sc = getSinecost(key);
+      var markupPct = sc.cost ? (((p.sellPrice - sc.cost)/sc.cost)*100) : null;
+      var pct2 = (p.pachet2Pct != null) ? p.pachet2Pct : (markupPct != null ? pachet2Discount(markupPct) : null);
+      var pct3 = (p.pachet3Pct != null) ? p.pachet3Pct : (markupPct != null ? pachet3Discount(markupPct) : null);
+      if(pct2 != null) p.pachet2Price = Math.round(p.sellPrice * (1 - pct2/100));
+      if(pct3 != null) p.pachet3Price = Math.round(p.sellPrice * (1 - pct3/100));
     }
-    markRowReviewed(key);
+    markFieldReviewed(key, 'sell');
     save(); renderOrderDetailTable();
   };
   window.ptSetSecondaryPrice = function(key, val){
@@ -3633,7 +3655,7 @@
     if(p.secondaryPrice != null && p.sellPrice != null && p.sellPrice > 0){
       p.secondaryPct = Math.round((1 - p.secondaryPrice / p.sellPrice) * 100);
     }
-    markRowReviewed(key);
+    markFieldReviewed(key, 'secondary');
     save(); renderOrderDetailTable();
   };
   window.ptSetSecondaryPct = function(key, val){
@@ -3642,7 +3664,7 @@
     var p = state.products[key];
     p.secondaryPct = pct;
     if(p.sellPrice != null) p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100));
-    markRowReviewed(key);
+    markFieldReviewed(key, 'secondary');
     save(); renderOrderDetailTable();
   };
   window.ptSetPachetPrice = function(key, idx, val){
@@ -3653,7 +3675,7 @@
     if(!isNaN(n) && p.sellPrice != null && p.sellPrice > 0 && idx !== 1){
       p['pachet' + idx + 'Pct'] = Math.round((1 - n / p.sellPrice) * 100);
     }
-    markRowReviewed(key);
+    markFieldReviewed(key, 'pachet' + idx);
     save(); renderOrderDetailTable();
   };
   window.ptSetPachetPct = function(key, idx, val){
@@ -3661,7 +3683,7 @@
     if(isNaN(pct)) return;
     var p = state.products[key];
     p['pachet' + idx + 'Pct'] = pct;
-    markRowReviewed(key);
+    markFieldReviewed(key, 'pachet' + idx);
     if(p.sellPrice != null) p['pachet' + idx + 'Price'] = p.sellPrice * (1 - pct/100);
     save(); renderOrderDetailTable();
   };
@@ -4120,6 +4142,23 @@
     var newInputs = Array.prototype.slice.call(document.querySelectorAll('.pt-sell-price-input'));
     var next = newInputs[idx + 1];
     if(next){ next.focus(); next.select(); }
+  });
+
+  // ================= CLIC PE UN CÎMP NUMERIC: GOL DACĂ E 0, SELECTAT DACĂ NU =================
+  // La orice cîmp numeric din aplicație: dacă valoarea curentă e 0, o ștergem la focus (ca să nu
+  // mai fie nevoie s-o ștergi manual înainte de a scrie cifra reală); altfel, selectăm tot textul,
+  // ca o cifră nouă să înlocuiască imediat valoarea veche, fără ștergere manuală. La fel pentru
+  // cîmpurile de procent — sînt tot type=number, deci intră automat sub aceeași regulă.
+  document.addEventListener('focusin', function(e){
+    var el = e.target;
+    if(!el || el.tagName !== 'INPUT' || el.type !== 'number') return;
+    if(el.value !== '' && parseFloat(el.value) === 0){
+      el.value = '';
+    } else {
+      // .select() imediat pe 'focus'/'focusin' e uneori suprascris de poziționarea implicită a
+      // cursorului la locul clicului (Chrome) — un setTimeout(…,0) îl aplică după acel pas.
+      setTimeout(function(){ try { el.select(); } catch(err){} }, 0);
+    }
   });
 
   // ================= DRAG-TO-SCROLL PENTRU TABELE LATE =================
