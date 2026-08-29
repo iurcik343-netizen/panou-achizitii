@@ -250,7 +250,6 @@
     carts: {},
     importMappings: {},
     priceLists: [],
-    brandCurrencies: [],
     settings: { exchangeRate: 17.68, krwPerUsd: 1375, eurPerUsd: 0.92, coef: 1.4, ratesUpdatedAt: null, defaultMarkup: 100, hiddenMoyskladBrandIds: [], hiddenMoyskladProductIds: [], pinnedBrands: [] }
   };
 
@@ -369,34 +368,6 @@
     return 'nm:' + normName(name) + '|' + normName(qty);
   }
 
-  // ================= MONEDĂ IMPLICITĂ PER BRAND =================
-  // Multe branduri operează mereu în aceeași monedă (ex: unele în KRW, altele în USD) —
-  // reținem asta o dată, ca să nu mai trebuiască setată manual la fiecare listă de preț.
-  function getBrandCurrency(brandName){
-    var norm = normName(brandName);
-    if(!norm) return null;
-    var entry = (state.brandCurrencies||[]).find(function(b){ return normName(b.brand) === norm; });
-    return entry ? entry.currency : null;
-  }
-  function setBrandCurrency(brandName, currency){
-    var norm = normName(brandName);
-    if(!norm) return;
-    if(!state.brandCurrencies) state.brandCurrencies = [];
-    var entry = state.brandCurrencies.find(function(b){ return normName(b.brand) === norm; });
-    if(entry) entry.currency = currency;
-    else state.brandCurrencies.push({ brand: String(brandName).trim(), currency: currency });
-  }
-  window.ptSetBrandCurrencyManual = function(brandName, currency){
-    setBrandCurrency(brandName, currency);
-    save();
-    ptToast('Monedă actualizată pentru „' + brandName + '".', true);
-  };
-  window.ptRemoveBrandCurrency = function(brandName){
-    var norm = normName(brandName);
-    state.brandCurrencies = (state.brandCurrencies||[]).filter(function(b){ return normName(b.brand) !== norm; });
-    save();
-    renderSettings();
-  };
 
   var saveTimer = null;
   var lastKnownUpdatedAt = null;
@@ -465,7 +436,6 @@
         state.carts = parsed.carts || {};
         state.importMappings = parsed.importMappings || {};
         state.priceLists = parsed.priceLists || [];
-        state.brandCurrencies = parsed.brandCurrencies || [];
         state.settings = Object.assign(state.settings, parsed.settings || {});
         if(!parsed.settings || parsed.settings.coef === undefined){
           if(parsed.settings && parsed.settings.seaCoef !== undefined) state.settings.coef = parsed.settings.seaCoef;
@@ -489,7 +459,6 @@
     state.carts = parsed.carts || {};
     state.importMappings = parsed.importMappings || {};
     state.priceLists = parsed.priceLists || [];
-    state.brandCurrencies = parsed.brandCurrencies || [];
     state.settings = Object.assign(state.settings, parsed.settings || {});
   }
 
@@ -2473,14 +2442,16 @@
       var box = document.getElementById('pt-imp-pending');
       if(!box) return;
       var sidNow = document.getElementById('pt-imp-supplier').value;
-      var pendingHere = state.priceLists.filter(function(pl){ return pl.pending && (pl.id === editingPriceListId || !sidNow || pl.supplierId === sidNow); });
-      var justAppliedHere = state.priceLists.filter(function(pl){ return justAppliedIds[pl.id] && (!sidNow || pl.supplierId === sidNow); });
+      var byName = function(a,b){ return a.fileName.localeCompare(b.fileName, undefined, {sensitivity:'base', numeric:true}); };
+      var pendingHere = state.priceLists.filter(function(pl){ return pl.pending && (pl.id === editingPriceListId || !sidNow || pl.supplierId === sidNow); }).sort(byName);
+      var justAppliedHere = state.priceLists.filter(function(pl){ return justAppliedIds[pl.id] && (!sidNow || pl.supplierId === sidNow); }).sort(byName);
       if(!pendingHere.length && !justAppliedHere.length){ box.innerHTML = ''; return; }
       var rowsHtml = pendingHere.map(function(pl){
         var isEditingThis = editingPriceListId === pl.id;
         var row = '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
           '<span>' + escAttr(pl.fileName) + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + (pl.rows ? pl.rows.length : 0) + ' rânduri</span></span>' +
-          (isEditingThis ? '<button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button>' : '<button class="secondary" onclick="ptEditPriceList(\'' + pl.id + '\')">Verifică și importă</button>') +
+          '<span>' + (isEditingThis ? '<button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button>' : '<button class="secondary" onclick="ptEditPriceList(\'' + pl.id + '\')">Verifică și importă</button>') +
+          ' <button class="icon-x" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge — nu mai am nevoie de acest price list">✕</button></span>' +
           '</div>';
         if(isEditingThis) row += '<div id="pt-imp-mapping" style="padding:12px 14px;border-bottom:1px solid var(--border)"></div>';
         return row;
@@ -2584,11 +2555,9 @@
     { key: 'name', label: 'Nume produs *' },
     { key: 'price', label: 'Preț angro *' },
     { key: 'moq', label: 'MOQ (cantitate minimă)' },
-    { key: 'brand', label: 'Brand' },
     { key: 'rrp', label: 'RRP (preț recomandat)' },
     { key: 'packQty', label: 'Bucăți / pachet (dacă preț e pe cutie/set)' },
     { key: 'weight', label: 'Greutate (grame)' },
-    { key: 'currency', label: 'Monedă (coloană, opțional)' },
   ];
 
   function colLabel(idx){
@@ -2627,12 +2596,10 @@
               : guessColumn(headers, ['produs','denumire','nume','product','description','item','name'], ['korean','한글','hangul']),
       price: guessColumn(headers, ['pret','price','cost','wholesale','unit price','average price']),
       barcode: guessColumn(headers, ['barcode','ean','cod bare','upc']),
-      brand: guessColumn(headers, ['brand','marca']),
       rrp: guessColumn(headers, ['rrp','recommended price','recommended','pret recomandat','retail']),
       moq: guessColumn(headers, ['moq','min order','cantitate minima','minim comanda','box qty','cutie']),
       packQty: guessColumn(headers, ['buc/pachet','buc/cutie','units per','pachet','set of','x buc','cantitate/pachet']),
-      weight: guessColumn(headers, ['weight','greutate','net weight','gross weight','grame','gram(s)']),
-      currency: guessColumn(headers, ['moneda','currency','curr','won','krw'])
+      weight: guessColumn(headers, ['weight','greutate','net weight','gross weight','grame','gram(s)'])
     };
     var colOptions = '<option value="-1">— nu există —</option>' + headers.map(function(h,i){ return '<option value="'+i+'">' + colLabel(i) + ': ' + (h || '(fără titlu)') + '</option>'; }).join('');
 
@@ -2661,9 +2628,7 @@
       html += '<div><label>' + f.label + '</label><select id="pt-map-' + f.key + '" onchange="ptRenderPreview()">' + colOptions + '</select></div>';
     });
     html += '</div>';
-    html += '<div class="row"><div><label>Brand implicit (rezervă — pentru fișierele fără brand în nume)</label><input type="text" id="pt-map-def-brand" placeholder="ex: Celimax" value="' + (editingPL ? escAttr(editingPL.brand||'') : '') + '"></div>' +
-      '<div><label>Monedă implicită (dacă nu ai coloană)</label><select id="pt-map-def-currency" onchange="ptRenderPreview()"><option value="USD">USD</option><option value="MDL">MDL</option><option value="EUR">EUR</option><option value="KRW">KRW (won coreean)</option></select><div class="hint" id="pt-map-brand-currency-hint" style="margin:4px 0 0"></div></div>' +
-      '<div><label>Transport implicit</label><select id="pt-map-def-freight">' + freightOptionsHtml('sea') + '</select></div></div>';
+    html += '<div class="row"><div><label>Monedă implicită</label><select id="pt-map-def-currency" onchange="ptRenderPreview()"><option value="USD">USD</option><option value="MDL">MDL</option><option value="EUR">EUR</option><option value="KRW">KRW (won coreean)</option></select></div></div>';
     html += '<div class="hint">Previzualizare (primele 5 rânduri din primul fișier):</div><div class="preview-wrap" id="pt-imp-preview"></div>';
     html += '<button class="primary" id="pt-imp-submit">Importă produsele' + (importFiles && importFiles.length > 1 ? (' (' + importFiles.length + ' fișiere)') : '') + '</button><div id="pt-imp-feedback"></div>';
     wrap.innerHTML = html;
@@ -2674,23 +2639,11 @@
       if(savedIdx !== undefined && savedIdx !== -1 && savedIdx < headers.length){ sel.value = String(savedIdx); }
       else if(guesses[f.key] !== undefined && guesses[f.key] !== -1){ sel.value = String(guesses[f.key]); }
     });
+    // Moneda implicită vine, în ordine: din maparea salvată a acestui price list (dacă editezi),
+    // altfel din moneda implicită a furnizorului (dacă e setată în Furnizori), altfel rămîne USD.
+    var supForCurrency = currentSid ? state.suppliers.find(function(s){ return s.id === currentSid; }) : null;
     if(saved && saved.defCurrency) document.getElementById('pt-map-def-currency').value = saved.defCurrency;
-    // Transportul NU se mai reține per furnizor — la fel ca brandul, variază de la o listă la alta
-    // pentru același furnizor, deci pre-completarea din import-ul anterior ar induce în eroare.
-    var brandInput = document.getElementById('pt-map-def-brand');
-    function applyBrandCurrency(){
-      var hint = document.getElementById('pt-map-brand-currency-hint');
-      var cur = getBrandCurrency(brandInput.value);
-      if(cur){
-        document.getElementById('pt-map-def-currency').value = cur;
-        hint.textContent = '💡 „' + brandInput.value.trim() + '" operează de obicei în ' + cur + ' — completat automat.';
-        window.ptRenderPreview();
-      } else {
-        hint.textContent = '';
-      }
-    }
-    brandInput.addEventListener('input', applyBrandCurrency);
-    applyBrandCurrency();
+    else if(supForCurrency && supForCurrency.defaultCurrency) document.getElementById('pt-map-def-currency').value = supForCurrency.defaultCurrency;
     window.ptRenderPreview();
     document.getElementById('pt-imp-submit').addEventListener('click', doExcelImport);
   }
@@ -2707,8 +2660,8 @@
     var sample = importState.rows.slice(0, 5);
     // Aceeași ordine ca la maparea de mai sus (FIELD_DEFS), ca să compari ușor coloana din
     // setări cu cea din previzualizare, fără să te mai încurci care unde a ajuns.
-    var previewCols = ['barcode','name','price','moq','brand','rrp','packQty','weight','currency'];
-    var previewLabels = ['Barcode','Produs','Preț','MOQ','Brand','RRP','Buc/pachet','Greutate','Monedă'];
+    var previewCols = ['barcode','name','price','moq','rrp','packQty','weight'];
+    var previewLabels = ['Barcode','Produs','Preț','MOQ','RRP','Buc/pachet','Greutate'];
     var html = '<table><thead><tr>' + previewLabels.map(function(l){ return '<th>' + l + '</th>'; }).join('') + '</tr></thead><tbody>';
     sample.forEach(function(r){
       html += '<tr>' + previewCols.map(function(k){
@@ -2754,16 +2707,15 @@
       fb.className = 'feedback err'; fb.textContent = 'Trebuie să mapezi cel puțin coloana Produs și coloana Preț.';
       return;
     }
-    var defBrand = document.getElementById('pt-map-def-brand').value.trim();
     var defCurrency = document.getElementById('pt-map-def-currency').value;
-    var defFreight = document.getElementById('pt-map-def-freight').value;
     var today = new Date().toISOString().slice(0,10);
     var added=0, updated=0, increases=0, errors=0;
     var filesToProcess = (importFiles && importFiles.length) ? importFiles : [importState];
 
     filesToProcess.forEach(function(file){
-      var fileBrand = file.detectedBrand || defBrand;
-      if(fileBrand) setBrandCurrency(fileBrand, defCurrency);
+      // Brandul vine mereu din numele fișierului/price list-ului — nu mai există cîmp manual de
+      // rezervă sau coloană de mapare pentru el, ca să nu inducă în eroare cînd diferă de invoice.
+      var fileBrand = file.detectedBrand || '';
       var touchedKeys = [];
       var rowKeyMap = {};
       file.rows.forEach(function(r, i){
@@ -2771,12 +2723,12 @@
         var priceRaw = m.price>=0 ? r[m.price] : '';
         var price = parseFloat(String(priceRaw).replace(',','.'));
         if(!name || isNaN(price)){ errors++; return; }
-        var currency = m.currency>=0 ? normalizeCurrency(r[m.currency], defCurrency) : defCurrency;
+        var currency = defCurrency;
         var barcodeList = m.barcode>=0 ? extractBarcodes(r[m.barcode]) : [];
         var barcode = barcodeList.length ? barcodeList[0] : '';
         var altBarcodes = barcodeList.slice(1);
         var quantity = m.quantity>=0 ? String(r[m.quantity]||'').trim() : '';
-        var brand = (m.brand>=0 ? String(r[m.brand]||'').trim() : '') || fileBrand;
+        var brand = fileBrand;
         var rrpVal = m.rrp>=0 ? parseFloat(String(r[m.rrp]).replace(',','.')) : NaN;
         var moqVal = m.moq>=0 ? parseInt(String(r[m.moq]).replace(/[^0-9]/g,''), 10) : NaN;
         var packQtyVal = m.packQty>=0 ? parseInt(String(r[m.packQty]).replace(/[^0-9]/g,''), 10) : NaN;
@@ -2784,7 +2736,7 @@
 
         var key = makeKey(barcode, name, quantity);
         var existedBefore = !!state.products[key] && !!(state.products[key].bySupplier[sid]);
-        var wasIncrease = upsertProduct({ name: name, brand: brand, quantity: quantity, barcode: barcode, altBarcodes: altBarcodes, price: price, currency: currency, freight: defFreight, rrp: isNaN(rrpVal) ? null : rrpVal, moq: isNaN(moqVal) ? null : moqVal, packQty: isNaN(packQtyVal) ? null : packQtyVal, weightGrams: isNaN(weightVal) ? null : weightVal }, sid, today);
+        var wasIncrease = upsertProduct({ name: name, brand: brand, quantity: quantity, barcode: barcode, altBarcodes: altBarcodes, price: price, currency: currency, freight: 'sea', rrp: isNaN(rrpVal) ? null : rrpVal, moq: isNaN(moqVal) ? null : moqVal, packQty: isNaN(packQtyVal) ? null : packQtyVal, weightGrams: isNaN(weightVal) ? null : weightVal }, sid, today);
         if(existedBefore){ updated++; if(wasIncrease) increases++; } else { added++; }
         touchedKeys.push(key);
         rowKeyMap[i] = key;
@@ -2842,7 +2794,7 @@
 
     // Brandul implicit NU se ține minte între importuri — de la același furnizor vin mereu
     // fișiere cu branduri diferite, deci ar rămâne greșit completat cu cel anterior.
-    state.importMappings[sid] = { mapping: m, defCurrency: defCurrency, defFreight: defFreight };
+    state.importMappings[sid] = { mapping: m, defCurrency: defCurrency };
     save();
     var fb = document.getElementById('pt-imp-feedback');
     var msg = (editingPriceListId ? 'Price list actualizat: ' : '') + added + ' produse noi, ' + updated + ' actualizate';
@@ -3199,6 +3151,36 @@
     renderOrderHistory(); renderCompare(); renderOrderRows();
     ptToast('Coeficient actualizat: ' + fmt(n) + '. Sinecosturile produselor din comandă au fost recalculate.', true);
   };
+  window.ptSetOrderLineQty = function(key, val){
+    var o = state.orders.find(function(x){ return x.id === openOrderId; });
+    if(!o) return;
+    var matching = o.lines.filter(function(l){ return l.key === key; });
+    if(!matching.length) return;
+    var n = parseInt(val, 10);
+    if(isNaN(n) || n <= 0){
+      o.lines = o.lines.filter(function(l){ return l.key !== key; });
+    } else {
+      matching[0].qty = n;
+      matching[0].lineTotal = matching[0].price * n;
+      // dacă produsul avea mai multe linii sub aceeași cheie, le combinăm pe toate în prima,
+      // ca noua cantitate să nu se adune la cele vechi rămase separat
+      if(matching.length > 1){
+        var kept = false;
+        o.lines = o.lines.filter(function(l){
+          if(l.key !== key) return true;
+          if(!kept){ kept = true; return true; }
+          return false;
+        });
+      }
+    }
+    var totals = {};
+    o.lines.forEach(function(l){ totals[l.currency] = (totals[l.currency]||0) + l.lineTotal; });
+    o.totals = totals;
+    var landedTotal = 0;
+    o.lines.forEach(function(l){ landedTotal += toUSD(l.price, l.currency) * state.settings.exchangeRate * o.coef; });
+    o.landedTotal = landedTotal;
+    save(); renderOrderDetailTable();
+  };
 
   function renderOrderHistory(){
     var box = document.getElementById('pt-order-history');
@@ -3444,15 +3426,20 @@
     var isAlert = isNearOrBelowCost(effVal, cost);
     var marginPct = (effVal != null && cost) ? Math.round(((effVal - cost)/cost)*100) : null;
     var displayDiscPct = (effVal != null && sellPrice) ? Math.round((1 - effVal/sellPrice)*100) : effPct;
+    // Reducerea (-30% etc.) stătea inline lîngă cîmp doar la pachetul needitabil, dar jos la
+    // celelalte — inconsecvent. Acum stă mereu jos, la fel ca "ad +Y%", indiferent de pachet.
     var pctControl = editablePct
       ? ' <input class="qty-input pt-pct-input" style="width:40px;padding:9px 4px;text-align:center" type="number" step="1" title="Procent reducere" value="' + (effPct!=null?Math.round(effPct):'') + '" onchange="ptSetPachetPct(\'' + key + '\',' + idx + ',this.value)">%'
-      : (displayDiscPct != null ? ' <span style="font-size:11px;color:var(--text-soft)">-' + displayDiscPct + '%</span>' : '');
+      : '';
+    var bottomParts = [];
+    if(displayDiscPct != null) bottomParts.push('-' + displayDiscPct + '%');
+    if(marginPct != null) bottomParts.push('ad ' + (marginPct>=0?'+':'') + marginPct + '%');
     // Valoarea calculată automat trebuie să fie value= real, nu placeholder — un placeholder nu
     // se poate selecta/copia, ceea ce bloca exact fluxul pentru care exista cîmpul.
     var shownVal = effVal != null ? Math.round(effVal) : '';
     return '<td' + (isAlert ? ' style="background:var(--bad-bg);color:var(--bad);font-weight:700"' : '') + '>' +
       '<div style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input class="qty-input" style="width:calc(' + Math.max(6, String(shownVal).length + 2) + 'ch + 16px)" type="number" step="0.01" value="' + shownVal + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetPachetPrice(\'' + key + '\',' + idx + ',this.value)">' + pctControl + '</div>' +
-      (editablePct && displayDiscPct != null ? '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">-' + displayDiscPct + '%' + (marginPct != null ? ' · ad ' + (marginPct>=0?'+':'') + marginPct + '%' : '') + '</div>' : (marginPct != null ? '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">ad ' + (marginPct>=0?'+':'') + marginPct + '%</div>' : '')) +
+      (bottomParts.length ? '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">' + bottomParts.join(' · ') + '</div>' : '') +
       (isAlert ? '<div style="font-size:10.5px">⚠ aproape/sub sinecost</div>' : '') + '</td>';
   }
   function orderProductKeys(o){
@@ -3476,14 +3463,20 @@
     if(keys.length === 0) return '<div class="panel empty">Niciun produs cunoscut din această comandă.</div>';
     var msOnInv = !!state.settings.moyskladProxyUrl;
     var html = hiddenColsChipsHtml('inv', [ { col:'qty', label:'Cant. comandată' }, { col:'buy', label:'Achiziție (USD)' }, { col:'cost', label:'Sinecost (MDL)' } ].concat(msOnInv ? [{ col:'hist', label:'Istoric' }] : []));
+    // Fiecare coloană poate fi micșorată pînă aproape de dispariție (min 15px) — inclusiv peste
+    // conținut — utilizatorul a cerut control total, nu un prag care oprea micșorarea prematur.
     html += '<div class="table-wrap"><table class="sticky-col-table pt-order-pricing-table"><thead><tr>' +
       resizableThHtml('inv', 'name', 'Produs', 230, 150, 640, false) +
-      (msOnInv && !isColHidden('inv','hist') ? resizableThHtml('inv', 'hist', 'Istoric', 220, 26, 500) : '') +
-      (isColHidden('inv','qty') ? '' : resizableThHtml('inv', 'qty', 'Cant. comandată', 110, 40, 220)) +
-      (isColHidden('inv','buy') ? '' : resizableThHtml('inv', 'buy', 'Achiziție (USD)', 110, 40, 220)) +
-      '<th>Preț de vânzare</th>' +
-      (isColHidden('inv','cost') ? '' : resizableThHtml('inv', 'cost', 'Sinecost (MDL)', 110, 40, 220)) +
-      '<th>Preț secundar</th><th>Pachet 1 (-30%)</th><th>Pachet 2</th><th>Pachet 3</th></tr></thead><tbody>';
+      (msOnInv && !isColHidden('inv','hist') ? resizableThHtml('inv', 'hist', 'Istoric', 220, 15, 500) : '') +
+      (isColHidden('inv','qty') ? '' : resizableThHtml('inv', 'qty', 'Cant. comandată', 110, 15, 220)) +
+      (isColHidden('inv','buy') ? '' : resizableThHtml('inv', 'buy', 'Achiziție (USD)', 110, 15, 220)) +
+      resizableThHtml('inv', 'sell', 'Preț de vânzare', 140, 15, 300, false) +
+      (isColHidden('inv','cost') ? '' : resizableThHtml('inv', 'cost', 'Sinecost (MDL)', 110, 15, 220)) +
+      resizableThHtml('inv', 'secondary', 'Preț secundar', 140, 15, 300, false) +
+      resizableThHtml('inv', 'pachet1', 'Pachet 1 (-30%)', 120, 15, 300, false) +
+      resizableThHtml('inv', 'pachet2', 'Pachet 2', 120, 15, 300, false) +
+      resizableThHtml('inv', 'pachet3', 'Pachet 3', 120, 15, 300, false) +
+      '</tr></thead><tbody>';
     keys.forEach(function(k){
       var p = state.products[k];
       var sc = getSinecost(k);
@@ -3520,13 +3513,13 @@
       html += '<tr><td style="font-family:var(--sans)"><div style="display:flex;align-items:center;gap:4px">' +
         (isReviewed ? '<span style="color:var(--rank1);flex-shrink:0" title="Prețuri setate">✅</span>' : '') +
         (invImgUrl ? '<img src="' + escAttr(invImgUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0" onerror="this.style.visibility=\'hidden\'">' : '<div style="width:28px;height:28px;flex-shrink:0"></div>') +
-        '<span class="pt-prodname-resizable" data-colw="inv:name" style="width:' + getColWidth('inv','name',230) + 'px" title="' + jsAttrEscape(p.displayName) + '">' + p.displayName + (p.quantity?' <span style="color:var(--text-soft)">('+p.quantity+')</span>':'') + '</span>' +
+        '<span class="pt-prodname-resizable" data-colw="inv:name" style="width:' + getColWidth('inv','name',230) + 'px;font-weight:700" title="' + jsAttrEscape(p.displayName) + '">' + p.displayName + (p.quantity?' <span style="color:var(--text-soft);font-weight:400">('+p.quantity+')</span>':'') + '</span>' +
         ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button>' +
         ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Caută denumirea pe Google" onclick="ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">🔍</button></div>' +
         barcodeRow +
         (sc.source ? '<br><span style="font-size:10px;color:var(--text-soft)">sinecost: '+sc.source+'</span>' : '<br><span style="font-size:10px;color:var(--bad)">fără cost cunoscut</span>') + '</td>' +
         (msOnInv && !isColHidden('inv','hist') ? '<td>' + colwDivHtml('inv','hist',220, msProd ? (historyPreviewHtml(msProd.id) || '<span class="dim" style="font-size:11px">—</span>') : '<span class="dim" style="font-size:11px">—</span>') + '</td>' : '') +
-        (isColHidden('inv','qty') ? '' : '<td style="text-align:center;font-weight:700">' + colwDivHtml('inv','qty',110, qtyMap[k] != null ? qtyMap[k] : '—') + '</td>') +
+        (isColHidden('inv','qty') ? '' : '<td style="text-align:center"><input class="qty-input" style="width:calc(' + Math.max(5, String(qtyMap[k]!=null?qtyMap[k]:'').length + 2) + 'ch + 16px);text-align:center;font-weight:700" type="number" step="1" value="' + (qtyMap[k] != null ? qtyMap[k] : '') + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetOrderLineQty(\'' + kEsc + '\',this.value)"></td>') +
         (isColHidden('inv','buy') ? '' : '<td><input class="qty-input" style="width:calc(' + Math.max(6, (sc.usdPrice!=null?fmt(sc.usdPrice):'').length + 2) + 'ch + 16px)" type="number" step="0.01" value="' + (sc.usdPrice!=null?sc.usdPrice:'') + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetBuyPriceOverride(\'' + kEsc + '\',this.value)" title="Corectează dacă prețul de achiziție e greșit sau nesincronizat"></td>') +
         '<td><input class="qty-input pt-sell-price-input" style="width:calc(' + Math.max(6, String(sellVal).length + 2) + 'ch + 16px)" type="number" step="0.01" value="' + sellVal + '" oninput="this.style.width=(this.value.length+3)+\'ch\'" onchange="ptSetSellPrice(\'' + kEsc + '\',this.value)">' +
           '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">' + (markupPct!=null?('ad '+(markupPct>=0?'+':'')+Math.round(markupPct)+'%'):'—') + '</div></td>' +
@@ -3614,7 +3607,20 @@
     var o = state.orders.find(function(x){ return x.id === openOrderId; });
     var box = document.getElementById('pt-order-detail-table');
     if(!o || !box) return;
+    // La o comandă mare, faci scroll la dreapta/jos ca să ajungi la un cîmp, îl editezi, iar la
+    // Enter tabelul se reconstruiește și scroll-ul revenea la 0 — trebuia să repeți scroll-ul
+    // după fiecare editare. Reținem poziția din interiorul .table-wrap și o restaurăm după.
+    var prevWrap = box.querySelector('.table-wrap');
+    var prevScrollLeft = prevWrap ? prevWrap.scrollLeft : 0;
+    var prevScrollTop = prevWrap ? prevWrap.scrollTop : 0;
     box.innerHTML = buildOrderPricingTableHtml(o);
+    var newWrap = box.querySelector('.table-wrap');
+    if(newWrap){
+      newWrap.scrollLeft = prevScrollLeft;
+      newWrap.scrollTop = prevScrollTop;
+      mountStickyHeader(newWrap);
+      fitTableWrapHeight(newWrap);
+    }
   }
   window.exportOrderPricingExcel = function(orderId){
     var o = state.orders.find(function(x){ return x.id === orderId; });
@@ -3653,6 +3659,7 @@
   // ================= SUPPLIERS TAB =================
   var SUPPLIER_FIELDS = [
     { key:'discountPct', label:'Reducere curentă (%)', type:'number' },
+    { key:'defaultCurrency', label:'Monedă implicită', type:'select', options:['','USD','MDL','EUR','KRW'] },
     { key:'companyName', label:'Denumire companie' },
     { key:'companyReg', label:'IDNO / cod fiscal' },
     { key:'companyAddress', label:'Adresă companie' },
@@ -3744,12 +3751,18 @@
           html += '<label>Nume furnizor</label><input type="text" id="pt-sup-name-' + s.id + '" value="' + (s.name||'').replace(/"/g,'&quot;') + '">';
           html += '<div class="map-grid">';
           SUPPLIER_FIELDS.forEach(function(f){
-            html += '<div><label>' + f.label + '</label><input type="' + (f.type||'text') + '" ' + (f.type==='number'?'step="0.1" placeholder="ex: 5"':'') + ' id="pt-sup-' + f.key + '-' + s.id + '" value="' + (s[f.key]||'').toString().replace(/"/g,'&quot;') + '"></div>';
+            if(f.type === 'select'){
+              html += '<div><label>' + f.label + '</label><select id="pt-sup-' + f.key + '-' + s.id + '">' +
+                f.options.map(function(o){ return '<option value="' + o + '" ' + (s[f.key]===o?'selected':'') + '>' + (o || '— nesetat —') + '</option>'; }).join('') +
+                '</select></div>';
+            } else {
+              html += '<div><label>' + f.label + '</label><input type="' + (f.type||'text') + '" ' + (f.type==='number'?'step="0.1" placeholder="ex: 5"':'') + ' id="pt-sup-' + f.key + '-' + s.id + '" value="' + (s[f.key]||'').toString().replace(/"/g,'&quot;') + '"></div>';
+            }
           });
           html += '</div>';
           html += '<div class="row"><div><button class="primary" onclick="ptSaveSupplierDetails(\'' + s.id + '\')" style="width:100%">Salvează</button></div>' +
             '<div><button class="secondary" onclick="ptCopySupplierData(\'' + s.id + '\')" style="width:100%">Copiază toate datele</button></div></div>';
-          var supPriceLists = state.priceLists.filter(function(pl){ return pl.supplierId === s.id; }).sort(function(a,b){ return (b.importedAt||'9').localeCompare(a.importedAt||'9'); });
+          var supPriceLists = state.priceLists.filter(function(pl){ return pl.supplierId === s.id; }).sort(function(a,b){ return a.fileName.localeCompare(b.fileName, undefined, {sensitivity:'base', numeric:true}); });
           var pendingCountSup = supPriceLists.filter(function(pl){ return pl.pending; }).length;
           var plOpen = priceListsOpenFor === s.id;
           html += '<div style="margin-top:14px">' +
@@ -3803,7 +3816,10 @@
   window.ptDeletePriceList = function(id){
     var pl = state.priceLists.find(function(x){ return x.id === id; });
     if(!pl) return;
-    if(!confirm('Ștergi price list-ul „' + pl.fileName + '" (' + pl.productKeys.length + ' produse) de la ' + supplierName(pl.supplierId) + '?\n\nPrețurile acestor produse de la acest furnizor vor fi eliminate din Comparație produse — poți reimporta oricând o versiune curată.')) return;
+    var confirmMsg = pl.pending
+      ? ('Ștergi fișierul „' + pl.fileName + '" din așteptare, fără să-l imporți? Nu s-a înregistrat încă niciun produs din el.')
+      : ('Ștergi price list-ul „' + pl.fileName + '" (' + pl.productKeys.length + ' produse) de la ' + supplierName(pl.supplierId) + '?\n\nPrețurile acestor produse de la acest furnizor vor fi eliminate din Comparație produse — poți reimporta oricând o versiune curată.');
+    if(!confirm(confirmMsg)) return;
     var removed = 0;
     pl.productKeys.forEach(function(k){
       var p = state.products[k];
@@ -3814,7 +3830,7 @@
     delete justAppliedIds[id];
     save();
     renderSuppliers(); renderCompare(); renderAdd();
-    ptToast('Price list șters — ' + removed + ' produse eliminate de la ' + supplierName(pl.supplierId) + '.', true);
+    ptToast(pl.pending ? ('„' + pl.fileName + '" șters din așteptare.') : ('Price list șters — ' + removed + ' produse eliminate de la ' + supplierName(pl.supplierId) + '.'), true);
   };
   window.ptAskWipeSupplierProducts = function(id){ pendingWipeSupplierId = id; renderSuppliers(); };
   window.ptCancelWipe = function(){ pendingWipeSupplierId = null; renderSuppliers(); };
@@ -3913,27 +3929,6 @@
       '<div class="hint">Un singur coeficient, folosit ca punct de plecare peste tot. Îl ajustezi manual în funcție de furnizor sau tipul comenzii — în tab-ul Comenzi, la fiecare comandă în parte.</div>' +
       '<div class="row"><div><label>Coeficient implicit</label><input type="number" step="0.01" id="pt-set-coef" value="' + state.settings.coef + '"></div></div>' +
       '<button class="primary" id="pt-save-settings">Salvează setările</button><div id="pt-set-feedback"></div></div>';
-    html += '<div class="panel"><h2>Monedă implicită per brand</h2>' +
-      '<div class="hint">Se completează automat pe măsură ce imporți liste de preț — poți și adăuga sau ajusta manual aici, ca să nu mai trebuiască setată moneda la fiecare import pentru un brand pe care-l cunoști deja.</div>' +
-      '<div class="row"><div><label>Brand</label><input type="text" id="pt-new-brand-currency-name" placeholder="ex: JMSolution"></div>' +
-      '<div><label>Monedă</label><select id="pt-new-brand-currency-value"><option value="USD">USD</option><option value="MDL">MDL</option><option value="EUR">EUR</option><option value="KRW">KRW (won coreean)</option></select></div>' +
-      '<div style="display:flex;align-items:flex-end"><button class="secondary" id="pt-add-brand-currency" style="width:100%">+ Adaugă</button></div></div>';
-    if(!state.brandCurrencies || !state.brandCurrencies.length){
-      html += '<div class="hint" style="margin-top:0">Niciun brand memorat încă.</div></div>';
-    } else {
-      html += '<div class="panel" style="padding:0;margin-bottom:0">' +
-        state.brandCurrencies.slice().sort(function(a,b){ return a.brand.localeCompare(b.brand, undefined, {sensitivity:'base'}); }).map(function(b){
-          return '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
-            '<span>' + escAttr(b.brand) + '</span>' +
-            '<span style="display:flex;align-items:center;gap:8px">' +
-            '<select style="margin:0" onchange="ptSetBrandCurrencyManual(\'' + jsAttrEscape(b.brand) + '\', this.value)">' +
-            ['USD','MDL','EUR','KRW'].map(function(c){ return '<option value="' + c + '" ' + (b.currency===c?'selected':'') + '>' + c + '</option>'; }).join('') +
-            '</select>' +
-            '<button class="icon-x" onclick="ptRemoveBrandCurrency(\'' + jsAttrEscape(b.brand) + '\')" title="Uită acest brand">✕</button>' +
-            '</span></div>';
-        }).join('') +
-        '</div></div>';
-    }
     html += '<div class="panel"><h2>MoySklad — stocuri</h2>' +
       '<div class="hint">Serverul intermediar (Cloudflare Worker) ține tokenul MoySklad în siguranță și trimite aplicației doar perechile barcode → cantitate. Completează URL-ul lui aici.</div>' +
       '<label>URL server intermediar</label>' +
@@ -3953,15 +3948,6 @@
       '<div id="pt-account-feedback"></div></div>';
     el.innerHTML = html;
 
-    document.getElementById('pt-add-brand-currency').addEventListener('click', function(){
-      var nameEl = document.getElementById('pt-new-brand-currency-name');
-      var name = nameEl.value.trim();
-      if(!name){ ptToast('Scrie numele brandului.', false); return; }
-      setBrandCurrency(name, document.getElementById('pt-new-brand-currency-value').value);
-      save();
-      renderSettings();
-      ptToast('Brand adăugat: „' + name + '".', true);
-    });
     document.getElementById('pt-fetch-rates').addEventListener('click', async function(){
       var fb = document.getElementById('pt-rates-feedback');
       fb.className = 'feedback'; fb.textContent = 'Se actualizează…';
