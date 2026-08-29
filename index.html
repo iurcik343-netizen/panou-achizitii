@@ -418,11 +418,55 @@
       // serializează timestamp-urile puțin diferit (alt format de precizie/fus orar).
       var result = await supabaseClient.from('app_state').upsert({ id: STATE_ROW_ID, data: state, updated_at: nowIso }).select('updated_at').maybeSingle();
       if(result.error) ptToast('Salvarea nu a reușit: ' + result.error.message, false);
-      else { lastKnownUpdatedAt = (result.data && result.data.updated_at) || nowIso; staleWarningShown = false; }
+      else { lastKnownUpdatedAt = (result.data && result.data.updated_at) || nowIso; staleWarningShown = false; saveHistorySnapshotIfDue(); }
     } catch(e){
       ptToast('Eroare la salvare: ' + (e && e.message ? e.message : 'necunoscută') + '. Modificarea ar putea să nu fi fost păstrată.', false);
     }
   }
+  // ================= ISTORIC VERSIUNI (plasă de siguranță în caz de ștergere din greșeală) =================
+  // Nu e un undo pas cu pas (ar însemna să rescriem fiecare acțiune din aplicație ca să fie
+  // reversibilă) — e mai simplu și mai robust: la fiecare salvare (dar nu mai des decît o dată la
+  // 15 minute, ca să nu umplem tabelul la fiecare click de coș) păstrăm o copie completă a datelor
+  // într-un tabel separat. Din Setări, utilizatorul poate vedea lista de momente salvate și reveni
+  // la oricare dintre ele — iar cum restaurarea salvează la rîndul ei starea curentă înainte să o
+  // înlocuiască, poate la fel de ușor să "meargă înainte" din nou dacă se răzgîndește.
+  var HISTORY_SNAPSHOT_MIN_GAP_MS = 15 * 60 * 1000;
+  var HISTORY_KEEP_COUNT = 200;
+  var lastHistorySnapshotAt = 0;
+  async function saveHistorySnapshotNow(){
+    try {
+      lastHistorySnapshotAt = Date.now();
+      await supabaseClient.from('app_state_history').insert({ data: state });
+      var old = await supabaseClient.from('app_state_history').select('id').order('created_at', { ascending: false }).range(HISTORY_KEEP_COUNT, HISTORY_KEEP_COUNT + 50);
+      if(old.data && old.data.length) await supabaseClient.from('app_state_history').delete().in('id', old.data.map(function(r){ return r.id; }));
+    } catch(e){ /* instantaneele sînt doar o plasă de siguranță — dacă tabelul nu există încă sau eșuează, salvarea principală tot a reușit */ }
+  }
+  function saveHistorySnapshotIfDue(){
+    if(Date.now() - lastHistorySnapshotAt < HISTORY_SNAPSHOT_MIN_GAP_MS) return;
+    saveHistorySnapshotNow();
+  }
+  window.ptOpenHistoryPanel = async function(){
+    var el = document.getElementById('pt-history-list');
+    if(!el) return;
+    el.innerHTML = '<div class="hint">Se încarcă…</div>';
+    var res = await supabaseClient.from('app_state_history').select('id, created_at').order('created_at', { ascending: false }).limit(HISTORY_KEEP_COUNT);
+    if(res.error){ el.innerHTML = '<div class="feedback err">Eroare la citirea istoricului: ' + escAttr(res.error.message) + ' (verifică dacă ai creat tabelul app_state_history în Supabase — vezi README).</div>'; return; }
+    var rows = res.data || [];
+    if(!rows.length){ el.innerHTML = '<div class="hint">Niciun instantaneu salvat încă — primul se creează automat la următoarea modificare.</div>'; return; }
+    el.innerHTML = '<div class="table-wrap" style="max-height:320px"><table class="cmp-table"><tbody>' + rows.map(function(r){
+      var d = new Date(r.created_at);
+      return '<tr><td>' + escAttr(d.toLocaleString('ro-RO')) + '</td><td style="text-align:right"><button class="secondary" onclick="ptRestoreHistorySnapshot(' + r.id + ')">↩ Restaurează</button></td></tr>';
+    }).join('') + '</tbody></table></div>';
+  };
+  window.ptRestoreHistorySnapshot = async function(id){
+    if(!confirm('Restaurezi datele la acest moment din timp? Starea curentă va fi păstrată tot ca instantaneu (poți reveni înainte dacă te răzgîndești), dar tot ce ai schimbat de la acest instantaneu încoace va fi înlocuit. Continui?')) return;
+    await saveHistorySnapshotNow();
+    var res = await supabaseClient.from('app_state_history').select('data').eq('id', id).maybeSingle();
+    if(res.error || !res.data){ ptToast('Nu am putut încărca acest instantaneu: ' + (res.error ? res.error.message : 'negăsit'), false); return; }
+    applyImportedState(res.data.data);
+    await doSaveNow(true);
+    location.reload();
+  };
   async function load(){
     try {
       var result = await supabaseClient.from('app_state').select('data, updated_at').eq('id', STATE_ROW_ID).maybeSingle();
@@ -3393,7 +3437,7 @@
     if(!keys.length){ ptToast('Niciun produs din comandă nu e legat de MoySklad.', false); return; }
     if(!confirm('Trimiți prețurile curente pentru ' + keys.length + ' produse direct în MoySklad? Suprascrie cîmpurile de preț existente acolo pentru aceste produse.')) return;
     ptToast('Se trimit prețurile în MoySklad (' + keys.length + ' produse)…', true);
-    var sent = 0, failed = 0;
+    var sent = 0, failed = 0, firstErr = null;
     await runWithConcurrency(keys, 4, async function(k){
       var p = state.products[k];
       var mp = moyskladLookup(p);
@@ -3410,11 +3454,16 @@
       if(!attrsToSet.length) return;
       try {
         var r = await moyskladPost('setAttrs', { id: mp.id, attributes: attrsToSet });
-        if(!r.ok){ failed++; return; }
+        if(!r.ok){
+          failed++;
+          if(!firstErr) firstErr = (r.data && r.data.error) || ('eroare necunoscută la ' + (p.name||k));
+          console.error('ptPushPricesToMoySklad eșuat pentru', p.name, k, r.data);
+          return;
+        }
         sent++;
-      } catch(e){ failed++; }
+      } catch(e){ failed++; if(!firstErr) firstErr = String(e); }
     });
-    ptToast('Prețuri trimise în MoySklad: ' + sent + ' produse' + (failed?(', ' + failed + ' eșuate'):'') + '.', true);
+    ptToast('Prețuri trimise în MoySklad: ' + sent + ' produse' + (failed?(', ' + failed + ' eșuate — ' + firstErr):'') + '.', true);
   };
 
   // ================= PREȚURI PE PRODUSELE UNEI COMENZI (în Istoric comenzi) =================
@@ -3424,6 +3473,7 @@
     var effVal = (manualVal != null) ? manualVal : pctComputedVal;
     var isAlert = isNearOrBelowCost(effVal, cost);
     var marginPct = (effVal != null && cost) ? Math.round(((effVal - cost)/cost)*100) : null;
+    var profitLei = (effVal != null && cost != null) ? Math.round(effVal - cost) : null;
     var displayDiscPct = (effVal != null && sellPrice) ? Math.round((1 - effVal/sellPrice)*100) : effPct;
     // Reducerea (-30% etc.) stătea inline lîngă cîmp doar la pachetul needitabil, dar jos la
     // celelalte — inconsecvent. Acum stă mereu jos, la fel ca "ad +Y%", indiferent de pachet.
@@ -3431,7 +3481,13 @@
       ? ' <input class="qty-input pt-pct-input" style="width:40px;padding:9px 4px;text-align:center" type="number" step="1" title="Procent reducere" value="' + (effPct!=null?Math.round(effPct):'') + '" onchange="ptSetPachetPct(\'' + key + '\',' + idx + ',this.value)">%'
       : '';
     var bottomParts = [];
-    if(displayDiscPct != null) bottomParts.push('-' + displayDiscPct + '%');
+    if(editablePct){
+      // Procentul e deja vizibil și editabil în cîmpul din dreapta — repetarea lui jos era
+      // redundantă (și dublu negativă cînd procentul e negativ). Punem profitul în lei în loc.
+      if(profitLei != null) bottomParts.push((profitLei>=0?'+':'') + profitLei + ' lei');
+    } else if(displayDiscPct != null){
+      bottomParts.push('-' + displayDiscPct + '%');
+    }
     if(marginPct != null) bottomParts.push('ad ' + (marginPct>=0?'+':'') + marginPct + '%');
     // Valoarea calculată automat trebuie să fie value= real, nu placeholder — un placeholder nu
     // se poate selecta/copia, ceea ce bloca exact fluxul pentru care exista cîmpul.
@@ -3939,6 +3995,10 @@
       '<button class="secondary" id="pt-import-json-btn">⬆ Încarcă backup JSON</button>' +
       '<input type="file" id="pt-import-json" accept="application/json" style="display:none">' +
       '<div id="pt-backup-feedback"></div></div>';
+    html += '<div class="panel"><h2>Istoric versiuni</h2>' +
+      '<div class="hint">Aplicația păstrează automat instantanee complete ale datelor (la cel mult 15 minute între ele) — dacă ștergi ceva din greșeală, poți reveni la un moment anterior. Nu e un „undo" pas cu pas, ci o listă de momente din timp la care te poți întoarce (iar de acolo poți reveni și înainte, dacă te răzgîndești).</div>' +
+      '<button class="secondary" id="pt-history-open">🕐 Arată istoricul</button>' +
+      '<div id="pt-history-list" style="margin-top:10px"></div></div>';
     html += '<div class="panel"><h2>Cont</h2>' +
       '<div class="hint">Autentificat ca <b>' + escAttr(currentUserEmail) + '</b>.</div>' +
       '<label>Parolă nouă</label><input type="password" id="pt-change-password" autocomplete="new-password" placeholder="minim 6 caractere">' +
@@ -4017,6 +4077,7 @@
       reader.readAsText(file);
       e.target.value = '';
     });
+    document.getElementById('pt-history-open').addEventListener('click', function(){ ptOpenHistoryPanel(); });
     document.getElementById('pt-signout').addEventListener('click', async function(){
       await supabaseClient.auth.signOut();
       location.reload();
