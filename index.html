@@ -3409,9 +3409,8 @@
       if(pachete.pachet3 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet3, value: Math.round(pachete.pachet3) });
       if(!attrsToSet.length) return;
       try {
-        var res = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'setAttrs', id: mp.id, attributes: attrsToSet }) });
-        var data = await res.json();
-        if(!res.ok || data.error){ failed++; return; }
+        var r = await moyskladPost('setAttrs', { id: mp.id, attributes: attrsToSet });
+        if(!r.ok){ failed++; return; }
         sent++;
       } catch(e){ failed++; }
     });
