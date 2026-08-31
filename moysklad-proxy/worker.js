@@ -33,8 +33,10 @@ export default {
         if (action === 'setArchived') return await handleSetArchived(body, baseHeaders, corsHeaders);
         if (action === 'deleteProducts') return await handleDeleteProducts(body, baseHeaders, corsHeaders);
         if (action === 'setAttrs') return await handleSetAttrs(body, baseHeaders, corsHeaders);
+        if (action === 'createMoves') return await handleCreateMoves(body, baseHeaders, corsHeaders);
         return json({ error: 'Acțiune necunoscută.' }, 400, corsHeaders);
       }
+      if (url.searchParams.has('transferdata')) return await handleTransferData(url, baseHeaders, corsHeaders);
       if (url.searchParams.has('catalog')) return await handleCatalog(baseHeaders, corsHeaders);
       if (url.searchParams.has('history')) return await handleHistory(url.searchParams.get('history'), baseHeaders, corsHeaders);
       if (url.searchParams.has('imgurl')) return await handleImageUrl(url.searchParams.get('imgurl'), baseHeaders, corsHeaders);
@@ -185,6 +187,115 @@ async function handleCatalog(baseHeaders, corsHeaders) {
 
   const folderList = Object.keys(folders).map(id => ({ id: id, name: folders[id] }));
   return json({ products: Object.values(products), folders: folderList, updatedAt: new Date().toISOString() }, 200, corsHeaders);
+}
+
+// ================= DATE PENTRU PEREMISENII — stoc pe fiecare depozit + vânzări recente pe depozit =================
+// Folosit de hub-ul NOD (modulul Peremisenii), nu de panoul de achiziții.
+async function handleTransferData(url, baseHeaders, corsHeaders) {
+  const storeIds = (url.searchParams.get('storeIds') || '').split(',').map(s => s.trim()).filter(Boolean);
+  const days = parseInt(url.searchParams.get('days'), 10) || 30;
+
+  let stockRows;
+  try {
+    stockRows = await fetchAllPages(`${API}/report/stock/bystore`, baseHeaders, 1000);
+  } catch (err) {
+    return json({ error: 'Eroare la citirea stocului pe depozite din MoySklad', detail: String(err) }, 502, corsHeaders);
+  }
+
+  // Depozitele se extrag direct din rândurile de stoc — nu mai e nevoie de un apel separat la entity/store.
+  const storesMap = {};
+  for (const row of stockRows) {
+    for (const s of (row.stockByStore || [])) {
+      const sid = extractId(s.meta && s.meta.href);
+      if (sid && !storesMap[sid]) storesMap[sid] = { id: sid, name: s.name };
+    }
+  }
+
+  const momentTo = new Date();
+  const momentFrom = new Date(momentTo.getTime() - days * 24 * 3600 * 1000);
+  const fmtMoment = (d) => d.toISOString().slice(0, 10) + ' 00:00:00';
+
+  const turnoverByStore = {};
+  try {
+    await Promise.all(storeIds.map(async (sid) => {
+      const filterParts = [`store=${API}/entity/store/${sid}`, 'type=retaildemand'];
+      const qs = filterParts.map(f => 'filter=' + encodeURIComponent(f)).join('&');
+      const rows = await fetchAllPages(
+        `${API}/report/turnover/all?${qs}&momentFrom=${encodeURIComponent(fmtMoment(momentFrom))}&momentTo=${encodeURIComponent(fmtMoment(momentTo))}`,
+        baseHeaders, 1000
+      );
+      const map = {};
+      for (const r of rows) {
+        const pid = extractId(r.assortment && r.assortment.meta && r.assortment.meta.href);
+        if (pid) map[pid] = (r.outcome && r.outcome.quantity) || 0;
+      }
+      turnoverByStore[sid] = map;
+    }));
+  } catch (err) {
+    return json({ error: 'Eroare la citirea vânzărilor din MoySklad', detail: String(err) }, 502, corsHeaders);
+  }
+
+  const products = {};
+  for (const row of stockRows) {
+    const pid = extractId(row.meta && row.meta.href);
+    if (!pid) continue;
+    const stockByStore = {};
+    for (const s of (row.stockByStore || [])) {
+      const sid = extractId(s.meta && s.meta.href);
+      if (sid) stockByStore[sid] = { stock: s.stock, reserve: s.reserve, inTransit: s.inTransit };
+    }
+    products[pid] = { id: pid, stockByStore, soldByStore: {} };
+  }
+  for (const sid of storeIds) {
+    const map = turnoverByStore[sid] || {};
+    for (const pid of Object.keys(map)) {
+      if (!products[pid]) products[pid] = { id: pid, stockByStore: {}, soldByStore: {} };
+      products[pid].soldByStore[sid] = map[pid];
+    }
+  }
+
+  return json({ stores: Object.values(storesMap), products: Object.values(products), days, updatedAt: new Date().toISOString() }, 200, corsHeaders);
+}
+
+// ================= CREARE PEREMISENII (documente entity/move) =================
+let cachedOrganizationHref = null;
+async function resolveOrganizationHref(baseHeaders) {
+  if (cachedOrganizationHref) return cachedOrganizationHref;
+  const res = await fetch(`${API}/entity/organization`, { headers: baseHeaders });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const row = (data.rows || [])[0];
+  cachedOrganizationHref = row ? row.meta.href : null;
+  return cachedOrganizationHref;
+}
+function metaRef(type, href) {
+  return { meta: { href, metadataHref: `${API}/entity/${type}/metadata`, type, mediaType: 'application/json' } };
+}
+async function handleCreateMoves(body, baseHeaders, corsHeaders) {
+  const moves = (body && body.moves) || [];
+  if (!moves.length) return json({ error: 'Lipsește lista de peremisenii.' }, 400, corsHeaders);
+  const orgHref = await resolveOrganizationHref(baseHeaders);
+  if (!orgHref) return json({ error: 'Nu am găsit nicio organizație (juridică) în MoySklad.' }, 502, corsHeaders);
+
+  const results = await Promise.all(moves.map(async (m) => {
+    const positions = (m.lines || []).map(l => Object.assign(
+      { assortment: metaRef('product', `${API}/entity/product/${l.productId}`) }, { quantity: l.quantity }
+    ));
+    const payload = Object.assign(
+      { organization: metaRef('organization', orgHref) },
+      { sourceStore: metaRef('store', `${API}/entity/store/${m.sourceStoreId}`) },
+      { targetStore: metaRef('store', `${API}/entity/store/${m.targetStoreId}`) },
+      { positions }
+    );
+    const res = await fetch(`${API}/entity/move`, {
+      method: 'POST', headers: { ...baseHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, sourceStoreId: m.sourceStoreId, targetStoreId: m.targetStoreId, error: (data.errors && data.errors[0] && data.errors[0].error) || 'Eroare necunoscută', detail: data };
+    return { ok: true, sourceStoreId: m.sourceStoreId, targetStoreId: m.targetStoreId, id: data.id, name: data.name };
+  }));
+  const failed = results.filter(r => !r.ok);
+  return json({ ok: failed.length === 0, created: results.filter(r => r.ok), failed }, 200, corsHeaders);
 }
 
 // ================= IMAGINE INDIVIDUALĂ (la cerere, pentru produsele fără imagine din raportul de stoc) =================
