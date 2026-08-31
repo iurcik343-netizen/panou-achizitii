@@ -3523,10 +3523,15 @@
       // Calculul de mai jos citește poziția reală a tabelului pe ecran (getBoundingClientRect) —
       // dacă îl facem imediat, sincron, browserul poate să nu fi terminat încă layout-ul pentru
       // conținutul tocmai inserat (mai ales la o comandă mare), și citește o poziție/înălțime
-      // greșită. requestAnimationFrame îl amînă pînă după ce pagina chiar s-a așezat.
+      // greșită. Un singur requestAnimationFrame nu era suficient de sigur — cu multe randări de
+      // fundal concurente (poze/atribute MoySklad), uneori tot măsura înainte ca pagina să se fi
+      // așezat complet, rămînînd blocat la înălțimea minimă (240px) pînă la o re-randare norocoasă.
+      // Dublăm rAF-ul (tehnică standard "așteaptă un ciclu complet de layout+paint").
       requestAnimationFrame(function(){
-        var openWrap = document.querySelector('#pt-order-detail-table .table-wrap');
-        if(openWrap){ mountStickyHeader(openWrap); fitTableWrapHeight(openWrap); }
+        requestAnimationFrame(function(){
+          var openWrap = document.querySelector('#pt-order-detail-table .table-wrap');
+          if(openWrap){ mountStickyHeader(openWrap); fitTableWrapHeight(openWrap); }
+        });
       });
       var rfApply = document.getElementById('pt-rf-apply');
       if(rfApply) rfApply.addEventListener('click', function(){ ptApplyRealFreight(openOrderId); });
@@ -3911,6 +3916,18 @@
       p.pachet1Price = clearIfGarbagePrice(p.pachet1Price);
       p.pachet2Price = clearIfGarbagePrice(p.pachet2Price);
       p.pachet3Price = clearIfGarbagePrice(p.pachet3Price);
+      // Un preț literal 0 (venit din import/sincronizare MoySklad, unde tipul de preț respectiv
+      // pur și simplu nu e completat) NU înseamnă "prețul chiar e 0" — înseamnă "nimic setat încă".
+      // Tratat ca o valoare reală, bloca pentru totdeauna adaosul/reducerea standard să se aplice
+      // (la fel ca gunoiul numeric de mai sus). Îl resetăm la lipsă — DAR doar dacă nu a fost
+      // verificat manual: dacă chiar tu ai tastat 0 și cîmpul e marcat, îl respectăm ca atare.
+      function clearIfUnreviewedZero(v, field){
+        return (v === 0 && !isFieldReviewed(o, k, field)) ? null : v;
+      }
+      p.secondaryPrice = clearIfUnreviewedZero(p.secondaryPrice, 'secondary');
+      p.pachet1Price = clearIfUnreviewedZero(p.pachet1Price, 'pachet1');
+      p.pachet2Price = clearIfUnreviewedZero(p.pachet2Price, 'pachet2');
+      p.pachet3Price = clearIfUnreviewedZero(p.pachet3Price, 'pachet3');
       // Preț de vânzare / secundar / Pachet 1-2-3: la fel ca sinecostul, urmăresc LIVE valoarea din
       // MoySklad (dacă produsul e legat și cîmpul respectiv are ceva acolo) — dar NUMAI cît timp
       // cîmpul n-a fost atins manual în ACEASTĂ comandă (marginea verde/reviewedFields). O dată ce
