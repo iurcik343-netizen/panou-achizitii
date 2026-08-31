@@ -1154,12 +1154,23 @@
   // La fel ca poza/istoricul de mai sus: "Pret furnizor in $" e citit live din MoySklad, în fundal,
   // fără să blocheze randarea tabelului de comandă — nu ținut doar în memorie locală, ca prețurile
   // să reflecte mereu ce e ACUM în MoySklad, nu o valoare veche cache-uită pe disc.
+  // BUG GRAV, găsit după ședințe întregi de căutat "de ce unele produse nu se sincronizează
+  // NICIODATĂ": odată ce un fetch eșua (ex: o comandă cu 76 de produse trimite pînă la 6 cereri
+  // simultane către MoySklad — suficient să lovească o limită de rată trecătoare la unele), acel
+  // produs rămînea marcat "eșuat" PERMANENT — {error:...} e truthy, deci ensureMsAttrsLoaded nu mai
+  // reîncerca NICIODATĂ, indiferent cîte comenzi reimportai sau cataloage resincronizai. Asta
+  // explica exact tiparul "unele merg, altele nu, la infinit" — nu erau datele, era cache-ul.
   var msAttrsCache = {};
+  var msAttrsRetries = {};
   var attrsQueue = [];
   var attrsActive = 0;
-  var ATTRS_CONCURRENCY = 6;
+  var ATTRS_CONCURRENCY = 4; // redus de la 6, ca să scadă șansa de-a lovi o limită de rată la comenzi mari
+  var ATTRS_MAX_RETRIES = 5;
   function ensureMsAttrsLoaded(msId){
-    if(msAttrsCache[msId]) return;
+    var cached = msAttrsCache[msId];
+    if(cached === 'loading') return;
+    if(cached && cached.attrs) return; // succes deja obținut — nu mai reîncercăm
+    if(cached && cached.error && (msAttrsRetries[msId]||0) >= ATTRS_MAX_RETRIES) return; // renunțăm doar după eșecuri repetate
     msAttrsCache[msId] = 'loading';
     attrsQueue.push(msId);
     pumpAttrsQueue();
@@ -1169,8 +1180,15 @@
       (function(msId){
         attrsActive++;
         fetch(catalogProxyUrl('attrs=' + encodeURIComponent(msId))).then(function(r){ return r.json(); }).then(function(data){
-          msAttrsCache[msId] = (data && data.error) ? { error: data.detail || data.error } : { attrs: (data && data.attributes) || {} };
+          if(data && data.error){
+            msAttrsRetries[msId] = (msAttrsRetries[msId]||0) + 1;
+            msAttrsCache[msId] = { error: data.detail || data.error };
+          } else {
+            msAttrsCache[msId] = { attrs: (data && data.attributes) || {} };
+            delete msAttrsRetries[msId];
+          }
         }).catch(function(err){
+          msAttrsRetries[msId] = (msAttrsRetries[msId]||0) + 1;
           msAttrsCache[msId] = { error: err && err.message ? err.message : String(err) };
         }).then(function(){
           attrsActive--;
@@ -3474,8 +3492,14 @@
       // dinamic — rămânea la valoarea implicită din CSS, prea mică dacă tabelul precedent
       // deschis era mai mic. La închidere+redeschidere "se repara" doar pentru că, între timp,
       // se întâmpla să se declanșeze un re-render (ex: la încărcarea imaginilor din MoySklad).
-      var openWrap = document.querySelector('#pt-order-detail-table .table-wrap');
-      if(openWrap){ mountStickyHeader(openWrap); fitTableWrapHeight(openWrap); }
+      // Calculul de mai jos citește poziția reală a tabelului pe ecran (getBoundingClientRect) —
+      // dacă îl facem imediat, sincron, browserul poate să nu fi terminat încă layout-ul pentru
+      // conținutul tocmai inserat (mai ales la o comandă mare), și citește o poziție/înălțime
+      // greșită. requestAnimationFrame îl amînă pînă după ce pagina chiar s-a așezat.
+      requestAnimationFrame(function(){
+        var openWrap = document.querySelector('#pt-order-detail-table .table-wrap');
+        if(openWrap){ mountStickyHeader(openWrap); fitTableWrapHeight(openWrap); }
+      });
       var rfApply = document.getElementById('pt-rf-apply');
       if(rfApply) rfApply.addEventListener('click', function(){ ptApplyRealFreight(openOrderId); });
       var rfRate = document.getElementById('pt-rf-rate');
