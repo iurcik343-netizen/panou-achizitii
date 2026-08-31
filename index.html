@@ -4104,7 +4104,12 @@
     }
     if(window.scrollY !== prevPageScrollY) window.scrollTo(0, prevPageScrollY);
     // DEBUG TEMPORAR — de scos după ce găsim cauza săriturii de scroll la editarea prețurilor.
-    console.log('[scrollDbg] renderOrderDetailTable done: prevPageScrollY=', prevPageScrollY, 'finalScrollY=', window.scrollY, 'activeElement=', document.activeElement && document.activeElement.tagName);
+    console.log('[scrollDbg] renderOrderDetailTable done: prevPageScrollY=', prevPageScrollY, 'finalScrollY=', window.scrollY, 'activeElement=', document.activeElement && document.activeElement.tagName, 'prevWrapFound=', !!prevWrap, 'prevScrollTop=', prevScrollTop, 'newWrapFound=', !!newWrap, 'newScrollTopImediat=', newWrap && newWrap.scrollTop, 'newWrapSameNode=', newWrap === prevWrap);
+    if(newWrap){
+      requestAnimationFrame(function(){
+        console.log('[scrollDbg] ...după frame: newScrollTop=', newWrap.scrollTop, '(țintă era ' + prevScrollTop + ')');
+      });
+    }
   }
   window.exportOrderPricingExcel = function(orderId){
     var o = state.orders.find(function(x){ return x.id === orderId; });
