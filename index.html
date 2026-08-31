@@ -299,6 +299,17 @@
   var hiddenCols = (function(){
     try { return JSON.parse(localStorage.getItem(HIDDEN_COLS_KEY)) || {}; } catch(e){ return {}; }
   })();
+  // Evidențierea cel mai ieftin/locul 2/locul 3 poate fi enervantă cînd te uiți la un singur
+  // furnizor sau vrei să compari altceva — preferința e locală (per dispozitiv), nu per echipă.
+  var RANK_HIGHLIGHT_KEY = 'pt_rank_highlight_v1';
+  var rankHighlightOn = (function(){
+    try { return Object.assign({ rank1: true, rank2: true, rank3: true }, JSON.parse(localStorage.getItem(RANK_HIGHLIGHT_KEY)) || {}); } catch(e){ return { rank1: true, rank2: true, rank3: true }; }
+  })();
+  window.ptToggleRankHighlight = function(rank){
+    rankHighlightOn[rank] = !rankHighlightOn[rank];
+    try { localStorage.setItem(RANK_HIGHLIGHT_KEY, JSON.stringify(rankHighlightOn)); } catch(e){}
+    renderCompare();
+  };
   function isColHidden(table, col){
     return !!(hiddenCols[table] && hiddenCols[table][col]);
   }
@@ -1687,15 +1698,30 @@
         return '<button class="subtab-btn" style="background:var(--accent-soft);border-color:var(--accent);color:var(--accent-dark)" onclick="ptGoToOrderCart(\'' + c.sid + '\')">🛒 ' + supplierName(c.sid) + ' (' + c.count + ')</button>';
       }).join('') + '</div>';
     }
-    html += '<div class="legend"><span><span class="dot" style="background:var(--rank1)"></span>cel mai ieftin</span><span><span class="dot" style="background:var(--rank2)"></span>locul 2</span><span><span class="dot" style="background:var(--rank3)"></span>locul 3</span></div>';
+    function legendItem(rank, color, label){
+      var on = rankHighlightOn[rank];
+      return '<span style="cursor:pointer;' + (on ? '' : 'opacity:0.4;text-decoration:line-through') + '" onclick="ptToggleRankHighlight(\'' + rank + '\')" title="' + (on ? 'Ascunde evidențierea' : 'Arată evidențierea') + ' pentru ' + label + '"><span class="dot" style="background:' + color + '"></span>' + label + '</span>';
+    }
+    html += '<div class="legend">' + legendItem('rank1','var(--rank1)','cel mai ieftin') + legendItem('rank2','var(--rank2)','locul 2') + legendItem('rank3','var(--rank3)','locul 3') + '</div>';
 
     if(keys.length === 0){
       html += '<div class="panel empty">Niciun produs încă. Importă o listă de preț din tab-ul „Adaugă listă de preț”.</div>';
     } else {
       // Produsele nou apărute la ultima actualizare a unui price list sar mereu în față,
       // indiferent de sortare — sortarea aleasă se aplică doar în interiorul fiecărui grup.
+      // Favoritele sar și mai în față, dar DOAR cît timp nu e activ niciun filtru (căutare sau
+      // brand) — altfel ar interfera cu rezultatele unei căutări explicite. Tocmai pentru că nu
+      // au filtru, listate din 8000+ produse, fără asta un favorit din finalul alfabetului n-ar
+      // apărea deloc în primele 200 afișate (vezi RENDER_LIMIT mai jos) — de-asta favoritele
+      // trebuie sortate ÎNAINTE de trunchiere, nu doar vizual "puse la vedere".
+      var noFilterActive = !searchTerm && !brandFilter;
       function newFirst(cmp){
         return function(a,b){
+          if(noFilterActive){
+            var fa = !!state.products[a].favorite, fb = !!state.products[b].favorite;
+            if(fa !== fb) return fa ? -1 : 1;
+            if(fa && fb) return state.products[a].displayName.localeCompare(state.products[b].displayName, undefined, {sensitivity:'base', numeric:true});
+          }
           var na = isRecentlyNew(state.products[a]), nb = isRecentlyNew(state.products[b]);
           if(na !== nb) return na ? -1 : 1;
           return cmp(a,b);
@@ -1784,6 +1810,7 @@
           (rowImgUrl ? '<img src="' + escAttr(rowImgUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0;margin-top:2px" onerror="this.style.visibility=\'hidden\'">' : '<div style="width:28px;height:28px;flex-shrink:0"></div>') +
           '<div style="min-width:0;flex:1">' +
           '<div style="display:flex;align-items:center;gap:2px">' +
+          '<button class="icon-link" style="padding:0 2px;flex-shrink:0;font-size:14px" title="' + (p.favorite ? 'Scoate de la favorite' : 'Adaugă la favorite — stă mereu primul, sus, cît timp nu ai niciun filtru activ') + '" onclick="event.stopPropagation();ptToggleFavorite(\'' + kEsc + '\')">' + (p.favorite ? '⭐' : '☆') + '</button>' +
           '<button class="prod-title-btn pt-prodname-resizable" data-colw="cmp:name" style="width:' + getColWidth('cmp','name',260) + 'px;' + (mergeSourceKey && !isMergeSource ? 'color:var(--accent)' : '') + '" onclick="ptProductClick(\'' + kEsc + '\')" title="' + jsAttrEscape(p.displayName) + '">' + (isMergeSource ? '🔀 ' : (isExpanded ? '▾' : '▸') + ' ') + p.displayName + '</button>' +
           (isRecentlyNew(p) ? ' <span style="background:var(--rank1);color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:4px;flex-shrink:0;letter-spacing:0.03em">NEW</span>' : '') +
           ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="event.stopPropagation();ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">🔍</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Unește cu alt produs" onclick="event.stopPropagation();ptStartMerge(\'' + kEsc + '\')">🔀</button>' +
@@ -1844,7 +1871,8 @@
             mainPrice + packNote +
             '<span class="sub">' + costLine + unitLine + '</span></button>' +
             '<span style="display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:1px;height:12px;visibility:' + (inCart ? 'visible' : 'hidden') + '"><b style="font-size:9.5px;line-height:1">🛒 ' + (inCart||0) + '</b><button class="icon-x" style="font-size:9px;line-height:1;padding:0 3px" onclick="ptRemoveFromCart(\'' + s.id + '\',\'' + kEsc + '\')" title="Elimină din coș">✕</button></span>';
-          html += '<td class="' + (isCheapest ? 'cheapest-cell' : isSecond ? 'second-cell' : isThird ? 'third-cell' : '') + '">' + colwDivHtml('cmp','sup_'+s.id,130,supCellInner) + '</td>';
+          var rankCellClass = (isCheapest && rankHighlightOn.rank1) ? 'cheapest-cell' : (isSecond && rankHighlightOn.rank2) ? 'second-cell' : (isThird && rankHighlightOn.rank3) ? 'third-cell' : '';
+          html += '<td class="' + rankCellClass + '">' + colwDivHtml('cmp','sup_'+s.id,130,supCellInner) + '</td>';
         });
 
         if(!isColHidden('cmp','rrp')) html += '<td class="dim">' + colwDivHtml('cmp','rrp',110,rrpCellHtml(p, minLanded)) + '</td>';
@@ -1895,7 +1923,7 @@
                 '<span class="entry-actions"><button class="icon-link" onclick="ptEditEntry(\'' + kEsc + '\',\'' + r.sid + '\')">✏️</button><button class="icon-x" onclick="ptDeleteEntry(\'' + kEsc + '\',\'' + r.sid + '\')">✕</button></span></div>';
               return;
             }
-            var rankClass = (idx < 3 && e.price != null) ? ('rank-' + (idx+1)) : '';
+            var rankClass = (idx < 3 && e.price != null && rankHighlightOn['rank' + (idx+1)]) ? ('rank-' + (idx+1)) : '';
             if(editingEntry === rowId){
               html += '<div class="entry-row ' + rankClass + '"><b>' + supplierName(r.sid) + '</b>' +
                 '<input type="number" step="0.01" id="pt-edit-price-' + idSafe + '-' + r.sid + '" value="' + (e.price!=null?e.price:'') + '" style="width:65px;margin-bottom:0">' +
@@ -1966,6 +1994,12 @@
     });
   };
   window.ptToggleShowArchived = function(){ showArchived = !showArchived; renderCompare(); };
+  window.ptToggleFavorite = function(key){
+    var p = state.products[key];
+    if(!p) return;
+    p.favorite = !p.favorite;
+    save(); renderCompare();
+  };
   window.ptArchiveProduct = function(key){
     if(state.products[key]){ state.products[key].archived = true; expandedProductKey = null; }
     save(); renderCompare();
