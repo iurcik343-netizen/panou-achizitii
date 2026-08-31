@@ -1149,6 +1149,36 @@
       })(historyQueue.shift());
     }
   }
+  // ================= CÎMPURILE DE PREȚ DIN MOYSKLAD, PENTRU SINECOSTUL DIN COMENZI =================
+  // La fel ca poza/istoricul de mai sus: "Pret furnizor in $" e citit live din MoySklad, în fundal,
+  // fără să blocheze randarea tabelului de comandă — nu ținut doar în memorie locală, ca prețurile
+  // să reflecte mereu ce e ACUM în MoySklad, nu o valoare veche cache-uită pe disc.
+  var msAttrsCache = {};
+  var attrsQueue = [];
+  var attrsActive = 0;
+  var ATTRS_CONCURRENCY = 6;
+  function ensureMsAttrsLoaded(msId){
+    if(msAttrsCache[msId]) return;
+    msAttrsCache[msId] = 'loading';
+    attrsQueue.push(msId);
+    pumpAttrsQueue();
+  }
+  function pumpAttrsQueue(){
+    while(attrsActive < ATTRS_CONCURRENCY && attrsQueue.length){
+      (function(msId){
+        attrsActive++;
+        fetch(catalogProxyUrl('attrs=' + encodeURIComponent(msId))).then(function(r){ return r.json(); }).then(function(data){
+          msAttrsCache[msId] = (data && data.error) ? { error: data.detail || data.error } : { attrs: (data && data.attributes) || {} };
+        }).catch(function(err){
+          msAttrsCache[msId] = { error: err && err.message ? err.message : String(err) };
+        }).then(function(){
+          attrsActive--;
+          pumpAttrsQueue();
+          rerenderVisibleTabs();
+        });
+      })(attrsQueue.shift());
+    }
+  }
 
   // ================= CATALOG MOYSKLAD (tab separat) =================
   var catalogProducts = [];
@@ -3521,20 +3551,31 @@
     var discPct2 = minSid ? supplierDiscountPct(minSid) : 0;
     return { cost: min, usdPrice: minUsd, source: min !== null ? ('cel mai bun preț din listă curentă' + (discPct2 ? ' cu reducere ' + discPct2 + '%' : '')) : null };
   }
-  // Sinecostul unui produs ÎN CONTEXTUL unei comenzi anume trebuie să vină din factura ACELEI
-  // comenzi, nu din "ultima achiziție" — un cîmp global, comun tuturor comenzilor de la același
-  // furnizor, care putea reflecta prețul altei comenzi (mai recent importate), nu al celei
-  // deschise acum. La comenzi, avem oricum prețul exact, direct pe linia proprie (o.lines) — îl
-  // folosim mereu pe acela, fără să mai ghicim din istoricul global.
+  // Sinecostul unui produs ÎN CONTEXTUL unei comenzi anume, în ordinea deciziei luate cu
+  // utilizatorul: (1) corectare manuală — mereu prioritară, e o intervenție explicită; (2) "Pret
+  // furnizor in $" citit LIVE din MoySklad, dacă produsul e legat și cîmpul chiar are o valoare
+  // acolo — e întreținut manual de echipă și trebuie să rămînă sursa oficială; (3) prețul de pe
+  // factura ACESTEI comenzi, doar dacă MoySklad nu are încă nimic acolo (nu "ultima achiziție" — un
+  // cîmp global, comun tuturor comenzilor de la același furnizor, care putea reflecta prețul altei
+  // comenzi, mai recent importate, nu al celei deschise acum).
   function getOrderLineSinecost(o, key){
     var p = state.products[key];
     if(!o) return getSinecost(key);
     if(p.buyPriceOverrideUsd != null){
       return { cost: p.buyPriceOverrideUsd * state.settings.exchangeRate * o.coef, usdPrice: p.buyPriceOverrideUsd, source: 'corectat manual' };
     }
+    var msProd = state.settings.moyskladProxyUrl ? moyskladLookup(p) : null;
+    if(msProd){
+      ensureMsAttrsLoaded(msProd.id);
+      var cached = msAttrsCache[msProd.id];
+      if(cached && cached.attrs && cached.attrs[MS_PRICE_ATTRS.buyPriceUsd] != null){
+        var msUsd = cached.attrs[MS_PRICE_ATTRS.buyPriceUsd];
+        return { cost: msUsd * state.settings.exchangeRate * o.coef, usdPrice: msUsd, source: '„Pret furnizor in $" (MoySklad)' };
+      }
+    }
     var line = o.lines.find(function(l){ return l.key === key; });
     if(line && line.price != null){
-      return { cost: line.price * state.settings.exchangeRate * o.coef, usdPrice: line.price, source: 'factura acestei comenzi' };
+      return { cost: line.price * state.settings.exchangeRate * o.coef, usdPrice: line.price, source: 'factura acestei comenzi (MoySklad nu are „Pret furnizor in $" pentru acest produs)' };
     }
     return getSinecost(key, o.coef);
   }
