@@ -37,6 +37,7 @@ export default {
         return json({ error: 'Acțiune necunoscută.' }, 400, corsHeaders);
       }
       if (url.searchParams.has('transferdata')) return await handleTransferData(url, baseHeaders, corsHeaders);
+      if (url.searchParams.has('movehistory')) return await handleMoveHistory(url, baseHeaders, corsHeaders);
       if (url.searchParams.has('catalog')) return await handleCatalog(baseHeaders, corsHeaders);
       if (url.searchParams.has('history')) return await handleHistory(url.searchParams.get('history'), baseHeaders, corsHeaders);
       if (url.searchParams.has('imgurl')) return await handleImageUrl(url.searchParams.get('imgurl'), baseHeaders, corsHeaders);
@@ -255,6 +256,38 @@ async function handleTransferData(url, baseHeaders, corsHeaders) {
   }
 
   return json({ stores: Object.values(storesMap), products: Object.values(products), days, updatedAt: new Date().toISOString() }, 200, corsHeaders);
+}
+
+// ================= ISTORIC PEREMISENII (documente entity/move deja create, ca sursă de calibrare) =================
+// Doar citire — folosit pentru a studia ce a mutat depozitarul manual până acum (produs, cantitate,
+// sursă/destinație), ca fundal pentru ajustarea algoritmului de sugestii, nu pentru decizii automate.
+async function handleMoveHistory(url, baseHeaders, corsHeaders) {
+  const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, 500);
+  let rows;
+  try {
+    rows = await fetchAllPages(`${API}/entity/move?expand=positions,positions.assortment,sourceStore,targetStore&order=moment,desc`, baseHeaders, Math.min(limit, 100));
+  } catch (err) {
+    return json({ error: 'Eroare la citirea istoricului de peremisenii', detail: String(err) }, 502, corsHeaders);
+  }
+  rows = rows.slice(0, limit);
+  const moves = rows.map(m => {
+    const posRows = (m.positions && m.positions.rows) || [];
+    return {
+      id: m.id,
+      name: m.name,
+      moment: m.moment,
+      sourceStoreId: extractId(m.sourceStore && m.sourceStore.meta && m.sourceStore.meta.href),
+      sourceStoreName: (m.sourceStore && m.sourceStore.name) || null,
+      targetStoreId: extractId(m.targetStore && m.targetStore.meta && m.targetStore.meta.href),
+      targetStoreName: (m.targetStore && m.targetStore.name) || null,
+      lines: posRows.map(pos => ({
+        productId: extractId(pos.assortment && pos.assortment.meta && pos.assortment.meta.href),
+        name: (pos.assortment && pos.assortment.name) || null,
+        quantity: pos.quantity,
+      })),
+    };
+  });
+  return json({ moves, updatedAt: new Date().toISOString() }, 200, corsHeaders);
 }
 
 // ================= CREARE PEREMISENII (documente entity/move) =================
