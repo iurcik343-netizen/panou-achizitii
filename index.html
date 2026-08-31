@@ -3724,11 +3724,20 @@
     ptToast('Se importă prețurile din MoySklad (' + keys.length + ' produse)…', true);
     var imported = 0, failed = 0;
     try {
-      await runWithConcurrency(keys, 6, async function(k){
+      // Concurență redusă (de la 6 la 3) și o reîncercare tăcută după un scurt răgaz — proxy-ul
+      // MoySklad e adesea instabil sub multe cereri simultane (l-am observat direct: peste jumătate
+      // din produsele unei comenzi mari puteau eșua cu 502 la o singură încercare), iar un eșec
+      // trecător nu trebuie să lase produsul neatins pînă la un nou import manual complet.
+      await runWithConcurrency(keys, 3, async function(k){
         var p = state.products[k];
         var mp = moyskladLookup(p);
+        var attempt = function(){ return fetch(base + (base.indexOf('?')===-1?'?':'&') + 'attrs=' + encodeURIComponent(mp.id)); };
         try {
-          var res = await fetch(base + (base.indexOf('?')===-1?'?':'&') + 'attrs=' + encodeURIComponent(mp.id));
+          var res = await attempt();
+          if(!res.ok){
+            await new Promise(function(r){ setTimeout(r, 1200); });
+            res = await attempt();
+          }
           var data = await res.json();
           if(!res.ok || data.error || !data.attributes){ failed++; return; }
           var a = data.attributes;
@@ -3924,6 +3933,7 @@
       function clearIfUnreviewedZero(v, field){
         return (v === 0 && !isFieldReviewed(o, k, field)) ? null : v;
       }
+      p.sellPrice = clearIfUnreviewedZero(p.sellPrice, 'sell');
       p.secondaryPrice = clearIfUnreviewedZero(p.secondaryPrice, 'secondary');
       p.pachet1Price = clearIfUnreviewedZero(p.pachet1Price, 'pachet1');
       p.pachet2Price = clearIfUnreviewedZero(p.pachet2Price, 'pachet2');
