@@ -4097,10 +4097,14 @@
     box.innerHTML = buildOrderPricingTableHtml(o);
     var newWrap = box.querySelector('.table-wrap');
     if(newWrap){
+      // fitTableWrapHeight forțează un layout (getBoundingClientRect) — trebuie apelat ÎNAINTE
+      // să setăm scrollTop. Altfel browserul încă nu știe cît de înalt e conținutul abia inserat,
+      // consideră că nu există ce derula la o poziție atît de mare și ignoră silențios asignarea
+      // (rămîne 0) — exact asta provoca "saltul sus" la fiecare editare a unui preț mai jos în listă.
+      fitTableWrapHeight(newWrap);
       newWrap.scrollLeft = prevScrollLeft;
       newWrap.scrollTop = prevScrollTop;
       mountStickyHeader(newWrap);
-      fitTableWrapHeight(newWrap);
     }
     if(window.scrollY !== prevPageScrollY) window.scrollTo(0, prevPageScrollY);
     // DEBUG TEMPORAR — de scos după ce găsim cauza săriturii de scroll la editarea prețurilor.
