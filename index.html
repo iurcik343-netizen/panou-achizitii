@@ -4077,6 +4077,8 @@
       fitTableWrapHeight(newWrap);
     }
     if(window.scrollY !== prevPageScrollY) window.scrollTo(0, prevPageScrollY);
+    // DEBUG TEMPORAR — de scos după ce găsim cauza săriturii de scroll la editarea prețurilor.
+    console.log('[scrollDbg] renderOrderDetailTable done: prevPageScrollY=', prevPageScrollY, 'finalScrollY=', window.scrollY, 'activeElement=', document.activeElement && document.activeElement.tagName);
   }
   window.exportOrderPricingExcel = function(orderId){
     var o = state.orders.find(function(x){ return x.id === orderId; });
@@ -4593,6 +4595,21 @@
     }
     document.addEventListener('mouseup', endDrag);
     document.addEventListener('mouseleave', endDrag);
+  })();
+
+  // ================= DEBUG TEMPORAR — depistare salt de scroll la editare preț =================
+  // De scos după ce găsim cauza. Loghează un stack trace exact în momentul în care window.scrollY
+  // sare brusc spre 0 dintr-o poziție serioasă — asta ne arată direct ce funcție a provocat saltul.
+  (function(){
+    var lastY = window.scrollY;
+    window.addEventListener('scroll', function(){
+      var y = window.scrollY;
+      if(lastY > 150 && y < 20){
+        console.log('[scrollDbg] SALT LA TOP detectat: era ' + lastY + ', acum ' + y);
+        console.trace('[scrollDbg] stack la momentul saltului');
+      }
+      lastY = y;
+    });
   })();
 
   // ================= TABS WIRING =================
