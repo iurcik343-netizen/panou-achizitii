@@ -3764,6 +3764,16 @@
         } catch(e){ failed++; }
       });
       save(); renderOrderDetailTable();
+      // O actualizare masivă (zeci de produse deodată) poate lăsa fitTableWrapHeight să măsoare
+      // înălțimea disponibilă într-un moment nepotrivit — la fel ca la prima deschidere a unei
+      // comenzi mari, unde am reparat asta cu un dublu requestAnimationFrame. Repetăm aici aceeași
+      // recalculare, ca o a doua verificare, ca tabelul să nu rămînă blocat la înălțimea minimă.
+      requestAnimationFrame(function(){
+        requestAnimationFrame(function(){
+          var wrap = document.querySelector('#pt-order-detail-table .table-wrap');
+          if(wrap) fitTableWrapHeight(wrap);
+        });
+      });
       ptToast('Prețuri importate din MoySklad: ' + imported + ' produse' + (failed?(', ' + failed + ' eșuate'):'') + (skipped?(', ' + skipped + ' nelegate de MoySklad (sincronizează catalogul)'):'') + '. Verifică și corectează mai jos.', true);
     } finally {
       msPriceSyncBusy = false;
