@@ -4691,39 +4691,6 @@
     document.addEventListener('mouseleave', endDrag);
   })();
 
-  // ================= DEBUG TEMPORAR — depistare salt de scroll la editare preț =================
-  // De scos după ce găsim cauza. Loghează un stack trace la ORICE schimbare de scroll mai mare de
-  // 40px — nu doar la un salt spre 0 — ca să nu ratăm tiparul real dacă saltul nu ajunge chiar la 0.
-  (function(){
-    var lastY = window.scrollY;
-    window.addEventListener('scroll', function(){
-      var y = window.scrollY;
-      if(Math.abs(y - lastY) > 40){
-        console.log('[scrollDbg] PAGINA SCROLL SCHIMBAT: era ' + lastY + ', acum ' + y + ' @ ' + new Date().toISOString());
-        console.trace('[scrollDbg] stack la momentul schimbării (pagină)');
-      }
-      lastY = y;
-    });
-  })();
-  // La fel, dar pentru scrollul PROPRIU al tabelului (.table-wrap), separat de scrollul paginii —
-  // dacă tabelul își resetează singur poziția internă, window.scrollY n-ar arăta nimic anormal.
-  (function(){
-    var lastWrapY = {};
-    document.addEventListener('scroll', function(e){
-      var el = e.target;
-      if(!el || !el.classList || !el.classList.contains('table-wrap')) return;
-      if(!el.dataset.dbgId) el.dataset.dbgId = 'wrap' + Math.random().toString(36).slice(2, 7);
-      var id = el.dataset.dbgId;
-      var y = el.scrollTop;
-      var prev = lastWrapY[id];
-      if(prev !== undefined && Math.abs(y - prev) > 40){
-        console.log('[scrollDbg] TABLE-WRAP (' + id + ') SCROLL SCHIMBAT: era ' + prev + ', acum ' + y + ' @ ' + new Date().toISOString());
-        console.trace('[scrollDbg] stack la momentul schimbării (table-wrap)');
-      }
-      lastWrapY[id] = y;
-    }, true);
-  })();
-
   // ================= TABS WIRING =================
   var tabButtons = document.querySelectorAll('#pt-root .tab-btn');
   tabButtons.forEach(function(btn){
