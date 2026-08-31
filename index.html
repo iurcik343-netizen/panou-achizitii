@@ -429,7 +429,11 @@
       // serializează timestamp-urile puțin diferit (alt format de precizie/fus orar).
       var result = await supabaseClient.from('app_state').upsert({ id: STATE_ROW_ID, data: state, updated_at: nowIso }).select('updated_at').maybeSingle();
       if(result.error) ptToast('Salvarea nu a reușit: ' + result.error.message, false);
-      else { lastKnownUpdatedAt = (result.data && result.data.updated_at) || nowIso; staleWarningShown = false; saveHistorySnapshotIfDue(); }
+      // NU resetăm staleWarningShown aici — dacă altcineva/altă filă tot salvează în paralel,
+      // fiecare salvare a NOASTRĂ ar re-declanșa avertismentul, într-un potop de notificări
+      // identice. O dată e suficient să anunțe problema; soluția cerută (F5) oricum repornește
+      // sesiunea și flag-ul, ca să reapară dacă un conflict nou, real, apare mai târziu.
+      else { lastKnownUpdatedAt = (result.data && result.data.updated_at) || nowIso; saveHistorySnapshotIfDue(); }
     } catch(e){
       ptToast('Eroare la salvare: ' + (e && e.message ? e.message : 'necunoscută') + '. Modificarea ar putea să nu fi fost păstrată.', false);
     }
@@ -1426,6 +1430,7 @@
   var filteredKeysForArchive = [];
   var compareSortBy = 'name';
   var compareSortDir = 'asc';
+  var compareSortSupplierId = ''; // gol = "cel mai bun preț, orice furnizor" (comportamentul de dinainte)
   function pinnedBrandsList(){ return state.settings.pinnedBrands || (state.settings.pinnedBrands = []); }
   window.ptTogglePinSearch = function(){
     var term = searchTerm.trim();
@@ -1452,6 +1457,26 @@
     else { compareSortBy = field; compareSortDir = (field === 'stock') ? 'desc' : 'asc'; }
     renderCompare();
   };
+  window.ptClearCompareSort = function(){
+    compareSortBy = 'name'; compareSortDir = 'asc'; compareSortSupplierId = '';
+    renderCompare();
+  };
+  window.ptSetCompareSortSupplier = function(sid){
+    compareSortSupplierId = sid;
+    compareSortBy = 'price';
+    renderCompare();
+  };
+  // Preț folosit la sortarea "Preț cel mai bun": dacă e ales un furnizor anume, prețul e STRICT
+  // de la acel furnizor (null dacă nu are preț de listă acolo) — altfel, cel mai bun preț global,
+  // ca înainte.
+  function priceForSort(p){
+    if(compareSortSupplierId){
+      var e = p.bySupplier[compareSortSupplierId];
+      if(!e || e.price == null) return null;
+      return effectiveUnitCost(e, compareSortSupplierId);
+    }
+    return bestLandedFor(p);
+  }
   function sortBtnHtml(field, label){
     var active = compareSortBy === field;
     var arrow = active ? (compareSortDir === 'asc' ? '▲' : '▼') : '⇅';
@@ -1678,6 +1703,11 @@
       sortBtnHtml('name', 'Denumire') +
       (msOn ? sortBtnHtml('stock', 'Stoc MoySklad') : '') +
       sortBtnHtml('price', 'Preț cel mai bun') +
+      '<select id="pt-price-sort-supplier" onchange="ptSetCompareSortSupplier(this.value)" style="margin-bottom:0;width:auto;flex:none" title="Sortează după prețul de la un furnizor anume, în loc de cel mai bun preț global">' +
+      '<option value="">— orice furnizor —</option>' +
+      state.suppliers.slice().sort(function(a,b){ return a.name.localeCompare(b.name, undefined, {sensitivity:'base'}); }).map(function(s){ return '<option value="' + s.id + '" ' + (compareSortSupplierId===s.id?'selected':'') + '>' + escAttr(s.name) + '</option>'; }).join('') +
+      '</select>' +
+      ((compareSortBy !== 'name' || compareSortDir !== 'asc') ? '<button class="icon-x" onclick="ptClearCompareSort()" title="Anulează sortarea">✕</button>' : '') +
       '</div>';
     if(pinnedBrandsList().length){
       html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:-6px 0 12px">' +
@@ -1709,19 +1739,17 @@
     } else {
       // Produsele nou apărute la ultima actualizare a unui price list sar mereu în față,
       // indiferent de sortare — sortarea aleasă se aplică doar în interiorul fiecărui grup.
-      // Favoritele sar și mai în față, dar DOAR cît timp nu e activ niciun filtru (căutare sau
-      // brand) — altfel ar interfera cu rezultatele unei căutări explicite. Tocmai pentru că nu
-      // au filtru, listate din 8000+ produse, fără asta un favorit din finalul alfabetului n-ar
-      // apărea deloc în primele 200 afișate (vezi RENDER_LIMIT mai jos) — de-asta favoritele
-      // trebuie sortate ÎNAINTE de trunchiere, nu doar vizual "puse la vedere".
-      var noFilterActive = !searchTerm && !brandFilter;
+      // Favoritele sar și mai în față — ÎNTOTDEAUNA, indiferent dacă e activă o căutare sau un
+      // brand. Filtrul tot decide CE produse apar (un favorit care nu se potrivește căutării tot
+      // nu apare) — dar dintre cele care se potrivesc, favoritele rămân mereu primele. Asta e
+      // valabil și cînd nu ai niciun filtru: listate din 8000+ produse, fără asta un favorit din
+      // finalul alfabetului n-ar apărea deloc în primele 200 afișate (vezi RENDER_LIMIT mai jos) —
+      // de-asta favoritele trebuie sortate ÎNAINTE de trunchiere, nu doar vizual "puse la vedere".
       function newFirst(cmp){
         return function(a,b){
-          if(noFilterActive){
-            var fa = !!state.products[a].favorite, fb = !!state.products[b].favorite;
-            if(fa !== fb) return fa ? -1 : 1;
-            if(fa && fb) return state.products[a].displayName.localeCompare(state.products[b].displayName, undefined, {sensitivity:'base', numeric:true});
-          }
+          var fa = !!state.products[a].favorite, fb = !!state.products[b].favorite;
+          if(fa !== fb) return fa ? -1 : 1;
+          if(fa && fb) return state.products[a].displayName.localeCompare(state.products[b].displayName, undefined, {sensitivity:'base', numeric:true});
           var na = isRecentlyNew(state.products[a]), nb = isRecentlyNew(state.products[b]);
           if(na !== nb) return na ? -1 : 1;
           return cmp(a,b);
@@ -1736,7 +1764,7 @@
         }));
       } else if(compareSortBy === 'price'){
         var priceCache = {};
-        keys.forEach(function(k){ priceCache[k] = bestLandedFor(state.products[k]); });
+        keys.forEach(function(k){ priceCache[k] = priceForSort(state.products[k]); });
         keys.sort(newFirst(function(a,b){ return nullsLastCompare(priceCache[a], priceCache[b], compareSortDir); }));
       } else {
         keys.sort(newFirst(function(a,b){
@@ -3527,6 +3555,11 @@
         var data = await res.json();
         if(!res.ok || data.error || !data.attributes){ failed++; return; }
         var a = data.attributes;
+        // "Pret furnizor in $" e exact cîmpul în care scriem noi, la trimitere, sc.usdPrice —
+        // deci la import citim din ACELAȘI cîmp, în buyPriceOverrideUsd (nu în "Закупочная цена",
+        // care e doar sinecostul FINAL, deja cu curs+coeficient aplicat — s-ar recalcula oricum
+        // diferit dacă cursul/coeficientul s-au schimbat între timp; USD-ul brut e sursa reală).
+        if(a[MS_PRICE_ATTRS.buyPriceUsd] != null) p.buyPriceOverrideUsd = a[MS_PRICE_ATTRS.buyPriceUsd];
         if(a[MS_PRICE_ATTRS.sellPrice] != null) p.sellPrice = Math.round(a[MS_PRICE_ATTRS.sellPrice]);
         if(a[MS_PRICE_ATTRS.secondaryPrice] != null) p.secondaryPrice = Math.round(a[MS_PRICE_ATTRS.secondaryPrice]);
         if(a[MS_PRICE_ATTRS.pachet1] != null) p.pachet1Price = a[MS_PRICE_ATTRS.pachet1];
