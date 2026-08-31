@@ -3939,13 +3939,18 @@
         var cached = msAttrsCache[msProd.id];
         return (cached && cached.attrs && cached.attrs[attrId] != null) ? cached.attrs[attrId] : null;
       }
+      // Un 0 din MoySklad înseamnă "tipul de preț ăsta nu e completat acolo", nu "chiar 0" — la fel
+      // ca peste tot mai sus. Fără asta, un 0 real din MoySklad suprascria imediat, pe randarea
+      // următoare, o valoare tocmai calculată corect de cascada de la editarea Prețului de vânzare
+      // (care nu marca Pachet 2/3 ca "verificate" — de-aia păreau că "nu se schimbă niciodată",
+      // deși de fapt SE schimbau, doar ca să fie suprascrise la fracțiune de secundă).
       if(!isFieldReviewed(o, k, 'sell')){
         var msSell = msLive(MS_PRICE_ATTRS.sellPrice);
-        if(msSell != null) p.sellPrice = Math.round(msSell);
+        if(msSell) p.sellPrice = Math.round(msSell);
       }
       if(!isFieldReviewed(o, k, 'secondary')){
         var msSecondary = msLive(MS_PRICE_ATTRS.secondaryPrice);
-        if(msSecondary != null) p.secondaryPrice = Math.round(msSecondary);
+        if(msSecondary) p.secondaryPrice = Math.round(msSecondary);
       }
       // Pachet 1 NU intră în sincronizarea live — e prin definiție mereu exact 70% din Preț de
       // vânzare (fără procent propriu, fără excepții, cerut explicit așa). Dacă l-am sincroniza și
@@ -3955,11 +3960,11 @@
       // "nu se schimbă niciodată".
       if(!isFieldReviewed(o, k, 'pachet2')){
         var msP2 = msLive(MS_PRICE_ATTRS.pachet2);
-        if(msP2 != null) p.pachet2Price = msP2;
+        if(msP2) p.pachet2Price = msP2;
       }
       if(!isFieldReviewed(o, k, 'pachet3')){
         var msP3 = msLive(MS_PRICE_ATTRS.pachet3);
-        if(msP3 != null) p.pachet3Price = msP3;
+        if(msP3) p.pachet3Price = msP3;
       }
       // Prețul de vânzare vine din ce are produsul deja setat (import live de mai sus, sau editare
       // manuală); dacă tot n-are nimic, pornește de la adaosul implicit (dacă știm sinecostul),
