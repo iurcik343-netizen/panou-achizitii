@@ -567,7 +567,7 @@
   function recomputeAllLandedCosts(){
     Object.keys(state.products).forEach(function(k){
       var p = state.products[k];
-      Object.keys(p.bySupplier).forEach(function(sid){ var e = p.bySupplier[sid]; e.landedCost = landedCost(e.price, e.currency, e.freight); });
+      Object.keys(p.bySupplier).forEach(function(sid){ var e = p.bySupplier[sid]; if(e.price != null) e.landedCost = landedCost(e.price, e.currency, e.freight); });
     });
   }
   function supplierName(id){
@@ -695,8 +695,11 @@
     }
     return out;
   }
-  function upsertProduct(fields, sid, today){
+  function upsertProduct(fields, sid, today, skipPriceUpdate){
     // fields: {name, brand, quantity, barcode, altBarcodes, price, currency, freight, rrp, moq, packQty}
+    // skipPriceUpdate: folosit la importul de COMENZI (facturi) — prețul de acolo e prețul plătit
+    // pe ACEA factură, nu prețul curent din price list-ul furnizorului; nu trebuie să-l suprascrie
+    // niciodată (vezi doOrderImport și lastPurchase, care ține corect prețul de pe factură separat).
     // Dacă produsul există deja în MoySklad (potrivire pe barcode), denumirea de-acolo are prioritate — e deja curățată corect.
     if(fields.barcode && moyskladByBarcode[fields.barcode] && moyskladByBarcode[fields.barcode].name){
       fields.name = moyskladByBarcode[fields.barcode].name;
@@ -730,15 +733,21 @@
     var packQty = (fields.packQty !== null && fields.packQty !== undefined && !isNaN(fields.packQty) && fields.packQty > 0) ? fields.packQty : null;
     var weightGrams = (fields.weightGrams !== null && fields.weightGrams !== undefined && !isNaN(fields.weightGrams) && fields.weightGrams > 0) ? fields.weightGrams : null;
     if(existing){
-      wasIncrease = fields.price > existing.price;
-      existing.history.push({ date: today, price: fields.price, currency: fields.currency });
-      if(existing.history.length > 20) existing.history.splice(0, existing.history.length - 20);
-      existing.price = fields.price; existing.currency = fields.currency; existing.freight = fields.freight;
-      existing.landedCost = cost; existing.updatedAt = today;
+      if(!skipPriceUpdate){
+        wasIncrease = fields.price > existing.price;
+        existing.history.push({ date: today, price: fields.price, currency: fields.currency });
+        if(existing.history.length > 20) existing.history.splice(0, existing.history.length - 20);
+        existing.price = fields.price; existing.currency = fields.currency; existing.freight = fields.freight;
+        existing.landedCost = cost; existing.updatedAt = today;
+      }
       if(fields.moq !== null && fields.moq !== undefined && !isNaN(fields.moq)) existing.moq = fields.moq;
       if(packQty !== null) existing.packQty = packQty;
       if(weightGrams !== null) existing.weightGrams = weightGrams;
       if(fields.barcode) existing.barcode = fields.barcode;
+    } else if(skipPriceUpdate){
+      // Furnizor asociat doar printr-o comandă/factură — fără preț de listă real încă (rămâne
+      // null pînă cineva completează unul manual, sau apare un price list real de la furnizor).
+      prod.bySupplier[sid] = { price: null, currency: null, freight: fields.freight, landedCost: null, updatedAt: null, history: [], moq: (fields.moq !== null && fields.moq !== undefined && !isNaN(fields.moq)) ? fields.moq : null, packQty: packQty, weightGrams: weightGrams, barcode: fields.barcode || '' };
     } else {
       prod.bySupplier[sid] = { price: fields.price, currency: fields.currency, freight: fields.freight, landedCost: cost, updatedAt: today, history: [{ date: today, price: fields.price, currency: fields.currency }], moq: (fields.moq !== null && fields.moq !== undefined && !isNaN(fields.moq)) ? fields.moq : null, packQty: packQty, weightGrams: weightGrams, barcode: fields.barcode || '' };
     }
@@ -1405,6 +1414,7 @@
   function bestLandedFor(p){
     var min = null;
     Object.keys(p.bySupplier).forEach(function(sid){
+      if(p.bySupplier[sid].price == null) return; // fără preț real din listă — nu concurează la "cel mai bun preț"
       var uc = effectiveUnitCost(p.bySupplier[sid], sid);
       if(uc != null && !isNaN(uc) && (min === null || uc < min)) min = uc;
     });
@@ -1708,7 +1718,9 @@
         var distinctCosts = [];
         suppliersList.forEach(function(s){
           var e = p.bySupplier[s.id];
-          if(e){ var uc = effectiveUnitCost(e, s.id); if(distinctCosts.indexOf(uc) === -1) distinctCosts.push(uc); }
+          // e.price == null înseamnă "furnizor asociat, dar fără preț de listă real" (ex: produs adus
+          // doar printr-o comandă/factură) — nu trebuie să concureze la cel mai ieftin/locul 2/3.
+          if(e && e.price != null){ var uc = effectiveUnitCost(e, s.id); if(distinctCosts.indexOf(uc) === -1) distinctCosts.push(uc); }
         });
         distinctCosts.sort(function(a,b){ return a-b; });
         var minLanded = distinctCosts.length ? distinctCosts[0] : null;
@@ -1771,7 +1783,9 @@
 
         visibleSuppliers.forEach(function(s){
           var e = p.bySupplier[s.id];
-          if(!e){ html += '<td class="dim">' + colwDivHtml('cmp','sup_'+s.id,130,'—') + '</td>'; return; }
+          // e.price == null = furnizor asociat doar printr-o comandă/factură, fără preț de listă real
+          // (vezi doOrderImport) — se arată la fel ca "fără preț", nu ca 0.
+          if(!e || e.price == null){ html += '<td class="dim">' + colwDivHtml('cmp','sup_'+s.id,130,'—') + '</td>'; return; }
           var uc = effectiveUnitCost(e, s.id);
           var isCheapest = uc === minLanded;
           var isSecond = !isCheapest && uc === secondLanded;
@@ -1827,14 +1841,29 @@
           }
 
           var rows = Object.keys(p.bySupplier).map(function(sid){ return { sid: sid, e: p.bySupplier[sid] }; });
-          rows.sort(function(a,b){ return a.e.landedCost - b.e.landedCost; });
+          // Intrările fără preț real de listă (doar asociate printr-o comandă/factură — vezi
+          // doOrderImport) merg mereu la coadă, ca să nu "cîștige" fals un rang de top-3.
+          rows.sort(function(a,b){
+            if(a.e.landedCost == null && b.e.landedCost == null) return 0;
+            if(a.e.landedCost == null) return 1;
+            if(b.e.landedCost == null) return -1;
+            return a.e.landedCost - b.e.landedCost;
+          });
           rows.forEach(function(r, idx){
             var e = r.e;
-            var rankClass = idx < 3 ? ('rank-' + (idx+1)) : '';
             var rowId = k + '||' + r.sid;
+            if(e.price == null && editingEntry !== rowId){
+              var extrasStub = [];
+              if(e.lastPurchase) extrasStub.push('ultima achiziție: ' + fmt(e.lastPurchase.price) + ' ' + e.lastPurchase.currency + ' (' + e.lastPurchase.date + ')');
+              html += '<div class="entry-row"><div class="entry-main"><b>' + supplierName(r.sid) + '</b>' +
+                '<span class="entry-dim">fără preț de listă' + (extrasStub.length ? ' · ' + extrasStub.join(' · ') : '') + '</span></div>' +
+                '<span class="entry-actions"><button class="icon-link" onclick="ptEditEntry(\'' + kEsc + '\',\'' + r.sid + '\')">✏️</button><button class="icon-x" onclick="ptDeleteEntry(\'' + kEsc + '\',\'' + r.sid + '\')">✕</button></span></div>';
+              return;
+            }
+            var rankClass = (idx < 3 && e.price != null) ? ('rank-' + (idx+1)) : '';
             if(editingEntry === rowId){
               html += '<div class="entry-row ' + rankClass + '"><b>' + supplierName(r.sid) + '</b>' +
-                '<input type="number" step="0.01" id="pt-edit-price-' + idSafe + '-' + r.sid + '" value="' + e.price + '" style="width:65px;margin-bottom:0">' +
+                '<input type="number" step="0.01" id="pt-edit-price-' + idSafe + '-' + r.sid + '" value="' + (e.price!=null?e.price:'') + '" style="width:65px;margin-bottom:0">' +
                 '<select id="pt-edit-currency-' + idSafe + '-' + r.sid + '" style="margin-bottom:0;width:70px"><option value="USD" ' + (e.currency==='USD'?'selected':'') + '>USD</option><option value="MDL" ' + (e.currency==='MDL'?'selected':'') + '>MDL</option><option value="EUR" ' + (e.currency==='EUR'?'selected':'') + '>EUR</option><option value="KRW" ' + (e.currency==='KRW'?'selected':'') + '>KRW</option></select>' +
                 '<select id="pt-edit-freight-' + idSafe + '-' + r.sid + '" style="margin-bottom:0;width:95px">' + freightOptionsHtml(e.freight) + '</select>' +
                 '<span style="font-size:10px">MOQ</span><input type="number" id="pt-edit-moq-' + idSafe + '-' + r.sid + '" value="' + (e.moq||'') + '" style="width:55px;margin-bottom:0">' +
@@ -2257,7 +2286,10 @@
 
       var key = makeKey(barcode, name, quantity);
       var existedBefore = !!state.products[key] && !!(state.products[key].bySupplier[sid]);
-      upsertProduct({ name:name, brand:brand, quantity:quantity, barcode:barcode, altBarcodes:altBarcodes, price:price, currency:currency, freight:freight, rrp:isNaN(rrpVal)?null:rrpVal, moq:isNaN(moqVal)?null:moqVal, packQty:isNaN(packQtyVal)?null:packQtyVal, weightGrams:isNaN(weightVal)?null:weightVal }, sid, today);
+      // skipPriceUpdate=true: prețul de pe factura comenzii nu trebuie NICIODATĂ să înlocuiască
+      // prețul din price list-ul furnizorului (chiar dacă unul există deja) — sînt lucruri diferite.
+      // Prețul facturii rămâne separat, în lastPurchase (mai jos), exact ca sursă pentru sinecost.
+      upsertProduct({ name:name, brand:brand, quantity:quantity, barcode:barcode, altBarcodes:altBarcodes, price:price, currency:currency, freight:freight, rrp:isNaN(rrpVal)?null:rrpVal, moq:isNaN(moqVal)?null:moqVal, packQty:isNaN(packQtyVal)?null:packQtyVal, weightGrams:isNaN(weightVal)?null:weightVal }, sid, today, true);
       if(existedBefore) updated++; else added++;
 
       var finalKey = makeKey(barcode, name, quantity);
@@ -2987,7 +3019,7 @@
       var moqNote = it.e.moq ? ('<br><span style="font-size:10px;color:var(--text-soft)">MOQ: ' + it.e.moq + ' buc</span>') : '';
       var belowMoq = it.e.moq && qty && qty < it.e.moq;
       return '<tr><td style="font-family:var(--sans)">' + it.p.displayName + (it.p.quantity ? ' <span style="color:var(--text-soft)">(' + it.p.quantity + ')</span>' : '') + transitNote + '</td>' +
-        '<td>' + (it.p.brand||'—') + '</td><td>' + fmt(toUSD(it.e.price, it.e.currency)) + ' USD' + lastP + moqNote + '</td>' +
+        '<td>' + (it.p.brand||'—') + '</td><td>' + (it.e.price != null ? (fmt(toUSD(it.e.price, it.e.currency)) + ' USD') : 'fără preț de listă') + lastP + moqNote + '</td>' +
         '<td><input class="qty-input" type="number" min="0" value="' + qty + '" style="' + (belowMoq?'border-color:var(--bad)':'') + '" onchange="ptSetOrderQty(\'' + it.key.replace(/'/g,"\\'") + '\', this.value)">' +
         (belowMoq ? '<br><span style="font-size:10px;color:var(--bad)">sub MOQ (min ' + it.e.moq + ')</span>' : '') + '</td>' +
         '<td><button class="icon-x" onclick="ptSetOrderQty(\'' + it.key.replace(/'/g,"\\'") + '\', 0)" title="Elimină din coș">✕</button></td></tr>';
@@ -3005,7 +3037,7 @@
     }).slice(0, 8);
     if(matches.length === 0){ box.innerHTML = '<span style="font-size:11.5px;color:var(--text-soft)">Niciun rezultat</span>'; return; }
     box.innerHTML = matches.map(function(it){
-      return '<button class="icon-link" style="display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-top:4px" onclick="ptAddOrderProduct(\'' + it.key.replace(/'/g,"\\'") + '\')">' + it.p.displayName + ' — ' + fmt(toUSD(it.e.price, it.e.currency)) + ' USD</button>';
+      return '<button class="icon-link" style="display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-top:4px" onclick="ptAddOrderProduct(\'' + it.key.replace(/'/g,"\\'") + '\')">' + it.p.displayName + ' — ' + (it.e.price != null ? (fmt(toUSD(it.e.price, it.e.currency)) + ' USD') : 'fără preț de listă') + '</button>';
     }).join('');
   };
   window.ptAddOrderProduct = function(key){
@@ -3344,6 +3376,7 @@
     var min = null, minSid = null, minUsd = null;
     Object.keys(p.bySupplier).forEach(function(sid){
       var e = p.bySupplier[sid];
+      if(e.price == null) return; // fără preț de listă real (doar asociat printr-o comandă) — nu concurează
       var uc = effectiveLandedCost(e, sid);
       if(min === null || uc < min){ min = uc; minSid = sid; minUsd = toUSD(e.price, e.currency); var d = supplierDiscountPct(sid); if(d) minUsd = minUsd * (1 - d/100); }
     });
