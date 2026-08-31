@@ -963,6 +963,23 @@
     // pînă la o acțiune care re-randa manual tabelul comenzii.
     renderOrderDetailTable();
   }
+  // La o comandă mare (zeci-sute de produse), fiecare poză/istoric/atribut MoySklad care sosește
+  // din fundal (sau eșuează — un eșec cheamă rerenderVisibleTabs() la fel ca un succes) cheamă
+  // rerenderVisibleTabs(). Cu zeci de cereri concurente, asta însemna zeci de randări complete ale
+  // tabelului ÎN CÎTEVA MILISECUNDE — vizibil ca o pagină care "aiurește" cît timp se încarcă, și
+  // teren propice pentru o editare a utilizatorului să nimerească exact în mijlocul rafalei. Mai
+  // rău, fiecare din acele randări re-declanșează ensureMsAttrsLoaded/ensureImageUrl/
+  // ensureHistoryLoaded pentru tot ce nu e încă în cache — inclusiv produsele eșuate, eligibile
+  // pentru reîncercare — ceea ce bombardează din nou proxy-ul/MoySklad și alimentează rafala. Aici
+  // adunăm mai multe cereri terminate în aceeași fereastră scurtă de timp într-o singură randare.
+  var rerenderVisibleTabsTimer = null;
+  function rerenderVisibleTabsDebounced(){
+    if(rerenderVisibleTabsTimer) return;
+    rerenderVisibleTabsTimer = setTimeout(function(){
+      rerenderVisibleTabsTimer = null;
+      rerenderVisibleTabs();
+    }, 250);
+  }
   function setInnerHtmlKeepingFocus(el, html){
     var active = document.activeElement;
     var focusInfo = null;
@@ -1058,7 +1075,7 @@
           imgUrlCache[msProd.id] = 'done';
           imgActive--;
           pumpImgQueue();
-          rerenderVisibleTabs();
+          rerenderVisibleTabsDebounced();
         });
       })(imgQueue.shift());
     }
@@ -1146,7 +1163,7 @@
         }).then(function(){
           historyActive--;
           pumpHistoryQueue();
-          rerenderVisibleTabs();
+          rerenderVisibleTabsDebounced();
         });
       })(historyQueue.shift());
     }
@@ -1194,7 +1211,7 @@
         }).then(function(){
           attrsActive--;
           pumpAttrsQueue();
-          rerenderVisibleTabs();
+          rerenderVisibleTabsDebounced();
         });
       })(attrsQueue.shift());
     }
