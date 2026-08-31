@@ -397,7 +397,8 @@
   }
   window.addEventListener('beforeunload', flushPendingSave);
   window.addEventListener('pagehide', flushPendingSave);
-  async function doSaveNow(skipStaleCheck){
+  async function doSaveNow(skipStaleCheck, retriesLeft){
+    if(retriesLeft === undefined) retriesLeft = 2;
     try {
       // Verificăm dacă altcineva (alt tab, alt calculator) a salvat între timp — cu o singură
       // versiune partajată, o salvare de-a noastră ar suprascrie orbește modificările lor.
@@ -428,13 +429,26 @@
       // comparația de mai sus la salvarea următoare ar pica mereu fals-pozitiv, pentru că Postgres
       // serializează timestamp-urile puțin diferit (alt format de precizie/fus orar).
       var result = await supabaseClient.from('app_state').upsert({ id: STATE_ROW_ID, data: state, updated_at: nowIso }).select('updated_at').maybeSingle();
-      if(result.error) ptToast('Salvarea nu a reușit: ' + result.error.message, false);
+      if(result.error){
+        // Erori de tip timeout/conexiune sînt adesea trecătoare (o interogare paralelă care ținea
+        // rândul ocupat, o reconectare) — încercăm din nou de cîteva ori, tăcut, înainte să deranjăm
+        // utilizatorul cu un mesaj; modificarea lui nu trebuie pierdută doar pentru un blip trecător.
+        if(retriesLeft > 0){
+          await new Promise(function(r){ setTimeout(r, 1500); });
+          return doSaveNow(true, retriesLeft - 1);
+        }
+        ptToast('Salvarea nu a reușit: ' + result.error.message, false);
+      }
       // NU resetăm staleWarningShown aici — dacă altcineva/altă filă tot salvează în paralel,
       // fiecare salvare a NOASTRĂ ar re-declanșa avertismentul, într-un potop de notificări
       // identice. O dată e suficient să anunțe problema; soluția cerută (F5) oricum repornește
       // sesiunea și flag-ul, ca să reapară dacă un conflict nou, real, apare mai târziu.
       else { lastKnownUpdatedAt = (result.data && result.data.updated_at) || nowIso; saveHistorySnapshotIfDue(); }
     } catch(e){
+      if(retriesLeft > 0){
+        await new Promise(function(r){ setTimeout(r, 1500); });
+        return doSaveNow(true, retriesLeft - 1);
+      }
       ptToast('Eroare la salvare: ' + (e && e.message ? e.message : 'necunoscută') + '. Modificarea ar putea să nu fi fost păstrată.', false);
     }
   }
@@ -768,38 +782,57 @@
     }
     return wasIncrease;
   }
-  // ================= CURĂȚARE: PREȚURI SETATE GREȘIT DIN FACTURI, ÎNAINTE DE FIX =================
+  // ================= REPARARE: PREȚURI CONTAMINATE DE FACTURI, ÎNAINTE DE FIX =================
   // Înainte de fix, doOrderImport scria prețul facturii direct în bySupplier[sid].price — la fel
-  // ca un price list real. Nu există un marcaj separat pe intrările vechi ca să știm sigur care
-  // provin dintr-o factură — dar știm sigur INVERS: orice price list REAL, deja aplicat (nu în
-  // așteptare), își înregistrează produsele atinse în priceLists[].productKeys. Deci: dacă prețul
-  // curent al unui produs la un furnizor nu apare în NICIUN price list real al acelui furnizor,
-  // acel preț nu putea veni decît dintr-o comandă — îl resetăm la "fără preț", fără să mai fie
-  // nevoie să ștergi și să reimporți manual tot.
-  window.ptCleanupOrderOnlyPrices = function(){
-    if(!confirm('Verifici toate produsele și resetezi la "fără preț" orice preț de furnizor care NU provine dintr-un price list real (Excel) deja aplicat? Produsele cu preț de listă real rămân neatinse. Continui?')) return;
-    var coverage = {}; // supplierId -> { productKey: true }
-    state.priceLists.forEach(function(pl){
-      if(pl.pending) return;
-      if(!coverage[pl.supplierId]) coverage[pl.supplierId] = {};
-      (pl.productKeys||[]).forEach(function(k){ coverage[pl.supplierId][k] = true; });
+  // ca un price list real — chiar și peste un preț de listă deja existent, corect. Simpla verificare
+  // "a fost atins vreodată de un price list real" (prin priceLists[].productKeys) nu ajunge: un
+  // produs poate fi acoperit de un price list real ȘI, mai târziu, să-i fi fost suprascris prețul
+  // de o comandă — coverage-ul rămâne adevărat, dar valoarea curentă tot e cea din factură.
+  // Soluția corectă: REJUCĂM efectiv toate price list-urile reale deja aplicate, în ordine
+  // cronologică (folosind rândurile brute + maparea salvate pe fiecare), ca să restabilim prețul
+  // AUTENTIC al fiecărui produs acoperit — nu doar să bănuim că era corect. Ce rămâne neacoperit de
+  // niciun price list real, la final, chiar n-are preț de listă și se resetează la "fără preț".
+  window.ptRepairSupplierPrices = function(){
+    if(!confirm('Reconstruiești toate prețurile de furnizor din price list-urile reale deja aplicate (rejoacă fiecare listă, în ordine cronologică, peste orice preț ar fi fost suprascris greșit de o comandă)? Ce nu are niciun price list real rămâne "fără preț". Poate dura câteva secunde. Continui?')) return;
+    var realLists = state.priceLists.filter(function(pl){ return !pl.pending && pl.rows && pl.rows.length && pl.mapping; })
+      .slice().sort(function(a,b){ return String(a.importedAt||'').localeCompare(String(b.importedAt||'')); });
+    var touched = {}; // supplierId -> { productKey: true } — ce a fost efectiv reconstruit dintr-un price list real
+    realLists.forEach(function(pl){
+      var m = pl.mapping, sid = pl.supplierId;
+      var defCurrency = (state.importMappings[sid] && state.importMappings[sid].defCurrency) || 'USD';
+      if(!touched[sid]) touched[sid] = {};
+      pl.rows.forEach(function(r){
+        var name = m.name>=0 ? String(r[m.name]||'').trim() : '';
+        var price = parseFloat(String(m.price>=0 ? r[m.price] : '').replace(',','.'));
+        if(!name || isNaN(price)) return;
+        var barcodeList = m.barcode>=0 ? extractBarcodes(r[m.barcode]) : [];
+        var barcode = barcodeList.length ? barcodeList[0] : '';
+        var altBarcodes = barcodeList.slice(1);
+        var quantity = m.quantity>=0 ? String(r[m.quantity]||'').trim() : '';
+        var moqVal = m.moq>=0 ? parseInt(String(r[m.moq]).replace(/[^0-9]/g,''), 10) : NaN;
+        var packQtyVal = m.packQty>=0 ? parseInt(String(r[m.packQty]).replace(/[^0-9]/g,''), 10) : NaN;
+        var weightVal = m.weight>=0 ? parseFloat(String(r[m.weight]).replace(',','.')) : NaN;
+        var key = makeKey(barcode, name, quantity);
+        if(!state.products[key]) return; // produsul nu mai există (șters/unit între timp)
+        if(!touched[sid][key] && state.products[key].bySupplier[sid]) state.products[key].bySupplier[sid].history = [];
+        upsertProduct({ name: name, brand: pl.brand || '', quantity: quantity, barcode: barcode, altBarcodes: altBarcodes, price: price, currency: defCurrency, freight: 'sea', rrp: null, moq: isNaN(moqVal) ? null : moqVal, packQty: isNaN(packQtyVal) ? null : packQtyVal, weightGrams: isNaN(weightVal) ? null : weightVal }, sid, pl.importedAt || todayStr());
+        touched[sid][key] = true;
+      });
     });
-    var fixed = 0;
+    var restored = 0, cleared = 0;
     Object.keys(state.products).forEach(function(k){
       var p = state.products[k];
       Object.keys(p.bySupplier).forEach(function(sid){
         var e = p.bySupplier[sid];
+        if(touched[sid] && touched[sid][k]){ restored++; return; }
         if(e.price == null) return;
-        var covered = coverage[sid] && coverage[sid][k];
-        if(!covered){
-          e.price = null; e.currency = null; e.landedCost = null; e.history = [];
-          fixed++;
-        }
+        e.price = null; e.currency = null; e.landedCost = null; e.history = [];
+        cleared++;
       });
     });
     save(); renderCompare();
     var fb = document.getElementById('pt-cleanup-feedback');
-    var msg = 'Curățare finalizată: ' + fixed + ' preț(uri) fără price list real au fost resetate la "fără preț".';
+    var msg = 'Reparare finalizată: ' + restored + ' preț(uri) reconstruite din price list-uri reale, ' + cleared + ' resetate la "fără preț" (nu au niciun price list).';
     if(fb){ fb.className = 'feedback ok'; fb.textContent = msg; }
     ptToast(msg, true);
   };
@@ -3394,12 +3427,13 @@
         '<div class="row" style="margin-bottom:10px"><div><label>Tip transport</label><select onchange="ptSetOrderFreight(\'' + o.id + '\',this.value)">' + freightOptionsHtml(o.freight) + '</select></div>' +
         '<div><label>Coeficient comandă</label><input type="number" step="0.01" value="' + o.coef + '" onchange="ptSetOrderCoef(\'' + o.id + '\',this.value)"></div></div>' +
         buildRealFreightPanelHtml(o) +
-        '<div class="row" style="margin-bottom:10px"><div><label>Adaos implicit (%)</label><input type="number" step="1" id="pt-def-markup" value="' + state.settings.defaultMarkup + '"></div>' +
-        '<div style="display:flex;align-items:flex-end"><button class="secondary" id="pt-apply-markup" style="width:100%">Aplică la produsele fără preț setat</button></div>' +
-        '<div style="display:flex;align-items:flex-end"><button class="secondary" onclick="exportOrderPricingExcel(\'' + o.id + '\')" style="width:100%">Descarcă Excel</button></div></div>' +
-        (state.settings.moyskladProxyUrl ? ('<div class="row" style="margin-bottom:10px">' +
+        '<div class="row" style="margin-bottom:10px">' +
+        '<div><button class="secondary" style="width:100%" onclick="exportOrderPricingExcel(\'' + o.id + '\')">📊 Descarcă Excel</button></div>' +
+        (state.settings.moyskladProxyUrl ? (
           '<div><button class="secondary" id="pt-ms-import-btn" style="width:100%" onclick="ptImportPricesFromMoySklad(\'' + o.id + '\')" title="Aduce prețurile deja setate pe produs în MoySklad, ca punct de plecare">📥 Importă prețuri din MoySklad</button></div>' +
-          '<div><button class="secondary" id="pt-ms-push-btn" style="width:100%" onclick="ptPushPricesToMoySklad(\'' + o.id + '\')" title="Trimite prețurile de mai jos în cîmpurile personalizate ale produsului din MoySklad">📤 Trimite prețurile în MoySklad</button></div></div>') : '') +
+          '<div><button class="secondary" id="pt-ms-push-btn" style="width:100%" onclick="ptPushPricesToMoySklad(\'' + o.id + '\')" title="Trimite prețurile de mai jos în cîmpurile personalizate ale produsului din MoySklad">📤 Trimite prețurile în MoySklad</button></div>'
+        ) : '') +
+        '</div>' +
         '<div id="pt-order-detail-table">' + buildOrderPricingTableHtml(o) + '</div></div>';
       return '<div style="border:2px solid var(--accent);border-radius:10px;background:var(--panel);overflow:hidden;margin-bottom:2px">' + row + detail + '</div>';
     }).join('');
@@ -3411,24 +3445,6 @@
       // se întâmpla să se declanșeze un re-render (ex: la încărcarea imaginilor din MoySklad).
       var openWrap = document.querySelector('#pt-order-detail-table .table-wrap');
       if(openWrap){ mountStickyHeader(openWrap); fitTableWrapHeight(openWrap); }
-      var applyBtn = document.getElementById('pt-apply-markup');
-      var markupInput = document.getElementById('pt-def-markup');
-      if(applyBtn) applyBtn.addEventListener('click', function(){
-        var o = state.orders.find(function(x){ return x.id === openOrderId; });
-        if(!o) return;
-        orderProductKeys(o).forEach(function(k){
-          var p = state.products[k];
-          if(p.sellPrice == null){
-            var sc = getSinecost(k, o.coef);
-            if(sc.cost != null) p.sellPrice = suggestedPrice(sc.cost, state.settings.defaultMarkup);
-          }
-        });
-        save(); renderOrderDetailTable();
-      });
-      if(markupInput) markupInput.addEventListener('change', function(ev){
-        state.settings.defaultMarkup = parseFloat(ev.target.value) || state.settings.defaultMarkup;
-        save(); renderOrderDetailTable();
-      });
       var rfApply = document.getElementById('pt-rf-apply');
       if(rfApply) rfApply.addEventListener('click', function(){ ptApplyRealFreight(openOrderId); });
       var rfRate = document.getElementById('pt-rf-rate');
@@ -3505,6 +3521,23 @@
     var discPct2 = minSid ? supplierDiscountPct(minSid) : 0;
     return { cost: min, usdPrice: minUsd, source: min !== null ? ('cel mai bun preț din listă curentă' + (discPct2 ? ' cu reducere ' + discPct2 + '%' : '')) : null };
   }
+  // Sinecostul unui produs ÎN CONTEXTUL unei comenzi anume trebuie să vină din factura ACELEI
+  // comenzi, nu din "ultima achiziție" — un cîmp global, comun tuturor comenzilor de la același
+  // furnizor, care putea reflecta prețul altei comenzi (mai recent importate), nu al celei
+  // deschise acum. La comenzi, avem oricum prețul exact, direct pe linia proprie (o.lines) — îl
+  // folosim mereu pe acela, fără să mai ghicim din istoricul global.
+  function getOrderLineSinecost(o, key){
+    var p = state.products[key];
+    if(!o) return getSinecost(key);
+    if(p.buyPriceOverrideUsd != null){
+      return { cost: p.buyPriceOverrideUsd * state.settings.exchangeRate * o.coef, usdPrice: p.buyPriceOverrideUsd, source: 'corectat manual' };
+    }
+    var line = o.lines.find(function(l){ return l.key === key; });
+    if(line && line.price != null){
+      return { cost: line.price * state.settings.exchangeRate * o.coef, usdPrice: line.price, source: 'factura acestei comenzi' };
+    }
+    return getSinecost(key, o.coef);
+  }
   function suggestedPrice(cost, markupPct){ return cost * (1 + (markupPct||0)/100); }
   function pachet2Discount(markupPct){
     if(markupPct > 45) return 40;
@@ -3578,8 +3611,14 @@
     if(!o) return;
     var base = state.settings.moyskladProxyUrl;
     if(!base){ ptToast('MoySklad nu e configurat în Setări.', false); return; }
-    var keys = orderProductKeys(o).filter(function(k){ return moyskladLookup(state.products[k]); });
-    if(!keys.length){ ptToast('Niciun produs din comandă nu e legat de MoySklad.', false); return; }
+    var allProductKeys = orderProductKeys(o);
+    var keys = allProductKeys.filter(function(k){ return moyskladLookup(state.products[k]); });
+    // Produsele nelegate erau sărite silențios — utilizatorul vedea doar "N importate" și presupunea
+    // greșit că restul chiar AU fost aduse din MoySklad, cînd de fapt rămăseseră cu formula generică
+    // (adaos implicit), niciodată atinse. De obicei cauza e un catalog MoySklad local învechit —
+    // spunem clar cîte au fost sărite, ca să știe să sincronizeze catalogul din nou.
+    var skipped = allProductKeys.length - keys.length;
+    if(!keys.length){ ptToast('Niciun produs din comandă nu e legat de MoySklad — sincronizează catalogul MoySklad (tab Comparație produse) și încearcă din nou.', false); return; }
     msPriceSyncBusy = true;
     setMsSyncBtn('pt-ms-import-btn', true, '⏳ Se importă…', '📥 Importă prețuri din MoySklad');
     setMsSyncBtn('pt-ms-push-btn', true, '', '📤 Trimite prețurile în MoySklad');
@@ -3617,7 +3656,7 @@
         } catch(e){ failed++; }
       });
       save(); renderOrderDetailTable();
-      ptToast('Prețuri importate din MoySklad: ' + imported + ' produse' + (failed?(', ' + failed + ' eșuate'):'') + '. Verifică și corectează mai jos.', true);
+      ptToast('Prețuri importate din MoySklad: ' + imported + ' produse' + (failed?(', ' + failed + ' eșuate'):'') + (skipped?(', ' + skipped + ' nelegate de MoySklad (sincronizează catalogul)'):'') + '. Verifică și corectează mai jos.', true);
     } finally {
       msPriceSyncBusy = false;
       setMsSyncBtn('pt-ms-import-btn', false, '', '📥 Importă prețuri din MoySklad');
@@ -3630,8 +3669,10 @@
     if(!o) return;
     var base = state.settings.moyskladProxyUrl;
     if(!base){ ptToast('MoySklad nu e configurat în Setări.', false); return; }
-    var keys = orderProductKeys(o).filter(function(k){ return moyskladLookup(state.products[k]); });
-    if(!keys.length){ ptToast('Niciun produs din comandă nu e legat de MoySklad.', false); return; }
+    var allProductKeys2 = orderProductKeys(o);
+    var keys = allProductKeys2.filter(function(k){ return moyskladLookup(state.products[k]); });
+    var skippedPush = allProductKeys2.length - keys.length;
+    if(!keys.length){ ptToast('Niciun produs din comandă nu e legat de MoySklad — sincronizează catalogul MoySklad (tab Comparație produse) și încearcă din nou.', false); return; }
     var testNote = PUSH_ONLY_PACHET3_TEST ? ' TEST DE SIGURANȚĂ: se trimite doar cîmpul Pachet 3, restul rămîn neatinse.' : '';
     if(!confirm('Trimiți prețurile curente pentru ' + keys.length + ' produse direct în MoySklad?' + testNote + ' Suprascrie cîmpurile de preț existente acolo pentru aceste produse.')) return;
     msPriceSyncBusy = true;
@@ -3643,12 +3684,12 @@
       await runWithConcurrency(keys, 4, async function(k){
         var p = state.products[k];
         var mp = moyskladLookup(p);
-        var sc = getSinecost(k, o.coef);
+        var sc = getOrderLineSinecost(o, k);
         var pachete = computeOrderRowPachete(p, sc);
         var attrsToSet = [];
         if(!PUSH_ONLY_PACHET3_TEST){
           if(sc.cost != null) attrsToSet.push({ id: MS_PRICE_ATTRS.buyPriceMdl, value: Math.round(sc.cost) });
-          if(sc.usdPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.buyPriceUsd, value: sc.usdPrice });
+          if(sc.usdPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.buyPriceUsd, value: Math.round(sc.usdPrice * 100) / 100 });
           if(p.sellPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.sellPrice, value: p.sellPrice });
           if(p.secondaryPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.secondaryPrice, value: p.secondaryPrice });
           if(pachete.pachet1 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet1, value: Math.round(pachete.pachet1) });
@@ -3667,7 +3708,7 @@
           sent++;
         } catch(e){ failed++; if(!firstErr) firstErr = String(e); }
       });
-      ptToast('Prețuri trimise în MoySklad: ' + sent + ' produse' + (failed?(', ' + failed + ' eșuate — ' + firstErr):'') + '.', true);
+      ptToast('Prețuri trimise în MoySklad: ' + sent + ' produse' + (failed?(', ' + failed + ' eșuate — ' + firstErr):'') + (skippedPush?(', ' + skippedPush + ' nelegate de MoySklad (sincronizează catalogul)'):'') + '.', true);
     } finally {
       msPriceSyncBusy = false;
       setMsSyncBtn('pt-ms-import-btn', false, '', '📥 Importă prețuri din MoySklad');
@@ -3758,13 +3799,13 @@
       '</tr></thead><tbody>';
     keys.forEach(function(k){
       var p = state.products[k];
-      var sc = getSinecost(k, o.coef);
+      var sc = getOrderLineSinecost(o, k);
       var msProd = moyskladLookup(p);
       if(msProd){ ensureImageUrl(msProd); ensureHistoryLoaded(msProd.id); }
       // Prețul de vânzare vine din ce are produsul deja setat în aplicație; dacă nu are, pornește
       // de la adaosul implicit (dacă știm sinecostul), altfel 0 — se poate ajusta oricum manual.
       if(p.sellPrice == null){
-        p.sellPrice = (sc.cost != null) ? suggestedPrice(sc.cost, state.settings.defaultMarkup) : 0;
+        p.sellPrice = (sc.cost != null) ? Math.round(suggestedPrice(sc.cost, state.settings.defaultMarkup)) : 0;
         save();
       }
       var sellVal = (p.sellPrice != null) ? p.sellPrice : '';
@@ -3797,7 +3838,7 @@
         (sc.source ? '<br><span style="font-size:10px;color:var(--text-soft)">sinecost: '+sc.source+'</span>' : '<br><span style="font-size:10px;color:var(--bad)">fără cost cunoscut</span>') + '</td>' +
         (msOnInv && !isColHidden('inv','hist') ? '<td>' + colwDivHtml('inv','hist',220, msProd ? (historyPreviewHtml(msProd.id) || '<span class="dim" style="font-size:11px">—</span>') : '<span class="dim" style="font-size:11px">—</span>') + '</td>' : '') +
         (isColHidden('inv','qty') ? '' : '<td style="text-align:center"><input class="qty-input" style="' + inputWidthStyle(qtyMap[k]!=null?qtyMap[k]:'') + ';text-align:center;font-weight:700" type="number" step="1" value="' + (qtyMap[k] != null ? qtyMap[k] : '') + '" oninput="ptSizeInput(this)" onchange="ptSetOrderLineQty(\'' + kEsc + '\',this.value)"></td>') +
-        (isColHidden('inv','buy') ? '' : '<td><input class="qty-input" style="' + inputWidthStyle(sc.usdPrice!=null?fmt(sc.usdPrice):'') + ';' + reviewedBorder(o,k,'buy') + '" type="number" step="0.01" value="' + (sc.usdPrice!=null?sc.usdPrice:'') + '" oninput="ptSizeInput(this)" onchange="ptSetBuyPriceOverride(\'' + kEsc + '\',this.value)" title="Corectează dacă prețul de achiziție e greșit sau nesincronizat"></td>') +
+        (isColHidden('inv','buy') ? '' : '<td><input class="qty-input" style="' + inputWidthStyle(sc.usdPrice!=null?fmt(sc.usdPrice):'') + ';' + reviewedBorder(o,k,'buy') + '" type="number" step="0.01" value="' + (sc.usdPrice!=null?fmt(sc.usdPrice):'') + '" oninput="ptSizeInput(this)" onchange="ptSetBuyPriceOverride(\'' + kEsc + '\',this.value)" title="Corectează dacă prețul de achiziție e greșit sau nesincronizat"></td>') +
         '<td><input class="qty-input pt-sell-price-input" style="' + inputWidthStyle(sellVal) + ';' + reviewedBorder(o,k,'sell') + '" type="number" step="0.01" value="' + sellVal + '" oninput="ptSizeInput(this)" onchange="ptSetSellPrice(\'' + kEsc + '\',this.value)">' +
           '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">' + (markupPct!=null?('ad '+(markupPct>=0?'+':'')+Math.round(markupPct)+'%'):'—') + '</div></td>' +
         (isColHidden('inv','cost') ? '' : '<td>' + colwDivHtml('inv','cost',110, sc.cost!=null?fmt(sc.cost):'—') + '</td>') +
@@ -3846,7 +3887,7 @@
       p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100));
       p.pachet1Price = Math.round(p.sellPrice * 0.70); // Pachet 1 e mereu -30% fix, fără procent propriu.
       var ordForCoef = state.orders.find(function(x){ return x.id === openOrderId; });
-      var sc = getSinecost(key, ordForCoef ? ordForCoef.coef : null);
+      var sc = getOrderLineSinecost(ordForCoef, key);
       var markupPct = sc.cost ? (((p.sellPrice - sc.cost)/sc.cost)*100) : null;
       var pct2 = (p.pachet2Pct != null) ? p.pachet2Pct : (markupPct != null ? pachet2Discount(markupPct) : null);
       var pct3 = (p.pachet3Pct != null) ? p.pachet3Pct : (markupPct != null ? pachet3Discount(markupPct) : null);
@@ -3922,7 +3963,7 @@
     var qtyMap = orderLineQtyMap(o);
     orderProductKeys(o).forEach(function(k){
       var p = state.products[k];
-      var sc = getSinecost(k, o.coef);
+      var sc = getOrderLineSinecost(o, k);
       var markupPct = (p.sellPrice != null && sc.cost) ? (((p.sellPrice - sc.cost)/sc.cost)*100) : null;
       var pachet1 = null, pachet2 = null, pachet3 = null, disc2 = null, disc3 = null, alertFlag = '';
       if(p.sellPrice != null && markupPct != null){
@@ -4246,9 +4287,9 @@
       '<button class="secondary" id="pt-import-json-btn">⬆ Încarcă backup JSON</button>' +
       '<input type="file" id="pt-import-json" accept="application/json" style="display:none">' +
       '<div id="pt-backup-feedback"></div></div>';
-    html += '<div class="panel"><h2>Curățare prețuri fără price list real</h2>' +
-      '<div class="hint">Pînă de curând, importul unei comenzi (facturi) suprascria greșit prețul de listă al furnizorului cu prețul de pe factură, chiar și pentru produse care aveau deja un preț de listă real. Bug-ul e reparat pentru comenzile viitoare — butonul de mai jos corectează și datele deja afectate: pentru fiecare produs/furnizor la care prețul curent NU provine dintr-un price list real (Excel) aplicat, îl resetează la „fără preț" (—), în loc să șteargă și să reimporți tot manual. E sigur de rulat oricând — nu atinge produsele cu preț de listă real.</div>' +
-      '<button class="secondary" id="pt-cleanup-order-prices">🧹 Curăță prețurile fără price list real</button>' +
+    html += '<div class="panel"><h2>Repară prețuri de furnizor (contaminate de comenzi)</h2>' +
+      '<div class="hint">Pînă de curând, importul unei comenzi (facturi) suprascria greșit prețul de listă al furnizorului cu prețul de pe factură — chiar și peste un preț de listă real, deja corect. Bug-ul e reparat pentru comenzile viitoare — butonul de mai jos rejoacă efectiv toate price list-urile reale deja aplicate (în ordine cronologică), ca să restabilească prețul autentic al fiecărui produs pe care-l acoperă. Ce nu are niciun price list real rămâne „fără preț" (—), în loc să afișeze o valoare din altă comandă. E sigur de rulat oricând.</div>' +
+      '<button class="secondary" id="pt-cleanup-order-prices">🧹 Repară prețurile de furnizor</button>' +
       '<div id="pt-cleanup-feedback"></div></div>';
     html += '<div class="panel"><h2>Istoric versiuni</h2>' +
       '<div class="hint">Aplicația păstrează automat instantanee complete ale datelor (la cel mult 15 minute între ele) — dacă ștergi ceva din greșeală, poți reveni la un moment anterior. Nu e un „undo" pas cu pas, ci o listă de momente din timp la care te poți întoarce (iar de acolo poți reveni și înainte, dacă te răzgîndești).</div>' +
@@ -4333,7 +4374,7 @@
       e.target.value = '';
     });
     document.getElementById('pt-history-open').addEventListener('click', function(){ ptOpenHistoryPanel(); });
-    document.getElementById('pt-cleanup-order-prices').addEventListener('click', ptCleanupOrderOnlyPrices);
+    document.getElementById('pt-cleanup-order-prices').addEventListener('click', ptRepairSupplierPrices);
     document.getElementById('pt-signout').addEventListener('click', async function(){
       await supabaseClient.auth.signOut();
       location.reload();
