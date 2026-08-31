@@ -977,6 +977,15 @@
     if(rerenderVisibleTabsTimer) return;
     rerenderVisibleTabsTimer = setTimeout(function(){
       rerenderVisibleTabsTimer = null;
+      // Dacă utilizatorul tastează chiar acum într-un cîmp din tabelul comenzii, nu rescriem
+      // tabelul de sub el — o randare de fundal chiar în acel moment e exact coliziunea vizuală
+      // reclamată ("sare sus" la editare). Amânăm din nou; se reia singură imediat ce dă click
+      // alături (editarea lui declanșează oricum propria randare, imediată, separat de asta).
+      var active = document.activeElement;
+      if(active && active.tagName === 'INPUT' && active.closest && active.closest('#pt-order-detail-table')){
+        rerenderVisibleTabsDebounced();
+        return;
+      }
       rerenderVisibleTabs();
     }, 250);
   }
