@@ -3507,7 +3507,8 @@
         '<div><button class="secondary" style="width:100%" onclick="exportOrderPricingExcel(\'' + o.id + '\')">📊 Descarcă Excel</button></div>' +
         (state.settings.moyskladProxyUrl ? (
           '<div><button class="secondary" id="pt-ms-import-btn" style="width:100%" onclick="ptImportPricesFromMoySklad(\'' + o.id + '\')" title="Aduce prețurile deja setate pe produs în MoySklad, ca punct de plecare">📥 Importă prețuri din MoySklad</button></div>' +
-          '<div><button class="secondary" id="pt-ms-push-btn" style="width:100%" onclick="ptPushPricesToMoySklad(\'' + o.id + '\')" title="Trimite prețurile de mai jos în cîmpurile personalizate ale produsului din MoySklad">📤 Trimite prețurile în MoySklad</button></div>'
+          '<div><button class="secondary" id="pt-ms-push-btn" style="width:100%" onclick="ptPushPricesToMoySklad(\'' + o.id + '\')" title="Trimite prețurile de mai jos în cîmpurile personalizate ale produsului din MoySklad">📤 Trimite prețurile în MoySklad</button></div>' +
+          (o.reviewedFields && Object.keys(o.reviewedFields).length ? '<div><button class="secondary" style="width:100%" onclick="ptResetReviewedFields(\'' + o.id + '\')" title="Cîmpurile editate manual (marginea verde) nu se mai actualizează din MoySklad — folosește asta ca să le deblochezi din nou pe toate, dacă vrei un import curat">🔓 Deblochează cîmpurile verificate manual</button></div>' : '')
         ) : '') +
         '</div>' +
         '<div id="pt-order-detail-table">' + buildOrderPricingTableHtml(o) + '</div></div>';
@@ -3971,7 +3972,7 @@
         '</div>' +
         (orderMergeOpenKey === k ? ('<div style="margin-top:4px;max-width:230px"><input type="text" id="inv-merge-search-' + idSafe + '" placeholder="Scrie măcar 2 litere din numele produsului…" style="font-size:11px;margin:0" oninput="ptMergeSearch(\'' + kEsc + '\', this.value, \'inv-\')"><div id="inv-merge-results-' + idSafe + '"></div></div>') : '');
 
-      html += '<tr><td style="font-family:var(--sans)"><div style="display:flex;align-items:center;gap:4px">' +
+      html += '<tr data-rowkey="' + idSafe + '"><td style="font-family:var(--sans)"><div style="display:flex;align-items:center;gap:4px">' +
         (invImgUrl ? '<img src="' + escAttr(invImgUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0" onerror="this.style.visibility=\'hidden\'">' : '<div style="width:28px;height:28px;flex-shrink:0"></div>') +
         '<span class="pt-prodname-resizable" data-colw="inv:name" style="width:' + getColWidth('inv','name',230) + 'px;font-weight:700" title="' + jsAttrEscape(p.displayName) + '">' + p.displayName + (p.quantity?' <span style="color:var(--text-soft);font-weight:400">('+p.quantity+')</span>':'') + '</span>' +
         ' <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button>' +
@@ -4009,6 +4010,15 @@
   function reviewedBorder(o, key, field){
     return isFieldReviewed(o, key, field) ? 'border-color:var(--rank1);' : '';
   }
+  window.ptResetReviewedFields = function(orderId){
+    var o = state.orders.find(function(x){ return x.id === orderId; });
+    if(!o) return;
+    if(!confirm('Sigur deblochezi toate cîmpurile marcate ca „verificate manual" (marginea verde) pentru această comandă? Data viitoare cînd imporți/sincronizezi din MoySklad, TOATE prețurile — inclusiv cele corectate manual pînă acum — vor fi suprascrise cu valorile din MoySklad.')) return;
+    o.reviewedFields = {};
+    save();
+    renderOrderDetailTable();
+    ptToast('Cîmpurile au fost deblocate — poți importa din nou din MoySklad.', true);
+  };
   window.ptSetBuyPriceOverride = function(key, val){
     var p = state.products[key];
     if(!p) return;
@@ -4094,6 +4104,23 @@
     var prevWrap = box.querySelector('.table-wrap');
     var prevScrollLeft = prevWrap ? prevWrap.scrollLeft : 0;
     var prevScrollTop = prevWrap ? prevWrap.scrollTop : 0;
+    // Ancorăm pe RÎNDUL efectiv aflat sus în zona vizibilă (identificat prin data-rowkey), nu pe
+    // un simplu offset în pixeli — dacă înălțimea totală a conținutului diferă puțin între randări
+    // (un rînd cîștigă/pierde un avertisment, o valoare live sincronizată), un offset fix în pixeli
+    // nu mai corespunde aceluiași rînd (vizibil mai ales la ultimul rînd, unde ești oricum la
+    // capătul de jos: conținutul puțin mai scund trage instant poziția înapoi). Ancorînd pe rînd,
+    // acesta rămîne exact unde era indiferent cît s-a schimbat înălțimea altor rînduri din listă.
+    var anchorKey = null, anchorOffset = 0;
+    if(prevWrap){
+      var prevRows = prevWrap.querySelectorAll('tr[data-rowkey]');
+      for(var ri=0; ri<prevRows.length; ri++){
+        if(prevRows[ri].offsetTop >= prevScrollTop){
+          anchorKey = prevRows[ri].getAttribute('data-rowkey');
+          anchorOffset = prevRows[ri].offsetTop - prevScrollTop;
+          break;
+        }
+      }
+    }
     box.innerHTML = buildOrderPricingTableHtml(o);
     var newWrap = box.querySelector('.table-wrap');
     if(newWrap){
@@ -4103,17 +4130,11 @@
       // (rămîne 0) — exact asta provoca "saltul sus" la fiecare editare a unui preț mai jos în listă.
       fitTableWrapHeight(newWrap);
       newWrap.scrollLeft = prevScrollLeft;
-      newWrap.scrollTop = prevScrollTop;
+      var newRow = anchorKey ? newWrap.querySelector('tr[data-rowkey="' + anchorKey + '"]') : null;
+      newWrap.scrollTop = newRow ? Math.max(0, newRow.offsetTop - anchorOffset) : prevScrollTop;
       mountStickyHeader(newWrap);
     }
     if(window.scrollY !== prevPageScrollY) window.scrollTo(0, prevPageScrollY);
-    // DEBUG TEMPORAR — de scos după ce găsim cauza săriturii de scroll la editarea prețurilor.
-    console.log('[scrollDbg] renderOrderDetailTable done: prevPageScrollY=', prevPageScrollY, 'finalScrollY=', window.scrollY, 'activeElement=', document.activeElement && document.activeElement.tagName, 'prevWrapFound=', !!prevWrap, 'prevScrollTop=', prevScrollTop, 'newWrapFound=', !!newWrap, 'newScrollTopImediat=', newWrap && newWrap.scrollTop, 'newWrapSameNode=', newWrap === prevWrap);
-    if(newWrap){
-      requestAnimationFrame(function(){
-        console.log('[scrollDbg] ...după frame: newScrollTop=', newWrap.scrollTop, '(țintă era ' + prevScrollTop + ')');
-      });
-    }
   }
   window.exportOrderPricingExcel = function(orderId){
     var o = state.orders.find(function(x){ return x.id === orderId; });
