@@ -143,6 +143,7 @@
   #pt-root input[type=number].pt-pct-input::-webkit-outer-spin-button { -webkit-appearance: auto; margin: 0; }
   #pt-root input[type=number].pt-pct-input { -moz-appearance: auto; }
   #pt-root table.pt-order-pricing-table { width: max-content; min-width: 100%; }
+  #pt-root table.pt-order-pricing-table td { padding: 6px 10px; vertical-align: top; }
   #pt-root .pt-prodname-resizable { display: inline-block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 50px; max-width: 640px; vertical-align: middle; }
   #pt-root th.pt-prodname-th, #pt-root th.pt-resizable-th { position: relative; }
   #pt-root .pt-colresize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 10px; cursor: col-resize; border-right: 2px solid var(--border); }
@@ -3808,7 +3809,17 @@
     var qtyMap = orderLineQtyMap(o);
     if(keys.length === 0) return '<div class="panel empty">Niciun produs cunoscut din această comandă.</div>';
     var msOnInv = !!state.settings.moyskladProxyUrl;
-    var html = hiddenColsChipsHtml('inv', [ { col:'qty', label:'Cant. comandată' }, { col:'buy', label:'Achiziție (USD)' }, { col:'cost', label:'Sinecost (MDL)' } ].concat(msOnInv ? [{ col:'hist', label:'Istoric' }] : []));
+    var html = '';
+    // Prețurile de mai jos (Achiziție, Preț de vânzare, Pachetele) se sincronizează live cu
+    // MoySklad DOAR pentru produsele recunoscute din catalogul MoySklad ținut local, în browser —
+    // dacă acel catalog nu a fost sincronizat de curînd, produsele mai noi/schimbate nu sînt
+    // recunoscute și tac (rămîn pe formula de rezervă), fără nicio eroare vizibilă. Asta a cauzat
+    // confuzie repetată — avertizăm clar aici, în loc să lăsăm utilizatorul să creadă că e un bug.
+    var catalogStaleMs = catalogUpdatedAt ? (Date.now() - new Date(catalogUpdatedAt).getTime()) : null;
+    if(msOnInv && (!catalogProducts.length || (catalogStaleMs != null && catalogStaleMs > 24*3600*1000))){
+      html += '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:6px 12px;font-size:12px;margin-bottom:8px">⚠ Catalogul MoySklad ținut local ' + (catalogProducts.length ? ('e sincronizat de la ' + fmtDateDMY(catalogUpdatedAt)) : 'nu a fost sincronizat încă') + ' — produsele noi/schimbate în MoySklad de atunci nu vor fi recunoscute (prețurile lor rămân pe formula de rezervă, nu pe cea din MoySklad). Sincronizează din tab-ul Comparație produse (🔄 Actualizează MoySklad) înainte să imporți/trimiți prețuri.</div>';
+    }
+    html += hiddenColsChipsHtml('inv', [ { col:'qty', label:'Cant. comandată' }, { col:'buy', label:'Achiziție (USD)' }, { col:'cost', label:'Sinecost (MDL)' } ].concat(msOnInv ? [{ col:'hist', label:'Istoric' }] : []));
     // Fiecare coloană poate fi micșorată pînă aproape de dispariție (min 15px) — inclusiv peste
     // conținut — utilizatorul a cerut control total, nu un prag care oprea micșorarea prematur.
     // overflow-y:auto lipsea aici (spre deosebire de Comparație produse/Catalog) — fără el,
@@ -3867,10 +3878,12 @@
         var msSecondary = msLive(MS_PRICE_ATTRS.secondaryPrice);
         if(msSecondary != null) p.secondaryPrice = Math.round(msSecondary);
       }
-      if(!isFieldReviewed(o, k, 'pachet1')){
-        var msP1 = msLive(MS_PRICE_ATTRS.pachet1);
-        if(msP1 != null) p.pachet1Price = msP1;
-      }
+      // Pachet 1 NU intră în sincronizarea live — e prin definiție mereu exact 70% din Preț de
+      // vânzare (fără procent propriu, fără excepții, cerut explicit așa). Dacă l-am sincroniza și
+      // pe el din MoySklad, ar intra în conflict direct cu propria lui formulă fixă: la fiecare
+      // schimbare a Prețului de vânzare, formula îl recalculează corect, dar randarea următoare
+      // l-ar suprascrie înapoi cu valoarea (acum neactualizată) din MoySklad, dînd impresia că
+      // "nu se schimbă niciodată".
       if(!isFieldReviewed(o, k, 'pachet2')){
         var msP2 = msLive(MS_PRICE_ATTRS.pachet2);
         if(msP2 != null) p.pachet2Price = msP2;
@@ -4019,9 +4032,13 @@
     var o = state.orders.find(function(x){ return x.id === openOrderId; });
     var box = document.getElementById('pt-order-detail-table');
     if(!o || !box) return;
-    // La o comandă mare, faci scroll la dreapta/jos ca să ajungi la un cîmp, îl editezi, iar la
-    // Enter tabelul se reconstruiește și scroll-ul revenea la 0 — trebuia să repeți scroll-ul
-    // după fiecare editare. Reținem poziția din interiorul .table-wrap și o restaurăm după.
+    // La o comandă mare, faci scroll (pe pagină, ca să ajungi la tabel, ȘI în interiorul lui, ca să
+    // ajungi la un rând anume), editezi un cîmp, iar la schimbare tabelul se reconstruiește — dacă
+    // reținem doar scroll-ul din interiorul .table-wrap, pagina tot sare la început, pentru că
+    // înlocuirea de innerHTML poate scurta temporar pagina sub poziția curentă de scroll, iar
+    // browserul o "prinde" înapoi sus. Reținem AMBELE — scroll-ul paginii și cel din interiorul
+    // tabelului — și le restaurăm pe amîndouă după.
+    var prevPageScrollY = window.scrollY;
     var prevWrap = box.querySelector('.table-wrap');
     var prevScrollLeft = prevWrap ? prevWrap.scrollLeft : 0;
     var prevScrollTop = prevWrap ? prevWrap.scrollTop : 0;
@@ -4033,6 +4050,10 @@
       mountStickyHeader(newWrap);
       fitTableWrapHeight(newWrap);
     }
+    window.scrollTo(0, prevPageScrollY);
+    // Un al doilea "prindere" poate avea loc pe frame-ul următor (ex: după ce imaginile din rîndul
+    // curent își termină layout-ul) — repetăm o dată, după randare, ca să rămînă chiar acolo.
+    requestAnimationFrame(function(){ window.scrollTo(0, prevPageScrollY); });
   }
   window.exportOrderPricingExcel = function(orderId){
     var o = state.orders.find(function(x){ return x.id === orderId; });
