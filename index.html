@@ -252,7 +252,7 @@
     carts: {},
     importMappings: {},
     priceLists: [],
-    settings: { exchangeRate: 17.68, krwPerUsd: 1375, eurPerUsd: 0.92, coef: 1.4, ratesUpdatedAt: null, defaultMarkup: 100, hiddenMoyskladBrandIds: [], hiddenMoyskladProductIds: [], pinnedBrands: [] }
+    settings: { exchangeRate: 17.68, krwPerUsd: 1375, eurPerUsd: 0.92, coef: 1.4, ratesUpdatedAt: null, hiddenMoyskladBrandIds: [], hiddenMoyskladProductIds: [], pinnedBrands: [] }
   };
 
   var autoFetchFailed = false;
@@ -3637,7 +3637,6 @@
     }
     return getSinecost(key, o.coef);
   }
-  function suggestedPrice(cost, markupPct){ return cost * (1 + (markupPct||0)/100); }
   function pachet2Discount(markupPct){
     if(markupPct > 45) return 40;
     if(markupPct >= 30) return 35;
@@ -3986,13 +3985,10 @@
         var msP3 = msLive(MS_PRICE_ATTRS.pachet3);
         if(msP3) p.pachet3Price = msP3;
       }
-      // Prețul de vânzare vine din ce are produsul deja setat (import live de mai sus, sau editare
-      // manuală); dacă tot n-are nimic, pornește de la adaosul implicit (dacă știm sinecostul),
-      // altfel 0 — se poate ajusta oricum manual.
-      if(p.sellPrice == null){
-        p.sellPrice = (sc.cost != null) ? Math.round(suggestedPrice(sc.cost, state.settings.defaultMarkup)) : 0;
-        save();
-      }
+      // Prețul de vânzare vine STRICT din ce are produsul deja setat (import/sincronizare live de
+      // mai sus, sau editare manuală anterioară) — NU mai ghicim un preț din adaosul implicit cînd
+      // lipsește. Un preț "calculat" din adaosul generic arăta identic cu unul real, ascunzînd
+      // exact cazurile în care importul din MoySklad chiar eșuase (cerut explicit: fără ghicit).
       var sellVal = (p.sellPrice != null) ? p.sellPrice : '';
       var secondaryPct = (p.secondaryPct != null) ? p.secondaryPct : 15;
       if(p.secondaryPrice == null && p.sellPrice != null){ p.secondaryPrice = Math.round(p.sellPrice * (1 - secondaryPct/100)); save(); }
