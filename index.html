@@ -753,6 +753,41 @@
     }
     return wasIncrease;
   }
+  // ================= CURĂȚARE: PREȚURI SETATE GREȘIT DIN FACTURI, ÎNAINTE DE FIX =================
+  // Înainte de fix, doOrderImport scria prețul facturii direct în bySupplier[sid].price — la fel
+  // ca un price list real. Nu există un marcaj separat pe intrările vechi ca să știm sigur care
+  // provin dintr-o factură — dar știm sigur INVERS: orice price list REAL, deja aplicat (nu în
+  // așteptare), își înregistrează produsele atinse în priceLists[].productKeys. Deci: dacă prețul
+  // curent al unui produs la un furnizor nu apare în NICIUN price list real al acelui furnizor,
+  // acel preț nu putea veni decît dintr-o comandă — îl resetăm la "fără preț", fără să mai fie
+  // nevoie să ștergi și să reimporți manual tot.
+  window.ptCleanupOrderOnlyPrices = function(){
+    if(!confirm('Verifici toate produsele și resetezi la "fără preț" orice preț de furnizor care NU provine dintr-un price list real (Excel) deja aplicat? Produsele cu preț de listă real rămân neatinse. Continui?')) return;
+    var coverage = {}; // supplierId -> { productKey: true }
+    state.priceLists.forEach(function(pl){
+      if(pl.pending) return;
+      if(!coverage[pl.supplierId]) coverage[pl.supplierId] = {};
+      (pl.productKeys||[]).forEach(function(k){ coverage[pl.supplierId][k] = true; });
+    });
+    var fixed = 0;
+    Object.keys(state.products).forEach(function(k){
+      var p = state.products[k];
+      Object.keys(p.bySupplier).forEach(function(sid){
+        var e = p.bySupplier[sid];
+        if(e.price == null) return;
+        var covered = coverage[sid] && coverage[sid][k];
+        if(!covered){
+          e.price = null; e.currency = null; e.landedCost = null; e.history = [];
+          fixed++;
+        }
+      });
+    });
+    save(); renderCompare();
+    var fb = document.getElementById('pt-cleanup-feedback');
+    var msg = 'Curățare finalizată: ' + fixed + ' preț(uri) fără price list real au fost resetate la "fără preț".';
+    if(fb){ fb.className = 'feedback ok'; fb.textContent = msg; }
+    ptToast(msg, true);
+  };
 
   window.ptMergeSearch = function(key, query, boxPrefix){
     var idSafe = key.replace(/[^a-zA-Z0-9]/g,'_');
@@ -4072,6 +4107,10 @@
       '<button class="secondary" id="pt-import-json-btn">⬆ Încarcă backup JSON</button>' +
       '<input type="file" id="pt-import-json" accept="application/json" style="display:none">' +
       '<div id="pt-backup-feedback"></div></div>';
+    html += '<div class="panel"><h2>Curățare prețuri fără price list real</h2>' +
+      '<div class="hint">Pînă de curând, importul unei comenzi (facturi) suprascria greșit prețul de listă al furnizorului cu prețul de pe factură, chiar și pentru produse care aveau deja un preț de listă real. Bug-ul e reparat pentru comenzile viitoare — butonul de mai jos corectează și datele deja afectate: pentru fiecare produs/furnizor la care prețul curent NU provine dintr-un price list real (Excel) aplicat, îl resetează la „fără preț" (—), în loc să șteargă și să reimporți tot manual. E sigur de rulat oricând — nu atinge produsele cu preț de listă real.</div>' +
+      '<button class="secondary" id="pt-cleanup-order-prices">🧹 Curăță prețurile fără price list real</button>' +
+      '<div id="pt-cleanup-feedback"></div></div>';
     html += '<div class="panel"><h2>Istoric versiuni</h2>' +
       '<div class="hint">Aplicația păstrează automat instantanee complete ale datelor (la cel mult 15 minute între ele) — dacă ștergi ceva din greșeală, poți reveni la un moment anterior. Nu e un „undo" pas cu pas, ci o listă de momente din timp la care te poți întoarce (iar de acolo poți reveni și înainte, dacă te răzgîndești).</div>' +
       '<button class="secondary" id="pt-history-open">🕐 Arată istoricul</button>' +
@@ -4155,6 +4194,7 @@
       e.target.value = '';
     });
     document.getElementById('pt-history-open').addEventListener('click', function(){ ptOpenHistoryPanel(); });
+    document.getElementById('pt-cleanup-order-prices').addEventListener('click', ptCleanupOrderOnlyPrices);
     document.getElementById('pt-signout').addEventListener('click', async function(){
       await supabaseClient.auth.signOut();
       location.reload();
