@@ -77,6 +77,9 @@
   #pt-root input[type=text]:focus, #pt-root input[type=password]:focus, #pt-root input[type=number]:focus, #pt-root select:focus, #pt-root textarea:focus {
     outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
   }
+  /* Cifrele se citesc înaintea restului (REDESIGN.md regula 2b) — monospace, aliniate la dreapta.
+     Un text-align inline existent (ex: centrare pe cîmpul de cantitate) tot cîștigă, cum trebuie. */
+  #pt-root input[type=number] { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
   #pt-root .auth-link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; padding: 0; }
   #pt-root .auth-link:hover { color: var(--accent-dark); text-decoration: underline; }
   #pt-root textarea { font-family: var(--mono); font-size: 12px; min-height: 120px; resize: vertical; }
@@ -179,7 +182,7 @@
   #pt-root .preview-wrap table { font-size: 11.5px; }
   #pt-root .order-summary { position: sticky; top: 0; }
   #pt-root .order-line { display: flex; justify-content: space-between; font-size: 12.5px; padding: 5px 0; border-bottom: 1px dashed var(--border); font-family: var(--mono); }
-  #pt-root .order-total { display: flex; justify-content: space-between; font-size: 15px; font-weight: 700; padding-top: 10px; margin-top: 6px; border-top: 1px solid var(--border); font-family: var(--mono); }
+  #pt-root .order-total { display: flex; justify-content: space-between; font-size: 15px; font-weight: 700; padding-top: 10px; margin-top: 6px; border-top: 1px solid var(--border); font-family: var(--mono); font-variant-numeric: tabular-nums; }
   #pt-root .two-col { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
   #pt-root .two-col > .main { flex: 2; min-width: 320px; }
   #pt-root .two-col > .side { flex: 1; min-width: 260px; }
@@ -1530,9 +1533,9 @@
       html += '<td>' + colwDivHtml('cat','name',260,
         '<button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')" title="' + jsAttrEscape(p.name) + '">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button> <button class="icon-link" style="padding:0 3px" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.name) + '\')">🔍</button>' +
         '<div class="prod-meta">' + (p.barcodes && p.barcodes.length ? 'EAN ' + p.barcodes.join(', ') : 'fără barcode') + (p.article ? ' · art. ' + escAttr(p.article) : '') + '</div>') + '</td>';
-      if(!isColHidden('cat','price')) html += '<td class="dim">' + colwDivHtml('cat','price',110, p.buyPrice !== null ? fmt(p.buyPrice) + ' ' + (p.buyPriceCurrency||'') : '—') + '</td>';
-      if(!isColHidden('cat','stock')) html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','stock',80, p.stock !== null && p.stock !== undefined ? p.stock : 0) + '</td>';
-      if(!isColHidden('cat','days')) html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','days',110, p.stockDays !== null && p.stockDays !== undefined ? Math.round(p.stockDays) : '—') + '</td>';
+      if(!isColHidden('cat','price')) html += '<td class="dim">' + colwDivHtml('cat','price',110, p.buyPrice !== null ? '<span class="num">' + fmt(p.buyPrice) + '</span> ' + (p.buyPriceCurrency||'') : '—') + '</td>';
+      if(!isColHidden('cat','stock')) html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','stock',80, p.stock !== null && p.stock !== undefined ? '<span class="num">' + p.stock + '</span>' : '<span class="num">0</span>') + '</td>';
+      if(!isColHidden('cat','days')) html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','days',110, p.stockDays !== null && p.stockDays !== undefined ? '<span class="num">' + Math.round(p.stockDays) + '</span>' : '—') + '</td>';
       html += '</tr>';
       if(isExpanded){
         html += '<tr><td colspan="' + catColspan + '"><div class="detail-panel">' + historyBlockHtml(p.id) + '</div></td></tr>';
