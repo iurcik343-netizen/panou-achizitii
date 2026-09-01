@@ -3866,7 +3866,7 @@
     // Reducerea (-30% etc.) stătea inline lîngă cîmp doar la pachetul needitabil, dar jos la
     // celelalte — inconsecvent. Acum stă mereu jos, la fel ca "ad +Y%", indiferent de pachet.
     var pctControl = editablePct
-      ? ' <input class="qty-input pt-pct-input" style="width:40px;padding:9px 4px;text-align:center;' + borderStyle + '" type="number" step="1" title="Procent reducere" value="' + (effPct!=null?Math.round(effPct):'') + '" onchange="ptSetPachetPct(\'' + key + '\',' + idx + ',this.value)">%'
+      ? ' <input class="qty-input pt-pct-input" style="width:52px;padding:9px 2px;text-align:center;' + borderStyle + '" type="number" step="1" title="Procent reducere" value="' + (effPct!=null?Math.round(effPct):'') + '" onchange="ptSetPachetPct(\'' + key + '\',' + idx + ',this.value)">%'
       : '';
     var bottomParts = [];
     if(editablePct){
@@ -4044,7 +4044,7 @@
           '<div style="font-size:11px;color:var(--text-soft);margin-top:2px">' + (markupPct!=null?('ad '+(markupPct>=0?'+':'')+Math.round(markupPct)+'%'):'—') + '</div></td>' +
         (isColHidden('inv','cost') ? '' : '<td>' + colwDivHtml('inv','cost',110, sc.cost!=null?fmt(sc.cost):'—') + '</td>') +
         '<td><div style="display:flex;align-items:center;gap:4px;white-space:nowrap"><input class="qty-input pt-price-input" style="width:100%;' + reviewedBorder(o,k,'secondary') + '" type="number" step="0.01" value="' + secondaryVal + '" onchange="ptSetSecondaryPrice(\'' + kEsc + '\',this.value)">' +
-          '<input class="qty-input pt-pct-input" style="width:42px;padding:9px 4px;text-align:center;' + reviewedBorder(o,k,'secondary') + '" type="number" step="1" title="Procent reducere pentru prețul secundar" value="' + secondaryPct + '" onchange="ptSetSecondaryPct(\'' + kEsc + '\',this.value)">%</div></td>' +
+          '<input class="qty-input pt-pct-input" style="width:52px;padding:9px 2px;text-align:center;' + reviewedBorder(o,k,'secondary') + '" type="number" step="1" title="Procent reducere pentru prețul secundar" value="' + secondaryPct + '" onchange="ptSetSecondaryPct(\'' + kEsc + '\',this.value)">%</div></td>' +
         pkgCellHtml(kEsc, 1, pachet1, p.pachet1Price, 30, sc.cost, p.sellPrice, null, false, isFieldReviewed(o,k,'pachet1')) +
         pkgCellHtml(kEsc, 2, pachet2, p.pachet2Price, disc2, sc.cost, p.sellPrice, p.pachet2Pct, true, isFieldReviewed(o,k,'pachet2')) +
         pkgCellHtml(kEsc, 3, pachet3, p.pachet3Price, disc3, sc.cost, p.sellPrice, p.pachet3Pct, true, isFieldReviewed(o,k,'pachet3')) +
