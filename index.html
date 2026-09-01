@@ -3511,10 +3511,10 @@
         ORDER_STATUSES.map(function(s){ return '<option value="' + s + '" ' + (o.status === s ? 'selected' : '') + '>' + ORDER_STATUS_LABELS[s] + '</option>'; }).join('') +
         '</select>' + (overdue ? ' <span style="color:var(--bad);font-size:11px">· întârziat (est. ' + o.eta + ')</span>' : (o.eta && o.status !== 'received' ? ' <span style="color:var(--text-soft);font-size:11px">· sosire est. ' + o.eta + '</span>' : ''));
       var isOpen = openOrderId === o.id;
-      // Comanda deschisă capătă doar o RAMĂ colorată în jurul întregului bloc (rînd + panou) — nu
-      // un fundal colorat peste tot, care ar amesteca vizual toate cîmpurile/panourile din interior
-      // unele cu altele. Fundalul rămîne alb (var(--panel)), ca înăuntru totul să se citească normal.
-      var row = '<div class="history-row"' + (isOpen ? ' style="border-top:none;padding:8px 10px"' : '') + '><span>' + o.date + ' — ' + supplierName(o.supplierId) + ' (' + o.lines.length + ' produse) · ' + statusSelect + '</span>' +
+      // Comanda deschisă capătă tratamentul standard de "rînd deschis" (fundal tintat + bară de
+      // accent, regula 2a) DOAR pe rîndul-rezumat — nu și pe panoul de detaliu de dedesubt, ca să
+      // nu amestece vizual toate cîmpurile/panourile din interior unele cu altele.
+      var row = '<div class="history-row' + (isOpen ? ' row-open' : '') + '"' + (isOpen ? ' style="border-top:none;padding:8px 10px 8px 13px"' : '') + '><span' + (isOpen ? ' style="font-weight:600"' : '') + '>' + o.date + ' — ' + supplierName(o.supplierId) + ' (' + o.lines.length + ' produse) · ' + statusSelect + '</span>' +
         '<span style="font-family:var(--mono)">' + totalStr + (o.landedTotal ? (' · ~' + fmt(o.landedTotal) + ' MDL') : '') +
         ' <button class="icon-link" onclick="ptToggleOrderDetail(\'' + o.id + '\')">' + (isOpen ? '▲ Închide' : '▼ Deschide') + '</button>' +
         ' <button class="icon-x" onclick="ptDeleteOrder(\'' + o.id + '\')">✕</button></span></div>';
@@ -3532,7 +3532,7 @@
         ) : '') +
         '</div>' +
         '<div id="pt-order-detail-table">' + buildOrderPricingTableHtml(o) + '</div></div>';
-      return '<div style="border:2px solid var(--accent);border-radius:10px;background:var(--panel);overflow:hidden;margin-bottom:2px">' + row + detail + '</div>';
+      return '<div class="card" style="overflow:hidden;margin-bottom:2px">' + row + detail + '</div>';
     }).join('');
     if(openOrderId){
       // La prima deschidere a unei comenzi (nu la o re-randare ulterioară, care trece prin
