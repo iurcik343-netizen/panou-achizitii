@@ -1036,6 +1036,10 @@
   // calculăm exact cît spațiu mai e disponibil pînă la baza ferestrei și întindem tabelul pînă acolo.
   var tableWrapResizeBound = false;
   function fitTableWrapHeight(wrapEl){
+    // table-wrap-fixed (tabelul de prețuri din Comenzi) cere explicit o înălțime FIXĂ (70vh, setată
+    // direct în markup) — măsurarea dinamică de mai jos, în funcție de poziția de scroll a paginii
+    // în momentul randării, e exact ce făcea fereastra să pară "cînd prea mare, cînd prea mică".
+    if(wrapEl.classList.contains('table-wrap-fixed')) return;
     var rect = wrapEl.getBoundingClientRect();
     var available = window.innerHeight - rect.top - 8;
     wrapEl.style.maxHeight = Math.max(240, available) + 'px';
@@ -1055,7 +1059,10 @@
   // exact peste antetul real; are pointer-events:none ca butoanele de resize/ascundere din antetul
   // real sa ramina clickabile prin el.
   function mountStickyHeader(wrapEl){
-    var table = wrapEl.querySelector('table.cmp-table');
+    // pt-order-pricing-table (tabelul de prețuri din Comenzi) nu avea niciodată antet fix — căuta
+    // doar table.cmp-table (Comparație/Catalog), niciodată clasa reală a acestui tabel. La o listă
+    // lungă de produse, coloanele (Achiziție, Preț de vânzare etc.) dispăreau din vedere la scroll.
+    var table = wrapEl.querySelector('table.cmp-table, table.pt-order-pricing-table');
     var headRow = table && table.querySelector('thead tr');
     if(!headRow) return;
     var overlay = document.createElement('div');
@@ -3925,7 +3932,7 @@
     // să iasă vizual peste — scroll-ul real era al PAGINII întregi, nu al acestui wrap. De-asta
     // restaurarea scrollTop/scrollLeft de mai jos (în renderOrderDetailTable) nu avea niciun efect
     // real: acel scrollTop era mereu 0, iar pagina sărea la început la fiecare editare.
-    html += '<div class="table-wrap" style="overflow-y:auto"><table class="sticky-col-table pt-order-pricing-table"><thead><tr>' +
+    html += '<div class="table-wrap table-wrap-fixed" style="overflow-y:auto;max-height:70vh"><table class="sticky-col-table pt-order-pricing-table"><thead><tr>' +
       resizableThHtml('inv', 'name', 'Produs', 230, 150, 640, false) +
       (msOnInv && !isColHidden('inv','hist') ? resizableThHtml('inv', 'hist', 'Istoric', 220, 15, 500) : '') +
       (isColHidden('inv','qty') ? '' : resizableThHtml('inv', 'qty', 'Cant. comandată', 110, 15, 220)) +
