@@ -4,30 +4,56 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Panou achiziții</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   :root {
-    --bg: #F2F5F4;
-    --panel: #FFFFFF;
-    --border: #DCE4E1;
-    --text: #1E2624;
-    --text-soft: #71827D;
-    --accent: #0F6E56;
-    --accent-dark: #085041;
-    --accent-soft: #E1F5EE;
-    --rank1: #0F6E56; --rank1-bg: #E1F5EE;
-    --rank2: #1B6FA8; --rank2-bg: #E6F1FB;
-    --rank3: #A9762B; --rank3-bg: #FAEEDA;
-    --bad: #C23B3B; --bad-bg: #FBEAEA;
-    --mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+    /* suprafețe */
+    --bg: #e8ebf3; --panel: #f7f9fd; --panel-2: #eef1f9; --panel-3: #dce1ef;
+    --border: #d3d8e8; --border-soft: #e4e8f2;
+    /* text — contrast măsurat pe --panel: 14.4 / 5.4 / 4.6 : 1 */
+    --text: #23262f; --text-soft: #5f6472; --text-dim: #6d7280;
+    /* accent — din rampa sistemului Nocturne (accent-700 / -800 / -300) */
+    --accent: #5d5294; --accent-2: #423a6a; --accent-dim: #d2cefd;
+    --accent-tint: color-mix(in srgb, #5d5294 10%, transparent);
+    --accent-tint-2: color-mix(in srgb, #5d5294 5%, transparent);
+    /* alias-uri pentru numele vechi, ca să nu fie nevoie de find-replace pe tot fișierul */
+    --accent-dark: var(--accent-2); --accent-soft: var(--accent-tint);
+    /* rang și scumpire */
+    --rank1: #2f7a5b; --rank2: #3b6a99; --rank3: #8a6a2a; --bad: #a8514a;
+    --rank1-bg: color-mix(in srgb, var(--rank1) 12%, var(--panel));
+    --rank2-bg: color-mix(in srgb, var(--rank2) 11%, var(--panel));
+    --rank3-bg: color-mix(in srgb, var(--rank3) 12%, var(--panel));
+    --bad-bg: color-mix(in srgb, var(--bad) 11%, var(--panel));
+    /* tipografie, formă, adâncime */
+    --sans: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
     --serif: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
-    --sans: 'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
-    --radius: 12px;
-    --shadow-sm: 0 1px 3px rgba(15,110,86,0.07);
-    --shadow-md: 0 4px 16px rgba(15,110,86,0.12);
+    --radius: 14px; --radius-md: 8px; --radius-sm: 4px;
+    --shadow-sm: 0 1px 2px color-mix(in srgb, var(--text) 6%, transparent);
+    --shadow-md: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent);
   }
+  /* ================= REDESIGN — clase de reutilizat (REDESIGN.md secțiunea 3) ================= */
+  #pt-root .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); }
+  #pt-root .btn-primary { border: 1px solid var(--accent); color: var(--accent); background: transparent; border-radius: var(--radius-md); padding: 9px 14px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s ease; font-family: var(--sans); }
+  #pt-root .btn-primary:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  #pt-root .btn-primary:active { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  #pt-root .btn-outline { border: 1px solid var(--accent-dim); color: var(--accent); background: transparent; border-radius: var(--radius-md); padding: 9px 14px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: var(--sans); }
+  #pt-root .btn-quiet { border: 1px solid var(--border); color: var(--text-soft); background: transparent; border-radius: var(--radius-md); padding: 9px 14px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: var(--sans); }
+  #pt-root .chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); color: var(--text-soft); background: var(--panel); border-radius: 20px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; }
+  #pt-root .chip-active, #pt-root .chip.chip-active { border-color: var(--accent); color: var(--accent); background: var(--accent-tint-2); }
+  #pt-root .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  #pt-root .row-open { background: var(--accent-tint); box-shadow: inset 3px 0 0 var(--accent); }
+  #pt-root .row-open .prod-title-btn, #pt-root .row-open .pt-prodname-resizable { font-weight: 600; }
+  #pt-root .cell-rank1 { color: var(--rank1); }
+  #pt-root .cell-rank2 { color: var(--rank2); }
+  #pt-root .cell-rank3 { color: var(--rank3); }
+  #pt-root .meta { font-size: 10.5px; color: var(--text-dim); }
+  #pt-root .card :is(button, input, select, a.btn-primary, a.btn-outline, a.btn-quiet):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   * { box-sizing: border-box; }
   #pt-root { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; padding: 28px 20px 60px; }
   #pt-root .wrap { max-width: 1600px; margin: 0 auto; }
