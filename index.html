@@ -45,7 +45,7 @@
   #pt-root .btn-outline { border: 1px solid var(--accent-dim); color: var(--accent); background: transparent; border-radius: var(--radius-md); padding: 9px 14px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: var(--sans); }
   #pt-root .btn-quiet { border: 1px solid var(--border); color: var(--text-soft); background: transparent; border-radius: var(--radius-md); padding: 9px 14px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: var(--sans); }
   #pt-root .chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); color: var(--text-soft); background: var(--panel); border-radius: 20px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; }
-  #pt-root .chip-active, #pt-root .chip.chip-active { border-color: var(--accent); color: var(--accent); background: var(--accent-tint-2); }
+  #pt-root .chip-active, #pt-root .chip.chip-active, #pt-root .chip.active { border-color: var(--accent); color: var(--accent); background: var(--accent-tint-2); }
   #pt-root .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   #pt-root .row-open { background: var(--accent-tint); box-shadow: inset 3px 0 0 var(--accent); }
   #pt-root .row-open .prod-title-btn, #pt-root .row-open .pt-prodname-resizable { font-weight: 600; }
@@ -66,9 +66,6 @@
   #pt-root .tab-btn:hover { background: var(--accent-tint-2); color: var(--accent); }
   #pt-root .tab-btn.active { background: var(--accent-tint); color: var(--accent); font-weight: 600; }
   #pt-root .subtabs { display: flex; gap: 8px; margin-bottom: 16px; }
-  #pt-root .subtab-btn { background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; color: var(--text-soft); cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease; }
-  #pt-root .subtab-btn:hover { border-color: var(--accent); color: var(--accent-dark); }
-  #pt-root .subtab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
   #pt-root .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow-sm); }
   #pt-root .panel h2 { font-family: var(--sans); font-weight: 600; font-size: 17px; margin: 0 0 4px; }
   #pt-root .panel .hint { color: var(--text-soft); font-size: 12.5px; margin-bottom: 14px; line-height: 1.5; }
@@ -85,12 +82,7 @@
   #pt-root textarea { font-family: var(--mono); font-size: 12px; min-height: 120px; resize: vertical; }
   #pt-root .row { display: flex; gap: 12px; flex-wrap: wrap; }
   #pt-root .row > div { flex: 1; min-width: 130px; }
-  #pt-root button.primary { background: var(--accent); color: #fff; border: none; padding: 10px 18px; border-radius: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow-sm); transition: background .15s ease, box-shadow .15s ease, transform .1s ease; }
-  #pt-root button.primary:hover { background: var(--accent-dark); box-shadow: var(--shadow-md); }
-  #pt-root button.primary:active { transform: translateY(1px); }
-  #pt-root button.primary:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
-  #pt-root button.secondary { background: var(--panel); border: 1px solid var(--accent); color: var(--accent-dark); padding: 9px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s ease, box-shadow .15s ease; }
-  #pt-root button.secondary:hover { background: var(--accent-soft); box-shadow: var(--shadow-sm); }
+  #pt-root .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
   #pt-root button.icon-x { background: none; border: none; color: var(--text-soft); cursor: pointer; font-size: 12.5px; padding: 2px 6px; border-radius: 5px; transition: color .15s ease, background .15s ease; }
   #pt-root button.icon-x:hover { color: var(--bad); background: var(--bad-bg); }
   #pt-root button.icon-link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 11.5px; padding: 2px 6px; font-weight: 600; border-radius: 5px; transition: background .15s ease; }
@@ -220,7 +212,7 @@
       </div>
       <label id="pt-auth-password-label">Parolă</label>
       <input type="password" id="pt-auth-password" autocomplete="current-password">
-      <button class="primary" type="submit" id="pt-auth-submit" style="width:100%">Intră</button>
+      <button class="btn-primary" type="submit" id="pt-auth-submit" style="width:100%">Intră</button>
       <div style="text-align:center;margin-top:10px" id="pt-auth-forgot-row"><button type="button" class="auth-link" id="pt-auth-forgot">Am uitat parola</button></div>
       <div id="pt-auth-feedback" class="feedback" style="display:none"></div>
     </form>
@@ -380,7 +372,7 @@
     if(!hidden.length) return '';
     return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px">' +
       '<span style="font-size:11px;color:var(--text-soft);font-weight:600;text-transform:uppercase">🙈 Ascunse</span>' +
-      hidden.map(function(c){ return '<button class="subtab-btn" onclick="ptShowCol(\'' + table + '\',\'' + c.col + '\')">+ ' + escAttr(c.label) + '</button>'; }).join('') +
+      hidden.map(function(c){ return '<button class="chip" onclick="ptShowCol(\'' + table + '\',\'' + c.col + '\')">+ ' + escAttr(c.label) + '</button>'; }).join('') +
       '</div>';
   }
   function colwDivHtml(table, col, dflt, innerHtml){
@@ -514,7 +506,7 @@
     if(!rows.length){ el.innerHTML = '<div class="hint">Niciun instantaneu salvat încă — primul se creează automat la următoarea modificare.</div>'; return; }
     el.innerHTML = '<div class="table-wrap" style="max-height:320px"><table class="cmp-table"><tbody>' + rows.map(function(r){
       var d = new Date(r.created_at);
-      return '<tr><td>' + escAttr(d.toLocaleString('ro-RO')) + '</td><td style="text-align:right"><button class="secondary" onclick="ptRestoreHistorySnapshot(' + r.id + ')">↩ Restaurează</button></td></tr>';
+      return '<tr><td>' + escAttr(d.toLocaleString('ro-RO')) + '</td><td style="text-align:right"><button class="btn-outline" onclick="ptRestoreHistorySnapshot(' + r.id + ')">↩ Restaurează</button></td></tr>';
     }).join('') + '</tbody></table></div>';
   };
   window.ptRestoreHistorySnapshot = async function(id){
@@ -1423,7 +1415,7 @@
       return;
     }
     var html = '<div class="panel" style="padding:10px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">' +
-      '<button class="secondary" onclick="ptSyncCatalog()" ' + (catalogSyncing ? 'disabled' : '') + '>' + (catalogSyncing ? 'Se sincronizează…' : '🔄 Sincronizează catalogul MoySklad') + '</button>' +
+      '<button class="btn-outline" onclick="ptSyncCatalog()" ' + (catalogSyncing ? 'disabled' : '') + '>' + (catalogSyncing ? 'Se sincronizează…' : '🔄 Sincronizează catalogul MoySklad') + '</button>' +
       '<span style="font-size:11.5px;color:var(--text-soft)">' + (catalogUpdatedAt ? ('Ultima sincronizare: ' + new Date(catalogUpdatedAt).toLocaleString('ro-RO') + ' · ' + catalogProducts.length + ' produse') : 'Nesincronizat încă') + '</span>' +
       '</div>';
     if(!catalogProducts.length){
@@ -1444,7 +1436,7 @@
       if(catalogShowHiddenBrands){
         html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
           '<h2 style="margin:0">Branduri arhivate (' + hBrands.length + ')</h2>' +
-          '<button class="secondary" onclick="catalogShowHiddenBrands=false;renderCatalog()">◀ Înapoi la branduri</button></div>';
+          '<button class="btn-outline" onclick="catalogShowHiddenBrands=false;renderCatalog()">◀ Înapoi la branduri</button></div>';
         html += '<div class="panel" style="padding:0">';
         hBrands.forEach(function(bid){
           var fo = catalogFolders.find(function(f){ return f.id === bid; });
@@ -1452,7 +1444,7 @@
           var cnt = bid === NO_BRAND ? noBrandCount : (countByBrand[bid]||0);
           html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
             '<span>' + escAttr(bname) + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + cnt + ' produse)</span></span>' +
-            '<span class="entry-actions"><button class="secondary" onclick="ptUnhideBrand(\'' + bid + '\')">↺ Dezarhivează</button></span>' +
+            '<span class="entry-actions"><button class="btn-outline" onclick="ptUnhideBrand(\'' + bid + '\')">↺ Dezarhivează</button></span>' +
             '</div>';
         });
         if(!hBrands.length) html += '<div class="panel empty" style="border:none">Niciun brand arhivat.</div>';
@@ -1462,8 +1454,8 @@
       }
       html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
         '<h2 style="margin:0">Branduri (' + (catalogFolders.length - hBrands.length) + ')</h2>' +
-        '<span><button class="primary" onclick="ptAddBrand()">+ Adaugă brand</button> ' +
-        (hBrands.length ? '<button class="secondary" onclick="catalogShowHiddenBrands=true;renderCatalog()">🗄 Arhivate (' + hBrands.length + ')</button>' : '') + '</span></div>';
+        '<span><button class="btn-primary" onclick="ptAddBrand()">+ Adaugă brand</button> ' +
+        (hBrands.length ? '<button class="btn-outline" onclick="catalogShowHiddenBrands=true;renderCatalog()">🗄 Arhivate (' + hBrands.length + ')</button>' : '') + '</span></div>';
       html += '<div class="panel" style="padding:0">';
       var sortedFolders = catalogFolders.filter(function(f){ return hBrands.indexOf(f.id) === -1; }).sort(function(a,b){ return a.name.localeCompare(b.name, undefined, {sensitivity:'base'}); });
       sortedFolders.forEach(function(f){
@@ -1490,13 +1482,13 @@
     var hiddenInBrandCount = brandProductIds.filter(function(id){ return hProducts.indexOf(id) !== -1; }).length;
     html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
       '<div><button class="icon-link" onclick="ptBackToBrands()">◀ Toate brandurile</button> <h2 style="display:inline;margin-left:8px">' + escAttr(brandName) + '</h2></div>' +
-      '<span><button class="secondary" onclick="ptArchiveBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">📦 Arhivează tot brandul (' + brandProductIds.length + ')</button> ' +
+      '<span><button class="btn-outline" onclick="ptArchiveBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">📦 Arhivează tot brandul (' + brandProductIds.length + ')</button> ' +
       (selectedBrandId !== NO_BRAND ? '<button class="icon-link" onclick="ptRenameBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">✏️ redenumește</button>' : '') + '</span>' +
       '</div>';
 
     html += '<div class="search-row" style="display:flex;gap:8px;align-items:center"><input type="text" id="pt-catalog-search" placeholder="Caută după nume sau barcode…" value="' + catalogSearchTerm.replace(/"/g,'') + '" style="flex:1"></div>';
     if(hiddenInBrandCount > 0 || catalogShowHiddenProducts){
-      html += '<div style="margin-bottom:8px"><button class="secondary" onclick="catalogShowHiddenProducts=' + (!catalogShowHiddenProducts) + ';renderCatalog()">' + (catalogShowHiddenProducts ? '◀ Înapoi la produsele active' : '🗄 Arhivate în acest brand (' + hiddenInBrandCount + ')') + '</button></div>';
+      html += '<div style="margin-bottom:8px"><button class="btn-outline" onclick="catalogShowHiddenProducts=' + (!catalogShowHiddenProducts) + ';renderCatalog()">' + (catalogShowHiddenProducts ? '◀ Înapoi la produsele active' : '🗄 Arhivate în acest brand (' + hiddenInBrandCount + ')') + '</button></div>';
     }
     var q = normName(catalogSearchTerm);
     var filtered = catalogProducts.filter(function(p){
@@ -1517,7 +1509,7 @@
     if(selCount > 0 && !catalogShowHiddenProducts){
       html += '<div class="panel" style="padding:8px 14px;background:var(--accent-soft);border-color:var(--accent);display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' +
         '<span style="font-size:12.5px;color:var(--accent-dark)">' + selCount + ' selectate</span>' +
-        '<button class="secondary" onclick="ptBulkArchive()">📦 Arhivează selectate</button>' +
+        '<button class="btn-outline" onclick="ptBulkArchive()">📦 Arhivează selectate</button>' +
         '</div>';
     }
 
@@ -1533,7 +1525,7 @@
       var isExpanded = expandedCatalogId === p.id;
       ensureImageUrl(p);
       html += '<tr>';
-      html += '<td style="width:24px">' + (catalogShowHiddenProducts ? '<button class="secondary" style="padding:2px 6px;font-size:11px" onclick="ptUnhideProduct(\'' + p.id + '\')">↺</button>' : '<input type="checkbox" ' + (selectedProductIds[p.id]?'checked':'') + ' onchange="ptToggleProductSelect(\'' + p.id + '\')">') + '</td>';
+      html += '<td style="width:24px">' + (catalogShowHiddenProducts ? '<button class="btn-outline" style="padding:2px 6px;font-size:11px" onclick="ptUnhideProduct(\'' + p.id + '\')">↺</button>' : '<input type="checkbox" ' + (selectedProductIds[p.id]?'checked':'') + ' onchange="ptToggleProductSelect(\'' + p.id + '\')">') + '</td>';
       html += '<td style="width:40px">' + (p.imageUrl ? '<img src="' + escAttr(p.imageUrl) + '" style="width:32px;height:32px;object-fit:cover;border-radius:6px;display:block" onerror="this.style.display=\'none\'">' : '') + '</td>';
       html += '<td>' + colwDivHtml('cat','name',260,
         '<button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')" title="' + jsAttrEscape(p.name) + '">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button> <button class="icon-link" style="padding:0 3px" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.name) + '\')">🔍</button>' +
@@ -1617,7 +1609,7 @@
   function sortBtnHtml(field, label){
     var active = compareSortBy === field;
     var arrow = active ? (compareSortDir === 'asc' ? '▲' : '▼') : '⇅';
-    return '<button class="subtab-btn' + (active ? ' active' : '') + '" onclick="ptSetCompareSort(\'' + field + '\')" style="white-space:nowrap">' + label + ' ' + arrow + '</button>';
+    return '<button class="chip' + (active ? ' active' : '') + '" onclick="ptSetCompareSort(\'' + field + '\')" style="white-space:nowrap">' + label + ' ' + arrow + '</button>';
   }
   function bestLandedFor(p){
     var min = null;
@@ -1831,18 +1823,18 @@
       '<span style="display:flex;align-items:center;gap:6px"><label style="margin:0;font-size:11px">USD→MDL</label><input type="number" step="0.01" id="pt-quick-rate" value="' + state.settings.exchangeRate + '" style="width:70px;margin:0"></span>' +
       '<span style="display:flex;align-items:center;gap:6px"><label style="margin:0;font-size:11px">USD→KRW</label><input type="number" step="1" id="pt-quick-krw" value="' + state.settings.krwPerUsd + '" style="width:70px;margin:0"></span>' +
       '<span style="display:flex;align-items:center;gap:6px"><label style="margin:0;font-size:11px" title="Coeficientul folosit implicit pentru costul la destinație (transport + taxe etc.) — se poate suprascrie per comandă">Coeficient</label><input type="number" step="0.01" id="pt-quick-coef" value="' + state.settings.coef + '" style="width:70px;margin:0"></span>' +
-      (msOn ? ('<button class="secondary" onclick="ptSyncCatalog()" ' + (catalogSyncing ? 'disabled' : '') + '>' + (catalogSyncing ? 'Se actualizează…' : '🔄 Actualizează MoySklad') + '</button>' +
+      (msOn ? ('<button class="btn-outline" onclick="ptSyncCatalog()" ' + (catalogSyncing ? 'disabled' : '') + '>' + (catalogSyncing ? 'Se actualizează…' : '🔄 Actualizează MoySklad') + '</button>' +
         '<span style="font-size:11px;color:var(--text-soft)">' + (catalogUpdatedAt ? (new Date(catalogUpdatedAt).toLocaleString('ro-RO') + ' · ' + catalogProducts.length + ' produse') : 'Nesincronizat încă') + '</span>') : '') +
       '</div>';
     var isPinned = searchTerm && pinnedBrandsList().indexOf(searchTerm) !== -1;
     html += '<div class="search-row"><input type="text" id="pt-search" placeholder="Caută după nume, brand, barcode sau mărime…" value="' + searchTerm.replace(/"/g,'') + '" style="flex:2">' +
-      ((searchTerm || brandFilter) ? '<button class="secondary" onclick="ptClearFilters()" title="Golește căutarea și filtrul de brand" style="white-space:nowrap;flex:none">✕ curăță filtrele</button>' : '') +
-      '<button class="subtab-btn' + (isPinned ? ' active' : '') + '" onclick="ptTogglePinSearch()" title="' + (isPinned ? 'Fixată — scoate din acces rapid' : 'Fixează această căutare ca acces rapid') + '" style="flex:none">📌</button>' +
+      ((searchTerm || brandFilter) ? '<button class="btn-outline" onclick="ptClearFilters()" title="Golește căutarea și filtrul de brand" style="white-space:nowrap;flex:none">✕ curăță filtrele</button>' : '') +
+      '<button class="chip' + (isPinned ? ' active' : '') + '" onclick="ptTogglePinSearch()" title="' + (isPinned ? 'Fixată — scoate din acces rapid' : 'Fixează această căutare ca acces rapid') + '" style="flex:none">📌</button>' +
       '<select id="pt-brand-filter" style="flex:1;margin-bottom:0"><option value="">Toate brandurile' + (allBrands.length ? ' (' + allBrands.length + ')' : '') + '</option>' +
       allBrands.map(function(b){ return '<option value="' + escAttr(b) + '" ' + (brandFilter===b?'selected':'') + '>' + b + '</option>'; }).join('') +
       '</select>' +
-      ((!showArchived && (searchTerm || brandFilter) && keys.length > 0) ? '<button class="secondary" onclick="ptArchiveFilteredProducts()" style="white-space:nowrap">📦 Arhivează toate din acest filtru (' + keys.length + ')</button>' : '') +
-      '<button class="subtab-btn ' + (showArchived?'active':'') + '" onclick="ptToggleShowArchived()" style="white-space:nowrap">📦 Arhivate (' + archivedCount + ')</button>' +
+      ((!showArchived && (searchTerm || brandFilter) && keys.length > 0) ? '<button class="btn-outline" onclick="ptArchiveFilteredProducts()" style="white-space:nowrap">📦 Arhivează toate din acest filtru (' + keys.length + ')</button>' : '') +
+      '<button class="chip ' + (showArchived?'active':'') + '" onclick="ptToggleShowArchived()" style="white-space:nowrap">📦 Arhivate (' + archivedCount + ')</button>' +
       '<span style="width:1px;align-self:stretch;background:var(--border);flex:none"></span>' +
       '<span style="font-size:11px;color:var(--text-soft);font-weight:600;text-transform:uppercase;flex:none">Sortare</span>' +
       sortBtnHtml('name', 'Denumire') +
@@ -1857,7 +1849,7 @@
     if(pinnedBrandsList().length){
       html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:-6px 0 12px">' +
         pinnedBrandsList().slice().sort(function(a,b){ return a.localeCompare(b, undefined, {sensitivity:'base'}); }).map(function(term){
-          return '<span class="subtab-btn ' + (searchTerm === term ? 'active' : '') + '" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px" onclick="ptApplyPinnedSearch(\'' + jsAttrEscape(term) + '\')">📌 ' + escAttr(term) +
+          return '<span class="chip ' + (searchTerm === term ? 'active' : '') + '" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px" onclick="ptApplyPinnedSearch(\'' + jsAttrEscape(term) + '\')">📌 ' + escAttr(term) +
             '<button class="icon-x" style="padding:0 2px" onclick="event.stopPropagation();ptUnpinSearch(\'' + jsAttrEscape(term) + '\')" title="Scoate din fixate">✕</button></span>';
         }).join('') +
         '</div>';
@@ -1865,12 +1857,12 @@
     if(mergeSourceKey && state.products[mergeSourceKey]){
       html += '<div class="panel" style="padding:8px 14px;background:var(--accent-soft);border-color:var(--accent);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">' +
         '<span style="font-size:12.5px;color:var(--accent-dark)">🔀 Unești <b>' + state.products[mergeSourceKey].displayName + '</b> — apasă pe orice alt produs din listă (poți și căuta) ca să-l unești cu el.</span>' +
-        '<button class="secondary" onclick="ptCancelMergeMode()">Anulează</button></div>';
+        '<button class="btn-outline" onclick="ptCancelMergeMode()">Anulează</button></div>';
     }
     var carts = activeCartsSummary();
     if(carts.length){
       html += '<div class="legend" style="margin-bottom:10px">' + carts.map(function(c){
-        return '<button class="subtab-btn" style="background:var(--accent-soft);border-color:var(--accent);color:var(--accent-dark)" onclick="ptGoToOrderCart(\'' + c.sid + '\')">🛒 ' + supplierName(c.sid) + ' (' + c.count + ')</button>';
+        return '<button class="chip" style="background:var(--accent-soft);border-color:var(--accent);color:var(--accent-dark)" onclick="ptGoToOrderCart(\'' + c.sid + '\')">🛒 ' + supplierName(c.sid) + ' (' + c.count + ')</button>';
       }).join('') + '</div>';
     }
     function legendItem(rank, color, label){
@@ -2241,8 +2233,8 @@
       return;
     }
     var html = '<div class="subtabs">' +
-      '<button class="subtab-btn ' + (addSubtab==='excel'?'active':'') + '" onclick="ptSetAddSubtab(\'excel\')">Fișier Excel (listă preț)</button>' +
-      '<button class="subtab-btn ' + (addSubtab==='paste'?'active':'') + '" onclick="ptSetAddSubtab(\'paste\')">Lipește text</button></div>';
+      '<button class="chip ' + (addSubtab==='excel'?'active':'') + '" onclick="ptSetAddSubtab(\'excel\')">Fișier Excel (listă preț)</button>' +
+      '<button class="chip ' + (addSubtab==='paste'?'active':'') + '" onclick="ptSetAddSubtab(\'paste\')">Lipește text</button></div>';
     html += '<div id="pt-add-body"></div>';
     el.innerHTML = html;
     if(addSubtab === 'excel') renderExcelImport();
@@ -2305,7 +2297,7 @@
     if(state.settings.moyskladProxyUrl){
       html += '<label>Sau importă direct din comanda MoySklad (Заказы поставщикам)</label>' +
         '<div class="row"><div style="flex:2"><input type="text" id="pt-ord-ms-number" placeholder="ex: 00117" style="margin-bottom:0"></div>' +
-        '<div style="flex:1"><button class="secondary" id="pt-ord-ms-fetch" style="width:100%">Adu comanda</button></div></div>' +
+        '<div style="flex:1"><button class="btn-outline" id="pt-ord-ms-fetch" style="width:100%">Adu comanda</button></div></div>' +
         '<div id="pt-ord-ms-feedback"></div>';
     }
     html += '<div id="pt-ord-mapping"></div>';
@@ -2424,7 +2416,7 @@
       '<div><label>Tip transport</label><select id="pt-ord-freight">' + freightOptionsHtml('sea') + '</select></div>' +
       '<div><label>Coeficient comandă</label><input type="number" step="0.01" id="pt-ord-coef" value="' + state.settings.coef + '"></div></div>';
     html += '<label>Data estimată de sosire (opțional)</label><input type="date" id="pt-ord-eta">';
-    html += '<button class="primary" id="pt-ord-submit">Înregistrează comanda</button><div id="pt-ord-feedback"></div>';
+    html += '<button class="btn-primary" id="pt-ord-submit">Înregistrează comanda</button><div id="pt-ord-feedback"></div>';
     wrap.innerHTML = html;
 
     ORDER_FIELD_DEFS.forEach(function(f){
@@ -2767,7 +2759,7 @@
         var isEditingThis = editingPriceListId === pl.id;
         var row = '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
           '<span>' + escAttr(pl.fileName) + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + (pl.rows ? pl.rows.length : 0) + ' rânduri</span></span>' +
-          '<span>' + (isEditingThis ? '<button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button>' : '<button class="secondary" onclick="ptEditPriceList(\'' + pl.id + '\')">Verifică și importă</button>') +
+          '<span>' + (isEditingThis ? '<button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button>' : '<button class="btn-outline" onclick="ptEditPriceList(\'' + pl.id + '\')">Verifică și importă</button>') +
           ' <button class="icon-x" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge — nu mai am nevoie de acest price list">✕</button></span>' +
           '</div>';
         if(isEditingThis) row += '<div id="pt-imp-mapping" style="padding:12px 14px;border-bottom:1px solid var(--border)"></div>';
@@ -2947,7 +2939,7 @@
     html += '</div>';
     html += '<div class="row"><div><label>Monedă implicită</label><select id="pt-map-def-currency" onchange="ptRenderPreview()"><option value="USD">USD</option><option value="MDL">MDL</option><option value="EUR">EUR</option><option value="KRW">KRW (won coreean)</option></select></div></div>';
     html += '<div class="hint">Previzualizare (primele 5 rânduri din primul fișier):</div><div class="preview-wrap" id="pt-imp-preview"></div>';
-    html += '<button class="primary" id="pt-imp-submit">Importă produsele' + (importFiles && importFiles.length > 1 ? (' (' + importFiles.length + ' fișiere)') : '') + '</button><div id="pt-imp-feedback"></div>';
+    html += '<button class="btn-primary" id="pt-imp-submit">Importă produsele' + (importFiles && importFiles.length > 1 ? (' (' + importFiles.length + ' fișiere)') : '') + '</button><div id="pt-imp-feedback"></div>';
     wrap.innerHTML = html;
 
     FIELD_DEFS.forEach(function(f){
@@ -3133,7 +3125,7 @@
       '<div><label>Monedă implicită</label><select id="pt-add-currency"><option value="USD">USD</option><option value="MDL">MDL</option><option value="EUR">EUR</option><option value="KRW">KRW (won coreean)</option></select></div>' +
       '<div><label>Transport implicit</label><select id="pt-add-freight">' + freightOptionsHtml('sea') + '</select></div></div>';
     html += '<label>Listă de preț</label><textarea id="pt-add-text" placeholder="Snail Mucin Essence\t7.50\t8801234567890\t100ml\tCOSRX\t180"></textarea>';
-    html += '<button class="primary" id="pt-add-submit">Procesează lista</button><div id="pt-add-feedback"></div></div>';
+    html += '<button class="btn-primary" id="pt-add-submit">Procesează lista</button><div id="pt-add-feedback"></div></div>';
     body.innerHTML = html;
 
     document.getElementById('pt-add-submit').addEventListener('click', function(){
@@ -3210,7 +3202,7 @@
       var cnt = Object.keys(supCart).reduce(function(sum,k){ return sum + (supCart[k]||0); }, 0);
       return '<option value="' + s.id + '">' + s.name + (cnt ? ' — ' + cnt + ' în coș' : '') + '</option>';
     }).join('') + '</select></div>';
-    html += '<div class="panel"><button class="secondary" onclick="ptToggleInvoiceImport()">' + (showInvoiceImport ? '▲ Ascunde' : '▼ Sau înregistrează direct din factura furnizorului (Excel)') + '</button>';
+    html += '<div class="panel"><button class="btn-outline" onclick="ptToggleInvoiceImport()">' + (showInvoiceImport ? '▲ Ascunde' : '▼ Sau înregistrează direct din factura furnizorului (Excel)') + '</button>';
     if(showInvoiceImport){
       html += '<div style="margin-top:14px"><h2>Înregistrează comanda finală</h2><div class="hint">Încarcă Excel-ul cu comanda confirmată de furnizor (cel cu cantitățile pe care le-ai comandat efectiv). Actualizează prețurile în catalog, ȘI înregistrează automat o comandă cu status „Confirmată" — produsele apar imediat marcate „rezervat" ca să nu le comanzi din nou din greșeală.</div>' +
         '<div id="pt-order-invoice-body"></div></div>';
@@ -3227,8 +3219,8 @@
       '<div><label>Coeficient comandă</label><input type="number" step="0.01" id="pt-order-coef" value="' + state.settings.coef + '"></div></div>' +
       '<div id="pt-order-summary"></div>' +
       '<label style="margin-top:12px">Data estimată de sosire</label><input type="date" id="pt-order-eta">' +
-      '<button class="primary" id="pt-order-export" style="margin-top:4px;width:100%">Descarcă Excel</button>' +
-      '<button class="secondary" id="pt-order-save" style="margin-top:8px;width:100%">Salvează comanda (marchează ca trimisă)</button></div></div></div>';
+      '<button class="btn-primary" id="pt-order-export" style="margin-top:4px;width:100%">Descarcă Excel</button>' +
+      '<button class="btn-outline" id="pt-order-save" style="margin-top:8px;width:100%">Salvează comanda (marchează ca trimisă)</button></div></div></div>';
     html += '<div class="panel"><h2>Istoric comenzi</h2><div id="pt-order-history"></div></div>';
     el.innerHTML = html;
 
@@ -3426,7 +3418,7 @@
       '<div><label>' + rateLabel + '</label><input type="number" step="0.0001" id="pt-rf-rate" value="' + rateVal + '" ' + (currency==='USD'?'disabled title="Nu e nevoie de curs — transportul e deja în USD"':'title="Ajustează cursul dacă nu e cel corect — se salvează în Setări"') + '></div>' +
       '<div><label>Taxe vamale (%)</label><input type="number" step="0.5" id="pt-rf-customs" value="' + (af.customsPct != null ? af.customsPct : 27) + '"></div></div>' +
       (realCoef != null ? ('<div class="feedback ok" style="margin-top:0">Coeficient real calculat: <b>' + fmt(realCoef) + '</b> (invoice ' + fmt(orderInvoiceUSD(o)) + ' USD + transport + ~' + (af.customsPct != null ? af.customsPct : 27) + '% taxe vamale)</div>') : '') +
-      '<button class="primary" id="pt-rf-apply" style="margin-top:8px">Aplică acest coeficient produselor din comandă</button>' +
+      '<button class="btn-primary" id="pt-rf-apply" style="margin-top:8px">Aplică acest coeficient produselor din comandă</button>' +
       appliedNote + '</div>';
   }
   window.ptApplyRealFreight = function(id){
@@ -3532,11 +3524,11 @@
         '<div><label>Coeficient comandă</label><input type="number" step="0.01" value="' + o.coef + '" onchange="ptSetOrderCoef(\'' + o.id + '\',this.value)"></div></div>' +
         buildRealFreightPanelHtml(o) +
         '<div class="row" style="margin-bottom:10px">' +
-        '<div><button class="secondary" style="width:100%" onclick="exportOrderPricingExcel(\'' + o.id + '\')">📊 Descarcă Excel</button></div>' +
+        '<div><button class="btn-outline" style="width:100%" onclick="exportOrderPricingExcel(\'' + o.id + '\')">📊 Descarcă Excel</button></div>' +
         (state.settings.moyskladProxyUrl ? (
-          '<div><button class="secondary" id="pt-ms-import-btn" style="width:100%" onclick="ptImportPricesFromMoySklad(\'' + o.id + '\')" title="Aduce prețurile deja setate pe produs în MoySklad, ca punct de plecare">📥 Importă prețuri din MoySklad</button></div>' +
-          '<div><button class="secondary" id="pt-ms-push-btn" style="width:100%" onclick="ptPushPricesToMoySklad(\'' + o.id + '\')" title="Trimite prețurile de mai jos în cîmpurile personalizate ale produsului din MoySklad">📤 Trimite prețurile în MoySklad</button></div>' +
-          (o.reviewedFields && Object.keys(o.reviewedFields).length ? '<div><button class="secondary" style="width:100%" onclick="ptResetReviewedFields(\'' + o.id + '\')" title="Cîmpurile editate manual (marginea verde) nu se mai actualizează din MoySklad — folosește asta ca să le deblochezi din nou pe toate, dacă vrei un import curat">🔓 Deblochează cîmpurile verificate manual</button></div>' : '')
+          '<div><button class="btn-outline" id="pt-ms-import-btn" style="width:100%" onclick="ptImportPricesFromMoySklad(\'' + o.id + '\')" title="Aduce prețurile deja setate pe produs în MoySklad, ca punct de plecare">📥 Importă prețuri din MoySklad</button></div>' +
+          '<div><button class="btn-outline" id="pt-ms-push-btn" style="width:100%" onclick="ptPushPricesToMoySklad(\'' + o.id + '\')" title="Trimite prețurile de mai jos în cîmpurile personalizate ale produsului din MoySklad">📤 Trimite prețurile în MoySklad</button></div>' +
+          (o.reviewedFields && Object.keys(o.reviewedFields).length ? '<div><button class="btn-outline" style="width:100%" onclick="ptResetReviewedFields(\'' + o.id + '\')" title="Cîmpurile editate manual (marginea verde) nu se mai actualizează din MoySklad — folosește asta ca să le deblochezi din nou pe toate, dacă vrei un import curat">🔓 Deblochează cîmpurile verificate manual</button></div>' : '')
         ) : '') +
         '</div>' +
         '<div id="pt-order-detail-table">' + buildOrderPricingTableHtml(o) + '</div></div>';
@@ -4318,7 +4310,7 @@
     var el = document.getElementById('tab-suppliers');
     var prevScrollY = window.scrollY;
     var html = '<div class="panel"><h2>Furnizori</h2><div class="hint">Adaugă furnizorii cu care lucrezi. Apasă pe un furnizor ca să-i editezi numele și să adaugi date complete (bancare, contacte, depozit) — toate opționale.</div>';
-    html += '<div class="row"><div style="flex:2"><input type="text" id="pt-new-supplier" placeholder="Nume furnizor" onkeydown="if(event.key===\'Enter\'){event.preventDefault();document.getElementById(\'pt-add-supplier-btn\').click();}"></div><div><button class="primary" id="pt-add-supplier-btn" style="width:100%">Adaugă</button></div></div>';
+    html += '<div class="row"><div style="flex:2"><input type="text" id="pt-new-supplier" placeholder="Nume furnizor" onkeydown="if(event.key===\'Enter\'){event.preventDefault();document.getElementById(\'pt-add-supplier-btn\').click();}"></div><div><button class="btn-primary" id="pt-add-supplier-btn" style="width:100%">Adaugă</button></div></div>';
     if(state.suppliers.length === 0){
       html += '<div class="hint">Niciun furnizor adăugat încă.</div>';
     } else {
@@ -4340,13 +4332,13 @@
             }
           });
           html += '</div>';
-          html += '<div class="row"><div><button class="primary" onclick="ptSaveSupplierDetails(\'' + s.id + '\')" style="width:100%">Salvează</button></div>' +
-            '<div><button class="secondary" onclick="ptCopySupplierData(\'' + s.id + '\')" style="width:100%">Copiază toate datele</button></div></div>';
+          html += '<div class="row"><div><button class="btn-primary" onclick="ptSaveSupplierDetails(\'' + s.id + '\')" style="width:100%">Salvează</button></div>' +
+            '<div><button class="btn-outline" onclick="ptCopySupplierData(\'' + s.id + '\')" style="width:100%">Copiază toate datele</button></div></div>';
           var supPriceLists = state.priceLists.filter(function(pl){ return pl.supplierId === s.id; }).sort(function(a,b){ return a.fileName.localeCompare(b.fileName, undefined, {sensitivity:'base', numeric:true}); });
           var pendingCountSup = supPriceLists.filter(function(pl){ return pl.pending; }).length;
           var plOpen = priceListsOpenFor === s.id;
           html += '<div style="margin-top:14px">' +
-            '<button class="subtab-btn" onclick="event.stopPropagation();ptTogglePriceListsView(\'' + s.id + '\')">📄 Price listuri adăugate (' + supPriceLists.length + ')' + (pendingCountSup ? ' · ⏳ ' + pendingCountSup + ' în așteptare' : '') + ' ' + (plOpen?'▴':'▾') + '</button></div>';
+            '<button class="chip" onclick="event.stopPropagation();ptTogglePriceListsView(\'' + s.id + '\')">📄 Price listuri adăugate (' + supPriceLists.length + ')' + (pendingCountSup ? ' · ⏳ ' + pendingCountSup + ' în așteptare' : '') + ' ' + (plOpen?'▴':'▾') + '</button></div>';
           if(plOpen){
             if(!supPriceLists.length){
               html += '<div class="hint">Niciun price list urmărit încă pentru acest furnizor — apar aici pe măsură ce importi Excel-uri din tab-ul „Adaugă listă de preț”.</div>';
@@ -4365,10 +4357,10 @@
           html += '<div class="row" style="margin-top:14px">';
           if(pendingWipeSupplierId === s.id){
             html += '<div style="flex:1"><div class="feedback err" style="margin-bottom:6px">Sigur ștergi toate produsele acestui furnizor? Nu se poate anula automat.</div>' +
-              '<div class="row"><div><button class="secondary" style="width:100%;background:var(--bad);color:#fff;border-color:var(--bad)" onclick="ptConfirmWipeSupplierProducts(\'' + s.id + '\')">Da, șterge definitiv</button></div>' +
-              '<div><button class="secondary" style="width:100%" onclick="ptCancelWipe()">Anulează</button></div></div></div>';
+              '<div class="row"><div><button class="btn-outline" style="width:100%;background:var(--bad);color:#fff;border-color:var(--bad)" onclick="ptConfirmWipeSupplierProducts(\'' + s.id + '\')">Da, șterge definitiv</button></div>' +
+              '<div><button class="btn-outline" style="width:100%" onclick="ptCancelWipe()">Anulează</button></div></div></div>';
           } else {
-            html += '<div><button class="secondary" style="width:100%;border-color:var(--bad);color:var(--bad)" onclick="ptAskWipeSupplierProducts(\'' + s.id + '\')">Șterge toate produsele acestui furnizor (redo import)</button></div>';
+            html += '<div><button class="btn-outline" style="width:100%;border-color:var(--bad);color:var(--bad)" onclick="ptAskWipeSupplierProducts(\'' + s.id + '\')">Șterge toate produsele acestui furnizor (redo import)</button></div>';
           }
           html += '</div>';
           html += '<div id="pt-sup-feedback-' + s.id + '"></div>';
@@ -4514,38 +4506,38 @@
     var el = document.getElementById('tab-settings');
     var html = '<div class="panel"><h2>Cursuri valutare</h2>' +
       '<div class="hint">Poți actualiza automat cursurile (USD → MDL și USD → KRW) de la o sursă publică, sau le poți edita manual mai jos.' + (state.settings.ratesUpdatedAt ? (' Ultima actualizare automată: ' + state.settings.ratesUpdatedAt + '.') : (autoFetchFailed ? ' Actualizarea automată nu a reușit (posibil conexiune blocată) — folosește valorile manuale de mai jos sau apasă din nou.' : ' Nu au fost actualizate automat încă.')) + '</div>' +
-      '<button class="secondary" id="pt-fetch-rates">Actualizează cursurile acum</button><div id="pt-rates-feedback"></div>' +
+      '<button class="btn-outline" id="pt-fetch-rates">Actualizează cursurile acum</button><div id="pt-rates-feedback"></div>' +
       '<div class="row" style="margin-top:14px"><div><label>Curs USD → MDL</label><input type="number" step="0.01" id="pt-set-rate" value="' + state.settings.exchangeRate + '"></div>' +
       '<div><label>Curs USD → KRW (woni per dolar)</label><input type="number" step="1" id="pt-set-krw" value="' + state.settings.krwPerUsd + '"></div>' +
       '<div><label>Curs USD → EUR (euro per dolar)</label><input type="number" step="0.01" id="pt-set-eur" value="' + state.settings.eurPerUsd + '"></div></div></div>';
     html += '<div class="panel"><h2>Coeficient implicit transport</h2>' +
       '<div class="hint">Un singur coeficient, folosit ca punct de plecare peste tot. Îl ajustezi manual în funcție de furnizor sau tipul comenzii — în tab-ul Comenzi, la fiecare comandă în parte.</div>' +
       '<div class="row"><div><label>Coeficient implicit</label><input type="number" step="0.01" id="pt-set-coef" value="' + state.settings.coef + '"></div></div>' +
-      '<button class="primary" id="pt-save-settings">Salvează setările</button><div id="pt-set-feedback"></div></div>';
+      '<button class="btn-primary" id="pt-save-settings">Salvează setările</button><div id="pt-set-feedback"></div></div>';
     html += '<div class="panel"><h2>MoySklad — stocuri</h2>' +
       '<div class="hint">Serverul intermediar (Cloudflare Worker) ține tokenul MoySklad în siguranță și trimite aplicației doar perechile barcode → cantitate. Completează URL-ul lui aici.</div>' +
       '<label>URL server intermediar</label>' +
       '<input type="text" id="pt-ms-proxy" value="' + escAttr(state.settings.moyskladProxyUrl||'') + '" placeholder="https://exemplu.workers.dev">' +
-      '<button class="secondary" id="pt-ms-test">Testează și salvează</button><div id="pt-ms-feedback"></div></div>';
+      '<button class="btn-outline" id="pt-ms-test">Testează și salvează</button><div id="pt-ms-feedback"></div></div>';
     html += '<div class="panel"><h2>Backup date</h2>' +
       '<div class="hint">Descarcă tot conținutul (furnizori, produse, comenzi, setări) într-un fișier JSON — util și ca să muți datele dintr-o versiune veche a tool-ului (ex. artifact Claude.ai) în cea conectată la Supabase. Încărcarea unui backup suprascrie datele curente.</div>' +
-      '<button class="secondary" id="pt-export-json">⬇ Descarcă backup JSON</button> ' +
-      '<button class="secondary" id="pt-import-json-btn">⬆ Încarcă backup JSON</button>' +
+      '<button class="btn-outline" id="pt-export-json">⬇ Descarcă backup JSON</button> ' +
+      '<button class="btn-outline" id="pt-import-json-btn">⬆ Încarcă backup JSON</button>' +
       '<input type="file" id="pt-import-json" accept="application/json" style="display:none">' +
       '<div id="pt-backup-feedback"></div></div>';
     html += '<div class="panel"><h2>Repară prețuri de furnizor (contaminate de comenzi)</h2>' +
       '<div class="hint">Pînă de curând, importul unei comenzi (facturi) suprascria greșit prețul de listă al furnizorului cu prețul de pe factură — chiar și peste un preț de listă real, deja corect. Bug-ul e reparat pentru comenzile viitoare — butonul de mai jos rejoacă efectiv toate price list-urile reale deja aplicate (în ordine cronologică), ca să restabilească prețul autentic al fiecărui produs pe care-l acoperă. Ce nu are niciun price list real rămâne „fără preț" (—), în loc să afișeze o valoare din altă comandă. E sigur de rulat oricând.</div>' +
-      '<button class="secondary" id="pt-cleanup-order-prices">🧹 Repară prețurile de furnizor</button>' +
+      '<button class="btn-outline" id="pt-cleanup-order-prices">🧹 Repară prețurile de furnizor</button>' +
       '<div id="pt-cleanup-feedback"></div></div>';
     html += '<div class="panel"><h2>Istoric versiuni</h2>' +
       '<div class="hint">Aplicația păstrează automat instantanee complete ale datelor (la cel mult 15 minute între ele) — dacă ștergi ceva din greșeală, poți reveni la un moment anterior. Nu e un „undo" pas cu pas, ci o listă de momente din timp la care te poți întoarce (iar de acolo poți reveni și înainte, dacă te răzgîndești).</div>' +
-      '<button class="secondary" id="pt-history-open">🕐 Arată istoricul</button>' +
+      '<button class="btn-outline" id="pt-history-open">🕐 Arată istoricul</button>' +
       '<div id="pt-history-list" style="margin-top:10px"></div></div>';
     html += '<div class="panel"><h2>Cont</h2>' +
       '<div class="hint">Autentificat ca <b>' + escAttr(currentUserEmail) + '</b>.</div>' +
       '<label>Parolă nouă</label><input type="password" id="pt-change-password" autocomplete="new-password" placeholder="minim 6 caractere">' +
-      '<button class="secondary" id="pt-change-password-btn">Schimbă parola</button> ' +
-      '<button class="secondary" id="pt-signout">Ieși din cont</button>' +
+      '<button class="btn-outline" id="pt-change-password-btn">Schimbă parola</button> ' +
+      '<button class="btn-outline" id="pt-signout">Ieși din cont</button>' +
       '<div id="pt-account-feedback"></div></div>';
     el.innerHTML = html;
 
