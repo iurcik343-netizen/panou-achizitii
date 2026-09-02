@@ -111,10 +111,10 @@
   #pt-root table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   #pt-root th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-soft); padding: 8px 14px; }
   #pt-root td { padding: 7px 14px; border-top: 1px solid var(--border); font-family: var(--mono); }
-  #pt-root .entry-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 12px; border-top: 1px solid var(--border); gap: 8px; flex-wrap: wrap; font-size: 11.5px; }
-  #pt-root .entry-row.rank-1 { background: var(--rank1-bg); }
-  #pt-root .entry-row.rank-2 { background: var(--rank2-bg); }
-  #pt-root .entry-row.rank-3 { background: var(--rank3-bg); }
+  #pt-root .entry-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-top: 1px solid var(--border); border-radius: var(--radius-md); gap: 8px; flex-wrap: wrap; font-size: 11.5px; }
+  #pt-root .entry-row.rank-1 { background: var(--rank1-bg); box-shadow: inset 2px 0 0 var(--rank1); }
+  #pt-root .entry-row.rank-2 { background: var(--rank2-bg); box-shadow: inset 2px 0 0 var(--rank2); }
+  #pt-root .entry-row.rank-3 { background: var(--rank3-bg); box-shadow: inset 2px 0 0 var(--rank3); }
   #pt-root .entry-main { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-family: var(--mono); }
   #pt-root .entry-main b { font-family: var(--sans); font-weight: 600; font-size: 12px; }
   #pt-root .entry-tag { font-family: var(--sans); font-weight: 700; font-size: 9px; text-transform: uppercase; }
@@ -125,22 +125,25 @@
   #pt-root .merge-toggle-row button { font-size: 10.5px; color: var(--text-soft); }
   #pt-root .merge-box { padding: 8px 12px; background: var(--bg); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
   #pt-root .merge-box select { margin-bottom: 0; flex: 1; }
-  #pt-root .cmp-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; table-layout: fixed; }
-  #pt-root .cmp-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--bg); }
+  #pt-root .cmp-table { width: 100%; border-collapse: collapse; border-spacing: 0; font-size: 12px; table-layout: fixed; }
+  #pt-root .cmp-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-soft); padding: 7px 10px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border-soft); white-space: nowrap; background: var(--panel-2); }
   #pt-root .sticky-col-table td:first-child, #pt-root .sticky-col-table th:first-child { position: sticky; left: 0; background: var(--panel); z-index: 2; box-shadow: 2px 0 4px rgba(0,0,0,0.05); }
-  #pt-root .sticky-col-table th:first-child { background: var(--bg); z-index: 3; }
-  #pt-root .cmp-table td { padding: 6px 10px; vertical-align: top; }
+  #pt-root .sticky-col-table th:first-child { background: var(--panel-2); z-index: 3; }
+  #pt-root .row-open.sticky-col-table td:first-child, #pt-root .sticky-col-table tr.row-open td:first-child { background: var(--panel); }
+  #pt-root .cmp-table td { padding: 9px 10px; vertical-align: top; border-bottom: 1px solid var(--border-soft); border-right: 1px solid var(--border-soft); }
   #pt-root .cmp-table .prod-meta { font-size: 9.5px; color: var(--text-soft); font-family: var(--mono); margin-top: 1px; }
-  #pt-root .prod-title-btn { background: none; border: none; cursor: pointer; text-align: left; padding: 0; font-family: var(--sans); font-weight: 700; font-size: 13px; color: var(--text); line-height: 1.3; }
-  #pt-root .prod-title-btn:hover { color: var(--accent-dark); }
+  #pt-root .prod-title-btn { background: none; border: none; cursor: pointer; text-align: left; padding: 0; font-family: var(--sans); font-weight: 500; font-size: 13px; color: var(--text); line-height: 1.3; }
+  #pt-root .prod-title-btn:hover { color: var(--accent-2); }
+  #pt-root .row-open .prod-title-btn { color: var(--accent); }
   #pt-root .price-cell-btn { background: none; border: none; cursor: pointer; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 12px; text-align: right; padding: 3px 5px; border-radius: 5px; width: 100%; color: var(--text); }
-  #pt-root .price-cell-btn:hover { background: var(--accent-soft); }
+  #pt-root .price-cell-btn:hover { background: var(--accent-tint-2); }
   #pt-root .price-cell-btn .sub { display: block; font-size: 9.5px; color: var(--text-soft); }
-  #pt-root td.cheapest-cell { background: var(--rank1-bg); }
-  #pt-root td.second-cell { background: rgba(27,111,168,0.08); }
-  #pt-root td.third-cell { background: var(--rank3-bg); }
-  #pt-root td.dim { color: var(--text-soft); text-align: center; font-size: 11px; }
-  #pt-root .detail-panel { padding: 10px 12px; background: var(--bg); border-radius: 8px; }
+  #pt-root td.cheapest-cell { background: var(--rank1-bg); box-shadow: inset 2px 0 0 var(--rank1); }
+  #pt-root td.second-cell { background: var(--rank2-bg); box-shadow: inset 2px 0 0 var(--rank2); }
+  #pt-root td.third-cell { background: var(--rank3-bg); box-shadow: inset 2px 0 0 var(--rank3); }
+  #pt-root td.dim { color: var(--text-dim); text-align: center; font-size: 11px; }
+  #pt-root .detail-panel { margin: 0 14px 14px; background: var(--panel); border: 1px solid var(--accent-dim); border-radius: var(--radius); padding: 16px 18px; }
+  #pt-root .detail-panel-cell { background: var(--accent-tint-2); padding: 0 !important; border-bottom: 1px solid var(--border); }
   #pt-root tr.rank-1 td { background: var(--rank1-bg); }
   #pt-root tr.rank-1 .tag { color: var(--rank1); }
   #pt-root tr.rank-2 td { background: var(--rank2-bg); }
@@ -1980,14 +1983,14 @@
 
         var isMergeSource = mergeSourceKey === k;
         var rowImgUrl = (msProd && msProd.imageUrl) || p.excelImageUrl || null;
-        html += '<tr' + (isMergeSource ? ' style="outline:2px solid var(--accent);outline-offset:-2px"' : '') + '>';
+        html += '<tr class="' + (isExpanded ? 'row-open' : '') + '"' + (isMergeSource ? ' style="outline:2px solid var(--accent);outline-offset:-2px"' : '') + '>';
         html += '<td><div style="display:flex;gap:8px;align-items:flex-start">' +
           (rowImgUrl ? '<img src="' + escAttr(rowImgUrl) + '" style="width:28px;height:28px;object-fit:cover;border-radius:5px;flex-shrink:0;margin-top:2px" onerror="this.style.visibility=\'hidden\'">' : '<div style="width:28px;height:28px;flex-shrink:0"></div>') +
           '<div style="min-width:0;flex:1">' +
           '<div style="display:flex;align-items:center;gap:2px">' +
           '<button class="prod-title-btn pt-prodname-resizable" data-colw="cmp:name" style="width:' + getColWidth('cmp','name',260) + 'px;' + (mergeSourceKey && !isMergeSource ? 'color:var(--accent)' : '') + '" onclick="ptProductClick(\'' + kEsc + '\')" title="' + jsAttrEscape(p.displayName) + '">' + (isMergeSource ? '🔀 ' : (isExpanded ? '▾' : '▸') + ' ') + p.displayName + '</button>' +
           (isRecentlyNew(p) ? ' <span style="background:var(--rank1);color:#fff;font-size:9px;font-weight:700;padding:2px 5px;border-radius:4px;flex-shrink:0;letter-spacing:0.03em">NEW</span>' : '') +
-          ' <button class="icon-link" style="padding:0 3px;flex-shrink:0;font-size:14px" title="' + (p.favorite ? 'Scoate de la favorite' : 'Adaugă la favorite — stă mereu primul, sus, cît timp nu ai niciun filtru activ') + '" onclick="event.stopPropagation();ptToggleFavorite(\'' + kEsc + '\')">' + (p.favorite ? '⭐' : '☆') + '</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="event.stopPropagation();ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">🔍</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Unește cu alt produs" onclick="event.stopPropagation();ptStartMerge(\'' + kEsc + '\')">🔀</button>' +
+          ' <button class="icon-link" style="padding:0 3px;flex-shrink:0;font-size:14px;color:var(--rank3)" title="' + (p.favorite ? 'Scoate de la favorite' : 'Adaugă la favorite — stă mereu primul, sus, cît timp nu ai niciun filtru activ') + '" onclick="event.stopPropagation();ptToggleFavorite(\'' + kEsc + '\')">' + (p.favorite ? '⭐' : '☆') + '</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Copiază denumirea" onclick="event.stopPropagation();ptCopyText(\'' + jsAttrEscape(p.displayName) + '\', \'Denumirea\')">📋</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">🔍</button> <button class="icon-link" style="padding:0 3px;flex-shrink:0" title="Unește cu alt produs" onclick="event.stopPropagation();ptStartMerge(\'' + kEsc + '\')">🔀</button>' +
           '</div>' +
           '<div class="prod-meta">' + (p.brand ? p.brand + ' · ' : '') + (p.quantity ? p.quantity + ' · ' : '') + (p.barcode ? 'EAN ' + p.barcode : 'fără barcode') + (p.altBarcodes && p.altBarcodes.length ? ' (+' + p.altBarcodes.length + ' cod' + (p.altBarcodes.length>1?'uri':'') + ': ' + p.altBarcodes.join(', ') + ')' : '') + (canonicalMoq ? ' · MOQ ' + canonicalMoq : '') + '</div>' +
           perSupplierBarcodeLine(p) +
@@ -2056,7 +2059,7 @@
         html += '</tr>';
 
         if(isExpanded){
-          html += '<tr><td colspan="' + colspan + '"><div class="detail-panel">';
+          html += '<tr><td class="detail-panel-cell" colspan="' + colspan + '"><div class="detail-panel">';
 
           if(editingProductKey === k){
             html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">' +
