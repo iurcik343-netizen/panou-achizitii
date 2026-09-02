@@ -702,8 +702,18 @@
         if(o.eta && (!groups[gk].eta || o.eta < groups[gk].eta)) groups[gk].eta = o.eta;
         // Prețul din invoice-ul acestei comenzi, nu din price list-ul furnizorului — la produsele
         // deja pe drum, ăsta e prețul real plătit pentru acel lot, care poate diferi de prețul
-        // curent din listă (singurul afișat altfel în coloanele de comparație).
-        if(!groups[gk].priceDate || o.date > groups[gk].priceDate){ groups[gk].price = l.price; groups[gk].priceDate = o.date; }
+        // curent din listă (singurul afișat altfel în coloanele de comparație). DAR dacă prețul de
+        // pe factură a fost corectat manual (Achiziție (USD) din tabelul comenzii, care setează
+        // buyPriceOverrideUsd) sau MoySklad are deja „Pret furnizor in $" pentru acest produs,
+        // acelea sînt mai de încredere decît ce a fost citit inițial din factură — altfel corecția
+        // nu se mai vedea NICĂIERI în afara tabelului comenzii, iar aici rămînea mereu prima
+        // valoare importată, chiar și după ce era semnalată și corectată ca greșită. Aceeași
+        // ordine de prioritate ca getOrderLineSinecost (folosită deja pentru sinecostul comenzii).
+        if(!groups[gk].priceDate || o.date > groups[gk].priceDate){
+          var scLine = getOrderLineSinecost(o, key);
+          groups[gk].price = scLine.usdPrice != null ? scLine.usdPrice : l.price;
+          groups[gk].priceDate = o.date;
+        }
       });
     });
     return Object.keys(groups).map(function(gk){
@@ -1110,6 +1120,15 @@
     var headRows = table.querySelectorAll('thead tr');
     var overlayTop = 0;
     for(var hi=0; hi<headRows.length-1; hi++){ overlayTop += headRows[hi].offsetHeight; }
+    // mountStickyHeader se poate re-declanșa pe ACELAȘI wrap (nu doar pe unul nou-construit prin
+    // innerHTML) — ex: randarea de fundal la deschiderea comenzii (dublul rAF de mai jos, în
+    // renderOrderHistory) poate ajunge la execuție DUPĂ ce o editare de preț a apucat deja să
+    // re-monteze antetul sincron, pe același wrap. Fără gardă, rezultatul erau doi <div> fantomă
+    // suprapuși, needublat vizual identic (poziții/lățimi calculate în momente diferite) — exact
+    // antetul "instabil, dublat" de la scroll. Eliminăm orice fantomă anterioară înainte s-o cream
+    // pe cea nouă, ca să existe mereu cel mult una.
+    var stale = wrapEl.querySelector('.cmp-sticky-header');
+    if(stale) stale.remove();
     var overlay = document.createElement('div');
     overlay.className = 'cmp-sticky-header';
     if(overlayTop) overlay.style.top = overlayTop + 'px';
@@ -2039,7 +2058,7 @@
           perSupplierBarcodeLine(p) +
           (transitGroups.length ? '<div style="margin-top:3px;display:flex;gap:4px;flex-wrap:wrap">' + transitGroups.map(function(g){
             var c = transitColorFor(g);
-            return '<span style="background:' + c.bg + ';color:' + c.fg + ';font-weight:600;font-size:12px;padding:3px 9px;border-radius:12px;white-space:nowrap" title="Preț din factura acestei comenzi — poate diferi de prețul curent din price list">' + (g.overdue ? 'Întârziat (' : '(') + (g.sid ? supplierName(g.sid).slice(0,6) + ' · ' : '') + freightLabel(g.freight) + ') · <b style="font-size:13px">' + g.qty + '</b> buc' + (g.price != null ? ' · ' + fmt(g.price) + '$' : '') + '</span>';
+            return '<span style="background:' + c.bg + ';color:' + c.fg + ';font-weight:600;font-size:12px;padding:3px 9px;border-radius:12px;white-space:nowrap" title="Preț din factura acestei comenzi (sau corectat manual/din MoySklad, dacă a fost corectat în tabelul comenzii) — poate diferi de prețul curent din price list">' + (g.overdue ? 'Întârziat (' : '(') + (g.sid ? supplierName(g.sid).slice(0,6) + ' · ' : '') + freightLabel(g.freight) + ') · <b style="font-size:13px">' + g.qty + '</b> buc' + (g.price != null ? ' · ' + fmt(g.price) + '$' : '') + '</span>';
           }).join('') + '</div>' : '') +
           '</div></div></td>';
 
