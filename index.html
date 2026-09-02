@@ -704,14 +704,18 @@
         // deja pe drum, ăsta e prețul real plătit pentru acel lot, care poate diferi de prețul
         // curent din listă (singurul afișat altfel în coloanele de comparație). DAR dacă prețul de
         // pe factură a fost corectat manual (Achiziție (USD) din tabelul comenzii, care setează
-        // buyPriceOverrideUsd) sau MoySklad are deja „Pret furnizor in $" pentru acest produs,
-        // acelea sînt mai de încredere decît ce a fost citit inițial din factură — altfel corecția
-        // nu se mai vedea NICĂIERI în afara tabelului comenzii, iar aici rămînea mereu prima
-        // valoare importată, chiar și după ce era semnalată și corectată ca greșită. Aceeași
-        // ordine de prioritate ca getOrderLineSinecost (folosită deja pentru sinecostul comenzii).
+        // buyPriceOverrideUsd), acela e mai de încredere decît ce a fost citit inițial din factură —
+        // altfel corecția nu se mai vedea NICĂIERI în afara tabelului comenzii. Verificăm DOAR
+        // buyPriceOverrideUsd (un cîmp local, deja în memorie) — NU trecem prin getOrderLineSinecost
+        // (care ar verifica și „Pret furnizor in $" din MoySklad): asta a fost încercat, dar
+        // getInTransitGroups rulează pentru FIECARE produs afișat în Comparație produse, la fiecare
+        // randare — trecerea prin MoySklad acolo declanșa ensureMsAttrsLoaded (deci un fetch de
+        // rețea) pentru zeci/sute de produse deodată, de fiecare dată, ceea ce a încetinit vizibil
+        // tab-ul. Verificarea live din MoySklad rămîne doar acolo unde a fost mereu — în tabelul
+        // comenzii (getOrderLineSinecost), pentru cele cîteva zeci de produse ale UNEI comenzi.
         if(!groups[gk].priceDate || o.date > groups[gk].priceDate){
-          var scLine = getOrderLineSinecost(o, key);
-          groups[gk].price = scLine.usdPrice != null ? scLine.usdPrice : l.price;
+          var pOverride = state.products[key] && state.products[key].buyPriceOverrideUsd;
+          groups[gk].price = (pOverride != null) ? pOverride : l.price;
           groups[gk].priceDate = o.date;
         }
       });
