@@ -445,9 +445,13 @@
   window.addEventListener('pagehide', flushPendingSave);
   // Folosit ca să deosebim un blip trecător de conexiune (merită reîncercat tăcut, ca la
   // doSaveNow) de o eroare "curată" a serverului (ex: parolă greșită, rînd inexistent) — aceea
-  // nu se rezolvă reîncercînd, deci n-o ascundem în spatele unei reîncercări inutile.
+  // nu se rezolvă reîncercînd, deci n-o ascundem în spatele unei reîncercări inutile. Pe lîngă
+  // textul tipic de eșec de rețea, tratăm și codurile 5xx (503 etc.) ca trecătoare — un "HTTP 503"
+  // (serverul chiar există, dar refuză temporar cererea) nu conține niciun cuvînt din regexul de
+  // rețea, dar e la fel de tranzitoriu, adesea chiar mai clar un semnal de reîncercat.
   function isTransientNetworkError(msg){
-    return /fetch|network|connection|timeout/i.test(String(msg||''));
+    var s = String(msg||'');
+    return /fetch|network|connection|timeout/i.test(s) || /\b5\d\d\b/.test(s);
   }
   async function doSaveNow(skipStaleCheck, retriesLeft){
     if(retriesLeft === undefined) retriesLeft = 2;
