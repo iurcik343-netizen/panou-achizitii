@@ -1124,13 +1124,15 @@
     var headRows = table.querySelectorAll('thead tr');
     var overlayTop = 0;
     for(var hi=0; hi<headRows.length-1; hi++){ overlayTop += headRows[hi].offsetHeight; }
-    // mountStickyHeader se poate re-declanșa pe ACELAȘI wrap (nu doar pe unul nou-construit prin
-    // innerHTML) — ex: randarea de fundal la deschiderea comenzii (dublul rAF de mai jos, în
-    // renderOrderHistory) poate ajunge la execuție DUPĂ ce o editare de preț a apucat deja să
-    // re-monteze antetul sincron, pe același wrap. Fără gardă, rezultatul erau doi <div> fantomă
-    // suprapuși, needublat vizual identic (poziții/lățimi calculate în momente diferite) — exact
-    // antetul "instabil, dublat" de la scroll. Eliminăm orice fantomă anterioară înainte s-o cream
-    // pe cea nouă, ca să existe mereu cel mult una.
+    // mountStickyHeader se re-declanșează acum pe ACELAȘI wrap la fiecare randare din fundal a
+    // tabelului de prețuri (renderOrderDetailTable păstrează wrap-ul viu, nu-l mai reconstruiește —
+    // vezi acolo) — deci ascultătorul de scroll și ResizeObserver-ul montate LA MONTAREA ANTERIOARĂ
+    // trebuie curățate explicit înainte să le înlocuim, altfel se adună cîte o pereche nouă la
+    // fiecare randare (zeci, pe o comandă mare), fiecare actualizînd degeaba o fantomă deja
+    // eliminată. Golim orice fantomă anterioară înainte s-o creăm pe cea nouă, ca să existe mereu
+    // cel mult una — asta rezolva și cursa în care dublul rAF de mai jos (din renderOrderHistory)
+    // ajungea la execuție DUPĂ ce o editare apucase deja să remonteze antetul sincron.
+    if(wrapEl._ptStickyCleanup){ wrapEl._ptStickyCleanup(); wrapEl._ptStickyCleanup = null; }
     var stale = wrapEl.querySelector('.cmp-sticky-header');
     if(stale) stale.remove();
     var overlay = document.createElement('div');
@@ -1155,10 +1157,15 @@
     syncWidths();
     syncPosition();
     wrapEl.addEventListener('scroll', syncPosition);
+    var ro = null;
     if(window.ResizeObserver){
-      var ro = new ResizeObserver(syncWidths);
+      ro = new ResizeObserver(syncWidths);
       Array.prototype.forEach.call(headRow.children, function(th){ ro.observe(th); });
     }
+    wrapEl._ptStickyCleanup = function(){
+      wrapEl.removeEventListener('scroll', syncPosition);
+      if(ro) ro.disconnect();
+    };
   }
   // ================= ÎNCĂRCARE TREPTATĂ A IMAGINILOR LIPSĂ =================
   var imgUrlCache = {};
@@ -4100,36 +4107,43 @@
     o.lines.forEach(function(l){ map[l.key] = (map[l.key] || 0) + l.qty; });
     return map;
   }
-  function buildOrderPricingTableHtml(o){
+  // Prețurile de mai jos (Achiziție, Preț de vânzare, Pachetele) se sincronizează live cu
+  // MoySklad DOAR pentru produsele recunoscute din catalogul MoySklad ținut local, în browser —
+  // dacă acel catalog nu a fost sincronizat de curînd, produsele mai noi/schimbate nu sînt
+  // recunoscute și tac (rămîn pe formula de rezervă), fără nicio eroare vizibilă. Asta a cauzat
+  // confuzie repetată — avertizăm clar aici, în loc să lăsăm utilizatorul să creadă că e un bug.
+  function orderCatalogStaleWarningHtml(){
+    var msOnInv = !!state.settings.moyskladProxyUrl;
+    var catalogStaleMs = catalogUpdatedAt ? (Date.now() - new Date(catalogUpdatedAt).getTime()) : null;
+    if(!msOnInv || (catalogProducts.length && !(catalogStaleMs != null && catalogStaleMs > 24*3600*1000))) return '';
+    return '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:6px 12px;font-size:12px;margin-bottom:8px">⚠ Catalogul MoySklad ținut local ' + (catalogProducts.length ? ('e sincronizat de la ' + fmtDateDMY(catalogUpdatedAt)) : 'nu a fost sincronizat încă') + ' — produsele noi/schimbate în MoySklad de atunci nu vor fi recunoscute (prețurile lor rămân pe formula de rezervă, nu pe cea din MoySklad). Sincronizează din tab-ul Comparație produse (🔄 Actualizează MoySklad) înainte să imporți/trimiți prețuri.</div>';
+  }
+  function orderPricingChipsHtml(){
+    var msOnInv = !!state.settings.moyskladProxyUrl;
+    return hiddenColsChipsHtml('inv', [ { col:'qty', label:'Cant. comandată' }, { col:'buy', label:'Achiziție (USD)' }, { col:'cost', label:'Sinecost (MDL)' } ].concat(msOnInv ? [{ col:'hist', label:'Istoric' }] : []));
+  }
+  function orderPricingFooterHtml(count){
+    return '<div style="display:flex;align-items:center;gap:14px;padding:10px 2px 0">' +
+      '<span style="font-size:12px;color:var(--text-soft)">' + count + ' produs' + (count===1?'':'e') + '</span>' +
+      '<div style="flex:1"></div>' +
+      '<span style="font-size:11.5px;color:var(--text-dim);display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;border:1px solid var(--rank1);display:inline-block"></span>câmp corectat manual — nu se mai suprascrie la import</span>' +
+      '</div>';
+  }
+  // Doar tabelul (thead+tbody) — separat de warn/chips/footer, ca renderOrderDetailTable să poată
+  // înlocui NUMAI el, în interiorul aceluiași .table-wrap deja existent, fără să distrugă wrap-ul
+  // (elementul care chiar scrolează). Fiecare coloană poate fi micșorată pînă aproape de dispariție
+  // (min 15px) — inclusiv peste conținut — utilizatorul a cerut control total, nu un prag care
+  // oprea micșorarea prematur. Antetul are două rînduri (regula 2c/mockup „varianta finală"):
+  // rîndul de sus grupează coloanele sub „Comandă" / „Prețuri de vânzare", rîndul de jos rămîne
+  // antetul real, redimensionabil/ascunzibil ca înainte — mountStickyHeader copiază ultimul <tr>,
+  // nu primul, exact ca să prindă rîndul cu etichetele reale.
+  function buildOrderPricingTableInnerHtml(o){
     var keys = orderProductKeys(o);
     var qtyMap = orderLineQtyMap(o);
-    if(keys.length === 0) return '<div class="panel empty">Niciun produs cunoscut din această comandă.</div>';
     var msOnInv = !!state.settings.moyskladProxyUrl;
-    var html = '';
-    // Prețurile de mai jos (Achiziție, Preț de vânzare, Pachetele) se sincronizează live cu
-    // MoySklad DOAR pentru produsele recunoscute din catalogul MoySklad ținut local, în browser —
-    // dacă acel catalog nu a fost sincronizat de curînd, produsele mai noi/schimbate nu sînt
-    // recunoscute și tac (rămîn pe formula de rezervă), fără nicio eroare vizibilă. Asta a cauzat
-    // confuzie repetată — avertizăm clar aici, în loc să lăsăm utilizatorul să creadă că e un bug.
-    var catalogStaleMs = catalogUpdatedAt ? (Date.now() - new Date(catalogUpdatedAt).getTime()) : null;
-    if(msOnInv && (!catalogProducts.length || (catalogStaleMs != null && catalogStaleMs > 24*3600*1000))){
-      html += '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:6px 12px;font-size:12px;margin-bottom:8px">⚠ Catalogul MoySklad ținut local ' + (catalogProducts.length ? ('e sincronizat de la ' + fmtDateDMY(catalogUpdatedAt)) : 'nu a fost sincronizat încă') + ' — produsele noi/schimbate în MoySklad de atunci nu vor fi recunoscute (prețurile lor rămân pe formula de rezervă, nu pe cea din MoySklad). Sincronizează din tab-ul Comparație produse (🔄 Actualizează MoySklad) înainte să imporți/trimiți prețuri.</div>';
-    }
-    html += hiddenColsChipsHtml('inv', [ { col:'qty', label:'Cant. comandată' }, { col:'buy', label:'Achiziție (USD)' }, { col:'cost', label:'Sinecost (MDL)' } ].concat(msOnInv ? [{ col:'hist', label:'Istoric' }] : []));
-    // Fiecare coloană poate fi micșorată pînă aproape de dispariție (min 15px) — inclusiv peste
-    // conținut — utilizatorul a cerut control total, nu un prag care oprea micșorarea prematur.
-    // overflow-y:auto lipsea aici (spre deosebire de Comparație produse/Catalog) — fără el,
-    // max-height setat de fitTableWrapHeight nu crea niciun scroll intern, ci doar lăsa conținutul
-    // să iasă vizual peste — scroll-ul real era al PAGINII întregi, nu al acestui wrap. De-asta
-    // restaurarea scrollTop/scrollLeft de mai jos (în renderOrderDetailTable) nu avea niciun efect
-    // real: acel scrollTop era mereu 0, iar pagina sărea la început la fiecare editare.
-    // Antetul are acum două rînduri (regula 2c/mockup „varianta finală"): rîndul de sus grupează
-    // coloanele sub „Comandă" / „Prețuri de vânzare", rîndul de jos rămîne antetul real,
-    // redimensionabil/ascunzibil ca înainte — mountStickyHeader copiază acum ultimul <tr>, nu
-    // primul, exact ca să prindă rîndul cu etichetele reale.
     var qtyVisible = !isColHidden('inv','qty'), buyVisible = !isColHidden('inv','buy'), costVisible = !isColHidden('inv','cost');
     var orderGroupColspan = (qtyVisible?1:0) + (buyVisible?1:0) + (costVisible?1:0);
-    html += '<div class="table-wrap table-wrap-fixed" style="overflow-y:auto;max-height:70vh"><table class="sticky-col-table pt-order-pricing-table"><thead>' +
+    var html = '<table class="sticky-col-table pt-order-pricing-table"><thead>' +
       '<tr><th class="pt-group-th"></th>' +
       (msOnInv && !isColHidden('inv','hist') ? '<th class="pt-group-th"></th>' : '') +
       (orderGroupColspan > 0 ? ('<th class="pt-group-th" colspan="' + orderGroupColspan + '">Comandă</th>') : '') +
@@ -4256,13 +4270,19 @@
         packagesGroupCellHtml(o, k, kEsc, sc, p.sellPrice, secondaryVal, secondaryPct, pachet1, pachet2, pachet3, disc2, disc3, p) +
         '</tr>';
     });
-    html += '</tbody></table></div>';
-    html += '<div style="display:flex;align-items:center;gap:14px;padding:10px 2px 0">' +
-      '<span style="font-size:12px;color:var(--text-soft)">' + keys.length + ' produs' + (keys.length===1?'':'e') + '</span>' +
-      '<div style="flex:1"></div>' +
-      '<span style="font-size:11.5px;color:var(--text-dim);display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;border:1px solid var(--rank1);display:inline-block"></span>câmp corectat manual — nu se mai suprascrie la import</span>' +
-      '</div>';
+    html += '</tbody></table>';
     return html;
+  }
+  // Randarea completă (primă deschidere a comenzii) — warn/chips/wrap/footer, fiecare bucată în
+  // propriul container cu id, ca renderOrderDetailTable să poată reîmprospăta doar o bucată (sau
+  // doar tabelul din interiorul wrap-ului) la randările ulterioare, fără să reconstruiască tot.
+  function buildOrderPricingTableHtml(o){
+    var keys = orderProductKeys(o);
+    if(keys.length === 0) return '<div class="panel empty">Niciun produs cunoscut din această comandă.</div>';
+    return '<div id="pt-order-pricing-warn">' + orderCatalogStaleWarningHtml() + '</div>' +
+      '<div id="pt-order-pricing-chips">' + orderPricingChipsHtml() + '</div>' +
+      '<div class="table-wrap table-wrap-fixed" style="overflow-y:auto;max-height:70vh">' + buildOrderPricingTableInnerHtml(o) + '</div>' +
+      '<div id="pt-order-pricing-footer">' + orderPricingFooterHtml(keys.length) + '</div>';
   }
   // Marchează UN CÎMP anume ca „trecut prin” (editat) în comanda curent deschisă — per cîmp, nu
   // per rînd, ca marginea verde din tabel să arate exact ce a fost deja setat, cîmp cu cîmp.
@@ -4370,38 +4390,31 @@
     var box = document.getElementById('pt-order-detail-table');
     if(!o || !box) return;
     var prevPageScrollY = window.scrollY;
-    var prevWrap = box.querySelector('.table-wrap');
-    var prevScrollLeft = prevWrap ? prevWrap.scrollLeft : 0;
-    var prevScrollTop = prevWrap ? prevWrap.scrollTop : 0;
-    // Ancorăm pe RÎNDUL efectiv aflat sus în zona vizibilă (identificat prin data-rowkey), nu pe
-    // un simplu offset în pixeli — dacă înălțimea totală a conținutului diferă puțin între randări
-    // (un rînd cîștigă/pierde un avertisment, o valoare live sincronizată), un offset fix în pixeli
-    // nu mai corespunde aceluiași rînd (vizibil mai ales la ultimul rînd, unde ești oricum la
-    // capătul de jos: conținutul puțin mai scund trage instant poziția înapoi). Ancorînd pe rînd,
-    // acesta rămîne exact unde era indiferent cît s-a schimbat înălțimea altor rînduri din listă.
-    var anchorKey = null, anchorOffset = 0;
-    if(prevWrap){
-      var prevRows = prevWrap.querySelectorAll('tr[data-rowkey]');
-      for(var ri=0; ri<prevRows.length; ri++){
-        if(prevRows[ri].offsetTop >= prevScrollTop){
-          anchorKey = prevRows[ri].getAttribute('data-rowkey');
-          anchorOffset = prevRows[ri].offsetTop - prevScrollTop;
-          break;
-        }
-      }
-    }
-    box.innerHTML = buildOrderPricingTableHtml(o);
-    var newWrap = box.querySelector('.table-wrap');
-    if(newWrap){
-      // fitTableWrapHeight forțează un layout (getBoundingClientRect) — trebuie apelat ÎNAINTE
-      // să setăm scrollTop. Altfel browserul încă nu știe cît de înalt e conținutul abia inserat,
-      // consideră că nu există ce derula la o poziție atît de mare și ignoră silențios asignarea
-      // (rămîne 0) — exact asta provoca "saltul sus" la fiecare editare a unui preț mai jos în listă.
-      fitTableWrapHeight(newWrap);
-      newWrap.scrollLeft = prevScrollLeft;
-      var newRow = anchorKey ? newWrap.querySelector('tr[data-rowkey="' + anchorKey + '"]') : null;
-      newWrap.scrollTop = newRow ? Math.max(0, newRow.offsetTop - anchorOffset) : prevScrollTop;
-      mountStickyHeader(newWrap);
+    var existingWrap = box.querySelector('.table-wrap');
+    if(existingWrap){
+      // La o comandă mare, ZECI de randări din fundal (imagini/istoric/atribute MoySklad, plus
+      // orice editare) se pot succeda în cîteva secunde — vezi rerenderVisibleTabsDebounced. Pînă
+      // acum, fiecare din ele distrugea și reconstruia întregul .table-wrap (elementul care chiar
+      // scrolează), și "reconstituia" scrollTop manual, ancorînd pe un rînd anume — o metodă
+      // fragilă, mai ales cînd o remontare cade chiar în timp ce utilizatorul trage de bara de
+      // scroll: exact asta cauza antetul instabil/dublat și "un produs de gol" între antet și
+      // primul rînd. Acum, dacă wrap-ul EXISTĂ deja, îi înlocuim doar tabelul din interior — wrap-ul
+      // rămîne același nod DOM, deci browserul îi păstrează scrollTop/scrollLeft nativ, exact, fără
+      // nicio reconstituire. mountStickyHeader (deja idempotent — vezi acolo) doar reîmprospătează
+      // fantoma pe același wrap, nu o remontează pe un element nou.
+      existingWrap.innerHTML = buildOrderPricingTableInnerHtml(o);
+      mountStickyHeader(existingWrap);
+      var chipsBox = document.getElementById('pt-order-pricing-chips');
+      if(chipsBox) chipsBox.innerHTML = orderPricingChipsHtml();
+      var warnBox = document.getElementById('pt-order-pricing-warn');
+      if(warnBox) warnBox.innerHTML = orderCatalogStaleWarningHtml();
+      var footerBox = document.getElementById('pt-order-pricing-footer');
+      if(footerBox) footerBox.innerHTML = orderPricingFooterHtml(orderProductKeys(o).length);
+    } else {
+      // Prima randare a acestei comenzi (sau comanda nu are produse cunoscute) — nimic de păstrat.
+      box.innerHTML = buildOrderPricingTableHtml(o);
+      var newWrap = box.querySelector('.table-wrap');
+      if(newWrap) mountStickyHeader(newWrap);
     }
     if(window.scrollY !== prevPageScrollY) window.scrollTo(0, prevPageScrollY);
   }
