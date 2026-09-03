@@ -2300,7 +2300,7 @@
       return;
     }
     importFiles = null;
-    importState = { fileName: pl.fileName, headers: pl.headers, rows: pl.rows, skippedRows: pl.skippedRows || 0, detectedBrand: null, rowOrigIndices: pl.rowOrigIndices, rawBuffer: pendingRawBuffers[plId] || null };
+    importState = { fileName: pl.fileName, headers: pl.headers, rows: pl.rows, skippedRows: pl.skippedRows || 0, detectedBrand: extractBrandFromFilename(pl.fileName), rowOrigIndices: pl.rowOrigIndices, rawBuffer: pendingRawBuffers[plId] || null };
     editingPriceListId = plId;
     preselectImportSupplier = pl.supplierId;
     addSubtab = 'excel';
@@ -2334,6 +2334,15 @@
     return '<option value="" ' + (preselectId?'':'disabled selected') + '>— alege furnizor —</option>' + state.suppliers.map(function(s){ return '<option value="' + s.id + '" ' + (preselectId===s.id?'selected':'') + '>' + s.name + '</option>'; }).join('');
   }
 
+  // Brandul unui price list vine din numele fișierului: "Brand, orice altceva.xlsx" — partea de
+  // dinaintea primei virgule. Fără virgulă, nu ghicim nimic (returnăm null), ca să nu inventăm un
+  // brand fals dintr-un nume de fișier fără această convenție.
+  function extractBrandFromFilename(fileName){
+    var base = String(fileName||'').replace(/\.(xlsx|xls|csv)$/i, '');
+    if(base.indexOf(',') === -1) return null;
+    var brand = base.split(',')[0].trim();
+    return brand || null;
+  }
   var HEADER_KEYWORDS = ['name','product','price','cost','barcode','ean','upc','moq','qty','rrp','recommended','brand','box','wholesale','cantitate','pret','produs','denumire','nume','marca','cutie','monedă','currency'];
   function hasHangul(s){ return /[\uAC00-\uD7A3]/.test(String(s||'')); }
   // Comparam cuvinte intregi, nu simpla potrivire de subsir \u2014 altfel cuvinte scurte din lista de mai
@@ -2929,7 +2938,7 @@
             if(rows.length >= 1){
               var headerIdx = detectHeaderRowIndex(rows);
               var dataStartIdx = headerIdx >= 0 ? headerIdx + 1 : 0;
-              parsed.push({ fileName: file.name, headers: rows[headerIdx >= 0 ? headerIdx : 0], rows: rows.slice(dataStartIdx), skippedRows: headerIdx >= 0 ? headerIdx : 0, rawBuffer: e.target.result, rowOrigIndices: origIndices.slice(dataStartIdx) });
+              parsed.push({ fileName: file.name, headers: rows[headerIdx >= 0 ? headerIdx : 0], rows: rows.slice(dataStartIdx), skippedRows: headerIdx >= 0 ? headerIdx : 0, rawBuffer: e.target.result, rowOrigIndices: origIndices.slice(dataStartIdx), detectedBrand: extractBrandFromFilename(file.name) });
             }
           } catch(err){
             ptToast('Nu am putut citi "' + file.name + '": ' + err.message, false);
@@ -3038,8 +3047,13 @@
     if(importFiles && importFiles.length > 1){
       html += '<div class="hint" style="margin-top:0"><b>' + importFiles.length + ' fișiere încărcate</b> — maparea de mai jos (bazată pe primul fișier) se aplică la toate:</div>';
       html += '<div class="preview-wrap" style="margin-bottom:14px"><table><thead><tr><th>Fișier</th><th>Brand detectat</th></tr></thead><tbody>' +
-        importFiles.map(function(f){ return '<tr><td>' + f.fileName + '</td><td>' + (f.detectedBrand ? '<b>' + f.detectedBrand + '</b>' : '<span style="color:var(--text-soft)">— foloseşte brand implicit —</span>') + '</td></tr>'; }).join('') +
+        importFiles.map(function(f){ return '<tr><td>' + f.fileName + '</td><td>' + (f.detectedBrand ? '<b>' + f.detectedBrand + '</b>' : '<span style="color:var(--text-soft)">— fără brand, numele fișierului nu are virgulă —</span>') + '</td></tr>'; }).join('') +
         '</tbody></table></div>';
+    } else {
+      // Brandul vine mereu din numele fișierului ("Brand, orice.xlsx") — arătăm clar ce s-a detectat
+      // și pentru un singur fișier, nu doar cînd sînt mai multe deodată, ca să nu importe cineva
+      // produse fără brand fără să-și dea seama de ce (numele fișierului nu avea virgulă).
+      html += '<div class="hint" style="margin-top:0">Brand detectat din numele fișierului: ' + (importState.detectedBrand ? ('<b>' + escAttr(importState.detectedBrand) + '</b>') : '<span style="color:var(--text-soft)">niciunul — redenumește fișierul ca „Brand, restul numelui" dacă vrei să se completeze automat</span>') + '</div>';
     }
     if(importState.skippedRows > 0){
       html += '<div class="hint" style="margin-top:0">Am sărit automat primele ' + importState.skippedRows + ' rând' + (importState.skippedRows>1?'uri':'') + ' din fișier (probabil detalii de firmă) și am găsit rândul de antet cu coloanele produsului.</div>';
