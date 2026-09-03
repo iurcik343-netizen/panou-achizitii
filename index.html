@@ -1300,7 +1300,13 @@
   var imgActive = 0;
   var IMG_CONCURRENCY = 4;
   function ensureImageUrl(msProd){
-    if(!msProd || msProd.imageUrl || !msProd.hasImage) return;
+    // NU mai sărim pe baza msProd.hasImage — acel flag vine din ultima sincronizare de catalog
+    // (handleCatalog) și poate fi învechit: dacă poza a fost adăugată în MoySklad DUPĂ ultima
+    // sincronizare, hasImage rămîne fals local la nesfîrșit, deci nu se mai încerca NICIODATĂ
+    // aducerea pozei — produsul rămînea blocat pe poza din price list (regula fiind "MoySklad are
+    // prioritate"), exact raportat: produse cu poză deja în MoySklad, dar tot cu poza din Excel în
+    // Comenzi. Cererea /imgurl e ieftină și cache-uită per produs (imgUrlCache) — o încercăm mereu.
+    if(!msProd || msProd.imageUrl) return;
     if(imgUrlCache[msProd.id]) return;
     imgUrlCache[msProd.id] = 'queued';
     imgQueue.push(msProd);
@@ -3886,6 +3892,7 @@
     openOrderId = (openOrderId === id) ? null : id;
     realFreightOpenId = null;
     expandedPackagesKey = null;
+    lastMsSyncFailed = null;
     renderOrderHistory();
   };
   window.ptDeleteOrder = function(id){
@@ -4022,6 +4029,10 @@
   // Import/trimitere prețuri MoySklad pot dura (zeci de produse, cereri la rînd) — fără protecție,
   // un al doilea clic pornea un al doilea ciclu concurent peste primul, riscînd rezultate amestecate.
   var msPriceSyncBusy = false;
+  // Ținut la nivel de modul (nu local în import/push) — footer-ul tabelului de prețuri (
+  // orderPricingFooterHtml) îl citește la fiecare randare, ca lista roșie de produse cu probleme
+  // să rămână vizibilă cît timp comanda stă deschisă, nu doar cît ține un toast trecător.
+  var lastMsSyncFailed = null;
   function setMsSyncBtn(id, busy, busyLabel, idleLabel){
     var b = document.getElementById(id);
     if(!b) return;
@@ -4039,14 +4050,17 @@
     // Produsele nelegate erau sărite silențios — utilizatorul vedea doar "N importate" și presupunea
     // greșit că restul chiar AU fost aduse din MoySklad, cînd de fapt rămăseseră cu formula generică
     // (adaos implicit), niciodată atinse. De obicei cauza e un catalog MoySklad local învechit —
-    // spunem clar cîte au fost sărite, ca să știe să sincronizeze catalogul din nou.
-    var skipped = allProductKeys.length - keys.length;
+    // spunem clar cîte au fost sărite, ca să știe să sincronizeze catalogul din nou — ȘI le arătăm
+    // pe nume în footer-ul tabelului (lastMsSyncFailed), nu doar ca un număr ușor de trecut cu vederea.
+    var skippedKeys = allProductKeys.filter(function(k){ return !moyskladLookup(state.products[k]); });
+    var skipped = skippedKeys.length;
+    var skippedNames = skippedKeys.map(function(k){ return (state.products[k] && state.products[k].displayName) || k; });
     if(!keys.length){ ptToast('Niciun produs din comandă nu e legat de MoySklad — sincronizează catalogul MoySklad (tab Comparație produse) și încearcă din nou.', false); return; }
     msPriceSyncBusy = true;
     setMsSyncBtn('pt-ms-import-btn', true, '⏳ Se importă…', '📥 Importă prețuri din MoySklad');
     setMsSyncBtn('pt-ms-push-btn', true, '', '📤 Trimite prețurile în MoySklad');
     ptToast('Se importă prețurile din MoySklad (' + keys.length + ' produse)…', true);
-    var imported = 0, failed = 0;
+    var imported = 0, failed = 0, failedNames = [];
     try {
       // Concurență redusă (de la 6 la 3) și o reîncercare tăcută după un scurt răgaz — proxy-ul
       // MoySklad e adesea instabil sub multe cereri simultane (l-am observat direct: peste jumătate
@@ -4063,18 +4077,25 @@
             res = await attempt();
           }
           var data = await res.json();
-          if(!res.ok || data.error || !data.attributes){ failed++; return; }
+          if(!res.ok || data.error || !data.attributes){ failed++; failedNames.push(p.displayName || k); return; }
           var a = data.attributes;
           // "Pret furnizor in $" e exact cîmpul în care scriem noi, la trimitere, sc.usdPrice —
           // deci la import citim din ACELAȘI cîmp, în buyPriceOverrideUsd (nu în "Закупочная цена",
           // care e doar sinecostul FINAL, deja cu curs+coeficient aplicat — s-ar recalcula oricum
           // diferit dacă cursul/coeficientul s-au schimbat între timp; USD-ul brut e sursa reală).
-          if(a[MS_PRICE_ATTRS.buyPriceUsd] != null) p.buyPriceOverrideUsd = a[MS_PRICE_ATTRS.buyPriceUsd];
-          if(a[MS_PRICE_ATTRS.sellPrice] != null) p.sellPrice = Math.round(a[MS_PRICE_ATTRS.sellPrice]);
-          if(a[MS_PRICE_ATTRS.secondaryPrice] != null) p.secondaryPrice = Math.round(a[MS_PRICE_ATTRS.secondaryPrice]);
-          if(a[MS_PRICE_ATTRS.pachet1] != null) p.pachet1Price = a[MS_PRICE_ATTRS.pachet1];
-          if(a[MS_PRICE_ATTRS.pachet2] != null) p.pachet2Price = a[MS_PRICE_ATTRS.pachet2];
-          if(a[MS_PRICE_ATTRS.pachet3] != null) p.pachet3Price = a[MS_PRICE_ATTRS.pachet3];
+          // BUG GRAV reparat: MoySklad întoarce 0 (nu lipsă/null) pentru un tip de preț care pur și
+          // simplu n-a fost completat niciodată acolo — exact ca peste tot în restul aplicației (vezi
+          // clearIfUnreviewedZero mai jos), un 0 din MoySklad NU înseamnă "chiar 0", înseamnă "nimic
+          // acolo". Cu != null (care las 0 să treacă), un import după o trimitere EȘUATĂ (deci
+          // MoySklad tot la 0) ștergea silențios prețul local deja corectat manual — exact raportat:
+          // "am trimis prețul, n-a ajuns, apoi am importat ca să văd ce nu s-a salvat și prețul
+          // local s-a golit". Verificăm > 0, nu != null, la toate cîmpurile de preț de mai jos.
+          if(a[MS_PRICE_ATTRS.buyPriceUsd] > 0) p.buyPriceOverrideUsd = a[MS_PRICE_ATTRS.buyPriceUsd];
+          if(a[MS_PRICE_ATTRS.sellPrice] > 0) p.sellPrice = Math.round(a[MS_PRICE_ATTRS.sellPrice]);
+          if(a[MS_PRICE_ATTRS.secondaryPrice] > 0) p.secondaryPrice = Math.round(a[MS_PRICE_ATTRS.secondaryPrice]);
+          if(a[MS_PRICE_ATTRS.pachet1] > 0) p.pachet1Price = a[MS_PRICE_ATTRS.pachet1];
+          if(a[MS_PRICE_ATTRS.pachet2] > 0) p.pachet2Price = a[MS_PRICE_ATTRS.pachet2];
+          if(a[MS_PRICE_ATTRS.pachet3] > 0) p.pachet3Price = a[MS_PRICE_ATTRS.pachet3];
           // Reținem și procentul echivalent (relativ la prețul de vînzare importat), la fel ca la
           // o editare manuală — altfel, la prima modificare ulterioară a prețului de vînzare,
           // valorile tocmai importate ar fi înlocuite cu formula generică în loc să urmeze
@@ -4085,8 +4106,9 @@
             if(p.pachet3Price != null) p.pachet3Pct = Math.round((1 - p.pachet3Price/p.sellPrice)*100);
           }
           imported++;
-        } catch(e){ failed++; }
+        } catch(e){ failed++; failedNames.push(p.displayName || k); }
       });
+      lastMsSyncFailed = (failedNames.length || skippedNames.length) ? { orderId: orderId, type: 'import', failedNames: failedNames, skippedNames: skippedNames } : null;
       save(); renderOrderDetailTable();
       // O actualizare masivă (zeci de produse deodată) poate lăsa fitTableWrapHeight să măsoare
       // înălțimea disponibilă într-un moment nepotrivit — la fel ca la prima deschidere a unei
@@ -4113,7 +4135,9 @@
     if(!base){ ptToast('MoySklad nu e configurat în Setări.', false); return; }
     var allProductKeys2 = orderProductKeys(o);
     var keys = allProductKeys2.filter(function(k){ return moyskladLookup(state.products[k]); });
-    var skippedPush = allProductKeys2.length - keys.length;
+    var skippedKeysPush = allProductKeys2.filter(function(k){ return !moyskladLookup(state.products[k]); });
+    var skippedPush = skippedKeysPush.length;
+    var skippedNamesPush = skippedKeysPush.map(function(k){ return (state.products[k] && state.products[k].displayName) || k; });
     if(!keys.length){ ptToast('Niciun produs din comandă nu e legat de MoySklad — sincronizează catalogul MoySklad (tab Comparație produse) și încearcă din nou.', false); return; }
     var testNote = PUSH_ONLY_PACHET3_TEST ? ' TEST DE SIGURANȚĂ: se trimite doar cîmpul Pachet 3, restul rămîn neatinse.' : '';
     if(!confirm('Trimiți prețurile curente pentru ' + keys.length + ' produse direct în MoySklad?' + testNote + ' Suprascrie cîmpurile de preț existente acolo pentru aceste produse.')) return;
@@ -4121,9 +4145,14 @@
     setMsSyncBtn('pt-ms-push-btn', true, '⏳ Se trimit…', '📤 Trimite prețurile în MoySklad');
     setMsSyncBtn('pt-ms-import-btn', true, '', '📥 Importă prețuri din MoySklad');
     ptToast('Se trimit prețurile în MoySklad (' + keys.length + ' produse)' + (PUSH_ONLY_PACHET3_TEST ? ' — doar Pachet 3, test' : '') + '…', true);
-    var sent = 0, failed = 0, firstErr = null;
+    var sent = 0, failed = 0, firstErr = null, failedNamesPush = [];
     try {
-      await runWithConcurrency(keys, 4, async function(k){
+      // Concurență redusă (de la 4 la 3, ca la import) — setAttrs face o CITIRE plus o SCRIERE la
+      // MoySklad per produs (vezi handleSetAttrs în worker.js), deci concurența reală la MoySklad
+      // era dublă față de numărul afișat aici. Plus o reîncercare tăcută pe eșec, la fel ca la
+      // import — numărul de eșecuri raportat varia mult între încercări (8, apoi 6, apoi 11 din 37)
+      // exact tiparul unei limite de rată MoySklad, nu al unei erori consistente per produs.
+      await runWithConcurrency(keys, 3, async function(k){
         var p = state.products[k];
         var mp = moyskladLookup(p);
         var sc = getOrderLineSinecost(o, k);
@@ -4142,14 +4171,21 @@
         try {
           var r = await moyskladPost('setAttrs', { id: mp.id, attributes: attrsToSet });
           if(!r.ok){
+            await new Promise(function(res){ setTimeout(res, 1200); });
+            r = await moyskladPost('setAttrs', { id: mp.id, attributes: attrsToSet });
+          }
+          if(!r.ok){
             failed++;
+            failedNamesPush.push(p.displayName || k);
             if(!firstErr) firstErr = (r.data && r.data.error) || ('eroare necunoscută la ' + (p.name||k));
             console.error('ptPushPricesToMoySklad eșuat pentru', p.name, k, r.data);
             return;
           }
           sent++;
-        } catch(e){ failed++; if(!firstErr) firstErr = String(e); }
+        } catch(e){ failed++; failedNamesPush.push(p.displayName || k); if(!firstErr) firstErr = String(e); }
       });
+      lastMsSyncFailed = (failedNamesPush.length || skippedNamesPush.length) ? { orderId: orderId, type: 'push', failedNames: failedNamesPush, skippedNames: skippedNamesPush } : null;
+      renderOrderDetailTable();
       ptToast('Prețuri trimise în MoySklad: ' + sent + ' produse' + (failed?(', ' + failed + ' eșuate — ' + firstErr):'') + (skippedPush?(', ' + skippedPush + ' nelegate de MoySklad (sincronizează catalogul)'):'') + '.', true);
     } finally {
       msPriceSyncBusy = false;
@@ -4263,12 +4299,29 @@
     var msOnInv = !!state.settings.moyskladProxyUrl;
     return hiddenColsChipsHtml('inv', [ { col:'qty', label:'Cant. comandată' }, { col:'buy', label:'Achiziție (USD)' }, { col:'cost', label:'Sinecost (MDL)' } ].concat(msOnInv ? [{ col:'hist', label:'Istoric' }] : []));
   }
-  function orderPricingFooterHtml(count){
-    return '<div style="display:flex;align-items:center;gap:14px;padding:10px 2px 0">' +
+  function orderPricingFooterHtml(count, orderId){
+    var html = '<div style="display:flex;align-items:center;gap:14px;padding:10px 2px 0">' +
       '<span style="font-size:12px;color:var(--text-soft)">' + count + ' produs' + (count===1?'':'e') + '</span>' +
       '<div style="flex:1"></div>' +
       '<span style="font-size:11.5px;color:var(--text-dim);display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;border:1px solid var(--rank1);display:inline-block"></span>câmp corectat manual — nu se mai suprascrie la import</span>' +
       '</div>';
+    // Lista pe nume a produselor cu probleme la ultima sincronizare MoySklad (import sau trimitere)
+    // — rămâne vizibilă cît timp comanda stă deschisă, nu doar cît ține toast-ul de rezumat, ca să
+    // se știe exact ce trebuie verificat/corectat manual, nu doar "11 eșuate" fără nume.
+    if(lastMsSyncFailed && lastMsSyncFailed.orderId === orderId){
+      var verb = lastMsSyncFailed.type === 'push' ? 'trimis în' : 'importate din';
+      var parts = [];
+      if(lastMsSyncFailed.failedNames.length){
+        parts.push('<div><b>⚠ Eroare la ' + lastMsSyncFailed.failedNames.length + ' produs' + (lastMsSyncFailed.failedNames.length===1?'':'e') + ' (nu s-au ' + verb + ' MoySklad):</b> ' + lastMsSyncFailed.failedNames.map(escAttr).join(', ') + '</div>');
+      }
+      if(lastMsSyncFailed.skippedNames.length){
+        parts.push('<div' + (lastMsSyncFailed.failedNames.length?' style="margin-top:6px"':'') + '><b>⚠ Nelegate de MoySklad (' + lastMsSyncFailed.skippedNames.length + ') — sincronizează catalogul din Comparație produse:</b> ' + lastMsSyncFailed.skippedNames.map(escAttr).join(', ') + '</div>');
+      }
+      if(parts.length){
+        html += '<div style="margin-top:8px;padding:9px 13px;background:var(--bad-bg);border:1px solid var(--bad);border-radius:var(--radius-md);color:var(--bad);font-size:11.5px;line-height:1.6">' + parts.join('') + '</div>';
+      }
+    }
+    return html;
   }
   // Doar tabelul (thead+tbody) — separat de warn/chips/footer, ca renderOrderDetailTable să poată
   // înlocui NUMAI el, în interiorul aceluiași .table-wrap deja existent, fără să distrugă wrap-ul
@@ -4423,7 +4476,7 @@
     return '<div id="pt-order-pricing-warn">' + orderCatalogStaleWarningHtml() + '</div>' +
       '<div id="pt-order-pricing-chips">' + orderPricingChipsHtml() + '</div>' +
       '<div class="table-wrap table-wrap-fixed" style="overflow-y:auto;max-height:70vh">' + buildOrderPricingTableInnerHtml(o) + '</div>' +
-      '<div id="pt-order-pricing-footer">' + orderPricingFooterHtml(keys.length) + '</div>';
+      '<div id="pt-order-pricing-footer">' + orderPricingFooterHtml(keys.length, o.id) + '</div>';
   }
   // Marchează UN CÎMP anume ca „trecut prin” (editat) în comanda curent deschisă — per cîmp, nu
   // per rînd, ca marginea verde din tabel să arate exact ce a fost deja setat, cîmp cu cîmp.
@@ -4550,7 +4603,7 @@
       var warnBox = document.getElementById('pt-order-pricing-warn');
       if(warnBox) warnBox.innerHTML = orderCatalogStaleWarningHtml();
       var footerBox = document.getElementById('pt-order-pricing-footer');
-      if(footerBox) footerBox.innerHTML = orderPricingFooterHtml(orderProductKeys(o).length);
+      if(footerBox) footerBox.innerHTML = orderPricingFooterHtml(orderProductKeys(o).length, o.id);
     } else {
       // Prima randare a acestei comenzi (sau comanda nu are produse cunoscute) — nimic de păstrat.
       box.innerHTML = buildOrderPricingTableHtml(o);
