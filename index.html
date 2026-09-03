@@ -208,6 +208,13 @@
   #pt-root .two-col { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
   #pt-root .two-col > .main { flex: 2; min-width: 320px; }
   #pt-root .two-col > .side { flex: 1; min-width: 260px; }
+  #pt-root .pt-cart-nav-btn { margin-left: auto; flex-shrink: 0; position: relative; background: none; border: 1px solid var(--border); border-radius: var(--radius-md); width: 38px; height: 38px; font-size: 17px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background .15s ease; }
+  #pt-root .pt-cart-nav-btn:hover { background: var(--accent-tint-2); }
+  #pt-root .pt-cart-nav-badge { position: absolute; top: -6px; right: -6px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; min-width: 17px; height: 17px; border-radius: 9px; display: none; align-items: center; justify-content: center; padding: 0 4px; font-family: var(--sans); }
+  .pt-cart-drawer-backdrop { position: fixed; inset: 0; background: rgba(20, 18, 40, .28); z-index: 40; }
+  .pt-cart-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); background: var(--bg); box-shadow: -8px 0 24px rgba(20, 18, 40, .18); z-index: 41; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .pt-cart-drawer-head { display: flex; align-items: center; justify-content: space-between; }
+  .pt-cart-drawer-head h2 { margin: 0; font-size: 17px; }
   #pt-auth-gate { max-width: 380px; margin: 90px auto 0; }
   #pt-root .table-wrap { -webkit-overflow-scrolling: touch; }
   @media (max-width: 640px) {
@@ -220,6 +227,7 @@
     #pt-root .stat-strip { gap: 8px; }
     #pt-root .stat { flex: 1 1 calc(50% - 8px); }
     #pt-root .panel { padding: 14px; }
+    .pt-cart-drawer { width: 100vw; padding: 16px; }
   }
 </style>
 </head>
@@ -256,6 +264,13 @@
         <button class="tab-btn" data-tab="suppliers">Furnizori</button>
         <button class="tab-btn" data-tab="settings">Setări</button>
       </div>
+      <button id="pt-cart-nav-btn" class="pt-cart-nav-btn" onclick="ptToggleCartDrawer()" title="Coșurile tale de comandă">🛒<span id="pt-cart-nav-count" class="pt-cart-nav-badge">0</span></button>
+    </div>
+
+    <div id="pt-cart-drawer-backdrop" class="pt-cart-drawer-backdrop" style="display:none" onclick="ptToggleCartDrawer()"></div>
+    <div id="pt-cart-drawer" class="pt-cart-drawer" style="display:none">
+      <div class="pt-cart-drawer-head"><h2>Coșul tău de comandă</h2><button class="icon-x" onclick="ptToggleCartDrawer()" title="Închide">✕</button></div>
+      <div id="pt-cart-drawer-body"></div>
     </div>
 
     <div id="tab-compare" class="tab-content"></div>
@@ -1954,10 +1969,36 @@
     var cart = myCart(sid);
     cart[key] = (cart[key] || 0) + 1;
     doSaveNow(true); renderCompare();
+    if(cartDrawerOpen) renderCartDrawer();
   };
   window.ptRemoveFromCart = function(sid, key){
     delete myCart(sid)[key];
     doSaveNow(true); renderCompare();
+    if(cartDrawerOpen) renderCartDrawer();
+  };
+  // Coșul stătea mereu întins, pe tot latul, în capul tab-ului Comenzi — chiar și gol, forțînd
+  // istoricul comenzilor mai jos, mult sub fold. Acum e un sertar (drawer) deschis la cerere, dintr-un
+  // buton fix în antet — vizibil din orice tab (produsele se adaugă în coș și din Comparație produse),
+  // cu un contor mic ca să știi dintr-o privire dacă ai ceva de finalizat, fără să ocupe loc cît timp
+  // nu-l folosești.
+  var cartDrawerOpen = false;
+  function renderCartBadge(){
+    var badge = document.getElementById('pt-cart-nav-count');
+    if(!badge) return;
+    var root = myCartsRoot();
+    var total = 0;
+    Object.keys(root).forEach(function(sid){
+      var c = root[sid];
+      Object.keys(c).forEach(function(k){ total += (c[k] || 0); });
+    });
+    badge.textContent = total;
+    badge.style.display = total > 0 ? 'flex' : 'none';
+  }
+  window.ptToggleCartDrawer = function(){
+    cartDrawerOpen = !cartDrawerOpen;
+    document.getElementById('pt-cart-drawer').style.display = cartDrawerOpen ? 'flex' : 'none';
+    document.getElementById('pt-cart-drawer-backdrop').style.display = cartDrawerOpen ? 'block' : 'none';
+    if(cartDrawerOpen) renderCartDrawer();
   };
   window.ptGoToOrderCart = function(sid){
     currentOrderSupplier = sid;
@@ -1998,6 +2039,7 @@
     return '<div class="prod-meta" style="color:var(--bad)">⚠ ' + line + ' — verifică, ar putea fi produse diferite</div>';
   }
   function renderCompare(){
+    renderCartBadge();
     var el = document.getElementById('tab-compare');
     var prevWrap = el.querySelector('.table-wrap');
     var prevScroll = prevWrap ? prevWrap.scrollTop : 0;
@@ -3464,45 +3506,60 @@
     }
     if(!currentOrderSupplier) currentOrderSupplier = state.suppliers[0].id;
 
-    var html = '<div class="panel"><label>Furnizor pentru comandă</label><select id="pt-order-supplier">' + state.suppliers.map(function(s){
-      var supCart = myCart(s.id);
-      var cnt = Object.keys(supCart).reduce(function(sum,k){ return sum + (supCart[k]||0); }, 0);
-      return '<option value="' + s.id + '">' + s.name + (cnt ? ' — ' + cnt + ' în coș' : '') + '</option>';
-    }).join('') + '</select></div>';
-    html += '<div class="panel"><button class="btn-outline" onclick="ptToggleInvoiceImport()">' + (showInvoiceImport ? '▲ Ascunde' : '▼ Sau înregistrează direct din factura furnizorului (Excel)') + '</button>';
+    var html = '<div class="panel"><button class="btn-outline" onclick="ptToggleInvoiceImport()">' + (showInvoiceImport ? '▲ Ascunde' : '▼ Sau înregistrează direct din factura furnizorului (Excel)') + '</button>';
     if(showInvoiceImport){
       html += '<div style="margin-top:14px"><h2>Înregistrează comanda finală</h2><div class="hint">Încarcă Excel-ul cu comanda confirmată de furnizor (cel cu cantitățile pe care le-ai comandat efectiv). Actualizează prețurile în catalog, ȘI înregistrează automat o comandă cu status „Confirmată" — produsele apar imediat marcate „rezervat" ca să nu le comanzi din nou din greșeală.</div>' +
         '<div id="pt-order-invoice-body"></div></div>';
     }
     html += '</div>';
-    html += '<div class="two-col"><div class="main">';
+    html += '<div class="panel"><h2>Istoric comenzi</h2><div id="pt-order-history"></div></div>';
+    el.innerHTML = html;
+
+    if(showInvoiceImport) renderOrderImport();
+    renderCartDrawer();
+    renderOrderHistory();
+  }
+  // Coșul (selectorul de furnizor, "Coșul tău", căutarea de produse și sumarul comenzii) trăiește
+  // acum într-un sertar separat (#pt-cart-drawer), nu mai stă întins inline în tab-ul Comenzi —
+  // vezi comentariul de la cartDrawerOpen. Randat separat de restul tab-ului Comenzi (istoric +
+  // import factură), ca să poată fi deschis din orice tab, nu doar din Comenzi.
+  function renderCartDrawer(){
+    var body = document.getElementById('pt-cart-drawer-body');
+    if(!body) return;
+    if(state.suppliers.length === 0){
+      body.innerHTML = '<div class="feedback err">Adaugă mai întâi un furnizor.</div>';
+      return;
+    }
+    if(!currentOrderSupplier) currentOrderSupplier = state.suppliers[0].id;
+
+    var html = '<div class="panel"><label>Furnizor pentru comandă</label><select id="pt-order-supplier">' + state.suppliers.map(function(s){
+      var supCart = myCart(s.id);
+      var cnt = Object.keys(supCart).reduce(function(sum,k){ return sum + (supCart[k]||0); }, 0);
+      return '<option value="' + s.id + '">' + s.name + (cnt ? ' — ' + cnt + ' în coș' : '') + '</option>';
+    }).join('') + '</select></div>';
     html += '<div class="panel"><h2>Coșul tău — ' + supplierName(currentOrderSupplier) + '</h2>';
     html += '<div class="table-wrap"><table><thead><tr><th>Produs</th><th>Brand</th><th>Preț</th><th>Cantitate</th><th></th></tr></thead><tbody id="pt-order-rows"></tbody></table></div></div>';
     html += '<div class="panel"><h2>Adaugă alt produs din catalogul ' + supplierName(currentOrderSupplier) + '</h2>' +
       '<input type="text" id="pt-order-search" placeholder="Scrie măcar 2 litere din numele produsului…"><div id="pt-order-search-results"></div></div>';
-    html += '</div>';
-    html += '<div class="side"><div class="panel order-summary"><h2>Sumar comandă</h2>' +
+    html += '<div class="panel order-summary"><h2>Sumar comandă</h2>' +
       '<div class="row"><div><label>Tip transport (informativ)</label><select id="pt-order-freight">' + freightOptionsHtml('sea') + '</select></div>' +
       '<div><label>Coeficient comandă</label><input type="number" step="0.01" id="pt-order-coef" value="' + state.settings.coef + '"></div></div>' +
       '<div id="pt-order-summary"></div>' +
       '<label style="margin-top:12px">Data estimată de sosire</label><input type="date" id="pt-order-eta">' +
       '<button class="btn-primary" id="pt-order-export" style="margin-top:4px;width:100%">Descarcă Excel</button>' +
-      '<button class="btn-outline" id="pt-order-save" style="margin-top:8px;width:100%">Salvează comanda (marchează ca trimisă)</button></div></div></div>';
-    html += '<div class="panel"><h2>Istoric comenzi</h2><div id="pt-order-history"></div></div>';
-    el.innerHTML = html;
+      '<button class="btn-outline" id="pt-order-save" style="margin-top:8px;width:100%">Salvează comanda (marchează ca trimisă)</button></div>';
+    body.innerHTML = html;
 
     document.getElementById('pt-order-supplier').value = currentOrderSupplier;
     document.getElementById('pt-order-supplier').addEventListener('change', function(ev){
-      currentOrderSupplier = ev.target.value; renderOrders();
+      currentOrderSupplier = ev.target.value; renderCartDrawer();
     });
-    if(showInvoiceImport) renderOrderImport();
     document.getElementById('pt-order-coef').addEventListener('input', renderOrderSummary);
     document.getElementById('pt-order-search').addEventListener('input', function(ev){ ptOrderSearch(ev.target.value); });
     document.getElementById('pt-order-export').addEventListener('click', exportOrderExcel);
     document.getElementById('pt-order-save').addEventListener('click', saveOrderToHistory);
     renderOrderRows();
     renderOrderSummary();
-    renderOrderHistory();
   }
 
   function productsForSupplier(sid){
@@ -4900,6 +4957,7 @@
   function renderOrders_ifOpen(){
     var t = document.getElementById('tab-orders');
     if(t && t.style.display !== 'none') renderOrders();
+    if(cartDrawerOpen) renderCartDrawer();
   }
   window.ptCopySupplierData = function(id){
     var s = state.suppliers.find(function(x){ return x.id === id; });
