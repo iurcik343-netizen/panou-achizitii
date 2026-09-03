@@ -4,6 +4,36 @@ const API = 'https://api.moysklad.ru/api/remap/1.2';
 // folosite pentru reconcilierea zilnică cash-vs-card (vezi RECONCILIERE mai jos).
 const RECONCILE_STORES = ['Magazin Bonus', 'Magazin Soiuz'];
 
+// ================= REÎNCERCARE AUTOMATĂ PENTRU CERERILE CĂTRE MOYSKLAD =================
+// MoySklad limitează rata de cereri (429 Too Many Requests) sub trafic mare — o sincronizare de
+// catalog complet, sau mulți produse verificate rapid din Comenzi, pot trimite destule cereri
+// simultane cît să lovească pragul. Fără reîncercare, O SINGURĂ cerere lovită de limită eșua
+// direct — eroarea ajungea în aplicație arătînd ca "nu merge Cloudflare/proxy-ul", deși Worker-ul
+// funcționase perfect, doar MoySklad refuzase temporar acea cerere. Reîncercăm de pînă la 2 ori,
+// cu pauză scurtă crescătoare (respectînd Retry-After dacă MoySklad îl trimite), doar pe
+// 429/5xx sau eșec de rețea — NICIODATĂ pe un 4xx real (400/404 etc.), care nu se rezolvă
+// reîncercînd și ar întîrzia degeaba un răspuns care oricum va fi o eroare.
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+async function msFetch(url, options, retriesLeft) {
+  if (retriesLeft === undefined) retriesLeft = 2;
+  let res;
+  try {
+    res = await fetch(url, options);
+  } catch (err) {
+    if (retriesLeft > 0) { await sleep(300 * (3 - retriesLeft)); return msFetch(url, options, retriesLeft - 1); }
+    throw err;
+  }
+  if (RETRYABLE_STATUS.has(res.status) && retriesLeft > 0) {
+    const retryAfterHeader = res.headers.get('Retry-After');
+    const retryAfterMs = retryAfterHeader ? parseInt(retryAfterHeader, 10) * 1000 : NaN;
+    const waitMs = Number.isFinite(retryAfterMs) ? Math.min(retryAfterMs, 3000) : 300 * (3 - retriesLeft);
+    await sleep(waitMs);
+    return msFetch(url, options, retriesLeft - 1);
+  }
+  return res;
+}
+
 export default {
   async fetch(request, env) {
     const allowOrigin = env.ALLOWED_ORIGIN || '*';
@@ -72,7 +102,7 @@ async function handleStock(baseHeaders, corsHeaders) {
   const idToBarcodes = await fetchAllBarcodes(baseHeaders);
   if (idToBarcodes.error) return json(idToBarcodes, 502, corsHeaders);
 
-  const stockRes = await fetch(`${API}/report/stock/all/current?stockType=stock`, { headers: baseHeaders });
+  const stockRes = await msFetch(`${API}/report/stock/all/current?stockType=stock`, { headers: baseHeaders });
   if (!stockRes.ok) return json({ error: 'Eroare la citirea stocului din MoySklad', status: stockRes.status, detail: await stockRes.text() }, 502, corsHeaders);
   const stockRows = await stockRes.json();
 
@@ -87,7 +117,7 @@ async function handleStock(baseHeaders, corsHeaders) {
 
 // ================= CATALOG COMPLET (tab-ul Produse) =================
 async function fetchPage(url, sep, baseHeaders, limit, offset) {
-  const res = await fetch(`${url}${sep}limit=${limit}&offset=${offset}`, { headers: baseHeaders });
+  const res = await msFetch(`${url}${sep}limit=${limit}&offset=${offset}`, { headers: baseHeaders });
   if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
   return res.json();
 }
@@ -176,7 +206,7 @@ async function handleCatalog(baseHeaders, corsHeaders) {
   const currencyNames = {};
   await Promise.all(Array.from(currencyIds).map(async (id) => {
     try {
-      const res = await fetch(`${API}/entity/currency/${id}`, { headers: baseHeaders });
+      const res = await msFetch(`${API}/entity/currency/${id}`, { headers: baseHeaders });
       if (res.ok) { const c = await res.json(); currencyNames[id] = c.isoCode || c.name || ''; }
     } catch (e) { /* ignorăm, rămâne fără nume de monedă */ }
   }));
@@ -294,7 +324,7 @@ async function handleMoveHistory(url, baseHeaders, corsHeaders) {
 let cachedOrganizationHref = null;
 async function resolveOrganizationHref(baseHeaders) {
   if (cachedOrganizationHref) return cachedOrganizationHref;
-  const res = await fetch(`${API}/entity/organization`, { headers: baseHeaders });
+  const res = await msFetch(`${API}/entity/organization`, { headers: baseHeaders });
   if (!res.ok) return null;
   const data = await res.json();
   const row = (data.rows || [])[0];
@@ -320,7 +350,7 @@ async function handleCreateMoves(body, baseHeaders, corsHeaders) {
       { targetStore: metaRef('store', `${API}/entity/store/${m.targetStoreId}`) },
       { positions }
     );
-    const res = await fetch(`${API}/entity/move`, {
+    const res = await msFetch(`${API}/entity/move`, {
       method: 'POST', headers: { ...baseHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
     });
     const data = await res.json().catch(() => ({}));
@@ -334,7 +364,7 @@ async function handleCreateMoves(body, baseHeaders, corsHeaders) {
 // ================= IMAGINE INDIVIDUALĂ (la cerere, pentru produsele fără imagine din raportul de stoc) =================
 async function handleImageUrl(productId, baseHeaders, corsHeaders) {
   if (!productId) return json({ error: 'Lipsește id-ul produsului.' }, 400, corsHeaders);
-  const res = await fetch(`${API}/entity/product/${productId}/images`, { headers: baseHeaders });
+  const res = await msFetch(`${API}/entity/product/${productId}/images`, { headers: baseHeaders });
   if (!res.ok) return json({ imageUrl: null }, 200, corsHeaders);
   const data = await res.json();
   const first = (data.rows || [])[0];
@@ -347,7 +377,7 @@ async function handleHistory(productId, baseHeaders, corsHeaders) {
   if (!productId) return json({ error: 'Lipsește id-ul produsului.' }, 400, corsHeaders);
   const productHref = `${API}/entity/product/${productId}`;
   const url = `${API}/entity/supply?filter=assortment=${encodeURIComponent(productHref)}&limit=20&order=moment,desc&expand=positions,agent`;
-  const res = await fetch(url, { headers: baseHeaders });
+  const res = await msFetch(url, { headers: baseHeaders });
   if (!res.ok) return json({ error: 'Eroare la citirea istoricului de achiziții', status: res.status, detail: await res.text() }, 502, corsHeaders);
   const data = await res.json();
   const history = [];
@@ -378,7 +408,7 @@ async function handleOrderImport(orderNumber, baseHeaders, corsHeaders) {
     `moment<=${year}-12-31 23:59:59`
   ];
   const url = `${API}/entity/purchaseorder?` + filterParts.map(f => 'filter=' + encodeURIComponent(f)).join('&');
-  const res = await fetch(url, { headers: baseHeaders });
+  const res = await msFetch(url, { headers: baseHeaders });
   if (!res.ok) return json({ error: 'Eroare la căutarea comenzii în MoySklad', status: res.status, detail: await res.text() }, 502, corsHeaders);
   const data = await res.json();
   const found = (data.rows || [])[0];
@@ -389,7 +419,7 @@ async function handleOrderImport(orderNumber, baseHeaders, corsHeaders) {
   // fiecărui articol fără cereri separate — asta rezolvă și cazul frecvent în care poziția e o
   // MODIFICARE (variant), nu un produs simplu: o cerere separată la /entity/product/{id} pentru
   // o variantă dă 404 și linia rămânea fără nume ("produs necunoscut").
-  const fullRes = await fetch(`${API}/entity/purchaseorder/${found.id}?expand=positions,positions.assortment,agent`, { headers: baseHeaders });
+  const fullRes = await msFetch(`${API}/entity/purchaseorder/${found.id}?expand=positions,positions.assortment,agent`, { headers: baseHeaders });
   if (!fullRes.ok) return json({ error: 'Eroare la citirea detaliilor comenzii', status: fullRes.status, detail: await fullRes.text() }, 502, corsHeaders);
   const order = await fullRes.json();
   const posRows = (order.positions && order.positions.rows) || [];
@@ -421,7 +451,7 @@ async function handleOrderImport(orderNumber, baseHeaders, corsHeaders) {
 // deja recepționată integral în depozit.
 async function handleOrderStatus(orderId, baseHeaders, corsHeaders) {
   if (!orderId) return json({ error: 'Lipsește id-ul comenzii.' }, 400, corsHeaders);
-  const res = await fetch(`${API}/entity/purchaseorder/${orderId}`, { headers: baseHeaders });
+  const res = await msFetch(`${API}/entity/purchaseorder/${orderId}`, { headers: baseHeaders });
   if (!res.ok) return json({ error: 'Eroare la verificarea comenzii', status: res.status, detail: await res.text() }, 502, corsHeaders);
   const order = await res.json();
   const sum = order.sum || 0;
@@ -442,7 +472,7 @@ const BUY_PRICE_MDL_EXTCODE = 'bd72d8fc-55bc-11d9-848a-00112f43529a';
 
 async function handleGetAttrs(productId, baseHeaders, corsHeaders) {
   if (!productId) return json({ error: 'Lipsește id-ul produsului.' }, 400, corsHeaders);
-  const res = await fetch(`${API}/entity/product/${productId}`, { headers: baseHeaders });
+  const res = await msFetch(`${API}/entity/product/${productId}`, { headers: baseHeaders });
   if (!res.ok) return json({ error: 'Eroare la citirea produsului din MoySklad', status: res.status, detail: await res.text() }, 502, corsHeaders);
   const data = await res.json();
   const attributes = {};
@@ -455,7 +485,7 @@ async function handleGetAttrs(productId, baseHeaders, corsHeaders) {
 }
 // ================= LISTA REALĂ DE ATRIBUTE PERSONALIZATE DEFINITE ÎN MOYSKLAD (diagnostic) =================
 async function handleAttrDefs(baseHeaders, corsHeaders) {
-  const res = await fetch(`${API}/entity/product/metadata/attributes`, { headers: baseHeaders });
+  const res = await msFetch(`${API}/entity/product/metadata/attributes`, { headers: baseHeaders });
   if (!res.ok) return json({ error: 'Eroare la citirea definițiilor de atribute', status: res.status, detail: await res.text() }, 502, corsHeaders);
   const data = await res.json();
   const attributes = (data.rows || []).map(a => ({ id: a.id, name: a.name, type: a.type }));
@@ -463,7 +493,7 @@ async function handleAttrDefs(baseHeaders, corsHeaders) {
 }
 // ================= TIPURI DE PREȚ DEFINITE ÎN CONT (diagnostic) =================
 async function handlePriceTypes(baseHeaders, corsHeaders) {
-  const res = await fetch(`${API}/context/companysettings/pricetype`, { headers: baseHeaders });
+  const res = await msFetch(`${API}/context/companysettings/pricetype`, { headers: baseHeaders });
   if (!res.ok) return json({ error: 'Eroare la citirea tipurilor de preț', status: res.status, detail: await res.text() }, 502, corsHeaders);
   const data = await res.json();
   return json({ priceTypes: data }, 200, corsHeaders);
@@ -471,7 +501,7 @@ async function handlePriceTypes(baseHeaders, corsHeaders) {
 // ================= PRODUS BRUT, NEFILTRAT (diagnostic) =================
 async function handleRawProduct(productId, baseHeaders, corsHeaders) {
   if (!productId) return json({ error: 'Lipsește id-ul produsului.' }, 400, corsHeaders);
-  const res = await fetch(`${API}/entity/product/${productId}`, { headers: baseHeaders });
+  const res = await msFetch(`${API}/entity/product/${productId}`, { headers: baseHeaders });
   if (!res.ok) return json({ error: 'Eroare la citirea produsului', status: res.status, detail: await res.text() }, 502, corsHeaders);
   const data = await res.json();
   return json(data, 200, corsHeaders);
@@ -483,7 +513,7 @@ async function handleSetAttrs(body, baseHeaders, corsHeaders) {
   const productId = body && body.id;
   const updates = (body && body.attributes) || []; // [{ id: externalCode, value: număr real (MDL sau $, nu bani) }]
   if (!productId || !updates.length) return json({ error: 'Lipsește produsul sau lista de atribute.' }, 400, corsHeaders);
-  const getRes = await fetch(`${API}/entity/product/${productId}`, { headers: baseHeaders });
+  const getRes = await msFetch(`${API}/entity/product/${productId}`, { headers: baseHeaders });
   if (!getRes.ok) return json({ error: 'Eroare la citirea produsului din MoySklad', status: getRes.status, detail: await getRes.text() }, 502, corsHeaders);
   const current = await getRes.json();
   const salePrices = (current.salePrices || []).map(sp => Object.assign({}, sp));
@@ -500,7 +530,7 @@ async function handleSetAttrs(body, baseHeaders, corsHeaders) {
   }
   if (notFound.length) return json({ error: 'Tip de preț necunoscut pe acest produs (externalCode): ' + notFound.join(', ') }, 400, corsHeaders);
   patch.salePrices = salePrices;
-  const putRes = await fetch(`${API}/entity/product/${productId}`, {
+  const putRes = await msFetch(`${API}/entity/product/${productId}`, {
     method: 'PUT', headers: { ...baseHeaders, 'Content-Type': 'application/json' },
     body: JSON.stringify(patch)
   });
@@ -513,7 +543,7 @@ async function handleSetAttrs(body, baseHeaders, corsHeaders) {
 async function handleCreateFolder(body, baseHeaders, corsHeaders) {
   const name = (body && body.name || '').trim();
   if (!name) return json({ error: 'Numele brandului e obligatoriu.' }, 400, corsHeaders);
-  const res = await fetch(`${API}/entity/productfolder`, {
+  const res = await msFetch(`${API}/entity/productfolder`, {
     method: 'POST', headers: { ...baseHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ name })
   });
   const data = await res.json().catch(() => ({}));
@@ -523,7 +553,7 @@ async function handleCreateFolder(body, baseHeaders, corsHeaders) {
 async function handleRenameFolder(body, baseHeaders, corsHeaders) {
   const id = body && body.id, name = (body && body.name || '').trim();
   if (!id || !name) return json({ error: 'Lipsește id-ul sau numele nou.' }, 400, corsHeaders);
-  const res = await fetch(`${API}/entity/productfolder/${id}`, {
+  const res = await msFetch(`${API}/entity/productfolder/${id}`, {
     method: 'PUT', headers: { ...baseHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ name })
   });
   const data = await res.json().catch(() => ({}));
@@ -533,7 +563,7 @@ async function handleRenameFolder(body, baseHeaders, corsHeaders) {
 async function handleDeleteFolder(body, baseHeaders, corsHeaders) {
   const id = body && body.id;
   if (!id) return json({ error: 'Lipsește id-ul brandului.' }, 400, corsHeaders);
-  const res = await fetch(`${API}/entity/productfolder/${id}`, { method: 'DELETE', headers: baseHeaders });
+  const res = await msFetch(`${API}/entity/productfolder/${id}`, { method: 'DELETE', headers: baseHeaders });
   if (res.status === 204 || res.ok) return json({ ok: true }, 200, corsHeaders);
   const detail = await res.text();
   return json({ error: 'Nu am putut șterge brandul — probabil mai conține produse.', detail }, res.status, corsHeaders);
@@ -545,7 +575,7 @@ async function handleSetArchived(body, baseHeaders, corsHeaders) {
   const archived = !!(body && body.archived);
   if (!ids.length) return json({ error: 'Lipsește lista de produse.' }, 400, corsHeaders);
   const results = await Promise.all(ids.map(async (id) => {
-    const res = await fetch(`${API}/entity/product/${id}`, {
+    const res = await msFetch(`${API}/entity/product/${id}`, {
       method: 'PUT', headers: { ...baseHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ archived })
     });
     return { id, ok: res.ok, detail: res.ok ? null : await res.text() };
@@ -557,7 +587,7 @@ async function handleDeleteProducts(body, baseHeaders, corsHeaders) {
   const ids = (body && body.ids) || [];
   if (!ids.length) return json({ error: 'Lipsește lista de produse.' }, 400, corsHeaders);
   const results = await Promise.all(ids.map(async (id) => {
-    const res = await fetch(`${API}/entity/product/${id}`, { method: 'DELETE', headers: baseHeaders });
+    const res = await msFetch(`${API}/entity/product/${id}`, { method: 'DELETE', headers: baseHeaders });
     return { id, ok: res.status === 204 || res.ok, detail: (res.status === 204 || res.ok) ? null : await res.text() };
   }));
   const failed = results.filter(r => !r.ok);
@@ -600,7 +630,7 @@ function chisinauYesterdayRange() {
 }
 
 async function resolveRetailStoreId(name, baseHeaders) {
-  const res = await fetch(`${API}/entity/retailstore?filter=${encodeURIComponent('name=' + name)}`, { headers: baseHeaders });
+  const res = await msFetch(`${API}/entity/retailstore?filter=${encodeURIComponent('name=' + name)}`, { headers: baseHeaders });
   if (!res.ok) return null;
   const data = await res.json();
   const row = (data.rows || [])[0];
@@ -615,7 +645,7 @@ async function sumCardRevenue(storeId, startDateStr, endDateStr, baseHeaders) {
     `closeDate<${endDateStr} 00:00:00`
   ];
   const url = `${API}/entity/retailshift?` + filters.map(f => 'filter=' + encodeURIComponent(f)).join('&') + '&limit=100';
-  const res = await fetch(url, { headers: baseHeaders });
+  const res = await msFetch(url, { headers: baseHeaders });
   if (!res.ok) return null;
   const data = await res.json();
   return (data.rows || []).reduce((sum, r) => sum + (Number(r.proceedsNoCash) || 0), 0);
@@ -741,7 +771,7 @@ async function fetchAllBarcodes(baseHeaders) {
   let offset = 0;
   const limit = 1000;
   while (true) {
-    const res = await fetch(`${API}/entity/product?limit=${limit}&offset=${offset}&filter=archived=false`, { headers: baseHeaders });
+    const res = await msFetch(`${API}/entity/product?limit=${limit}&offset=${offset}&filter=archived=false`, { headers: baseHeaders });
     if (!res.ok) return { error: 'Eroare la citirea produselor din MoySklad', status: res.status, detail: await res.text() };
     const data = await res.json();
     const rows = data.rows || [];
