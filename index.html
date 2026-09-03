@@ -443,6 +443,12 @@
   }
   window.addEventListener('beforeunload', flushPendingSave);
   window.addEventListener('pagehide', flushPendingSave);
+  // Folosit ca să deosebim un blip trecător de conexiune (merită reîncercat tăcut, ca la
+  // doSaveNow) de o eroare "curată" a serverului (ex: parolă greșită, rînd inexistent) — aceea
+  // nu se rezolvă reîncercînd, deci n-o ascundem în spatele unei reîncercări inutile.
+  function isTransientNetworkError(msg){
+    return /fetch|network|connection|timeout/i.test(String(msg||''));
+  }
   async function doSaveNow(skipStaleCheck, retriesLeft){
     if(retriesLeft === undefined) retriesLeft = 2;
     try {
@@ -542,10 +548,24 @@
     await doSaveNow(true);
     location.reload();
   };
-  async function load(){
+  async function load(retriesLeft){
+    if(retriesLeft === undefined) retriesLeft = 2;
     try {
       var result = await supabaseClient.from('app_state').select('data, updated_at').eq('id', STATE_ROW_ID).maybeSingle();
-      if(result.error){ ptToast('Eroare la încărcare: ' + result.error.message, false); return; }
+      if(result.error){
+        // Un blip trecător de conexiune (server Supabase temporar de neatins) merită reîncercat
+        // tăcut, la fel ca la salvare (doSaveNow) — altfel utilizatorul rămîne blocat pe "Se
+        // încarcă…" fără nicio explicație, pentru o problemă care de multe ori se rezolvă singură
+        // în cîteva secunde.
+        if(isTransientNetworkError(result.error.message) && retriesLeft > 0){
+          var cmpRetry = document.getElementById('tab-compare');
+          if(cmpRetry) cmpRetry.innerHTML = '<div class="panel empty">Se încarcă… (reîncerc conexiunea cu serverul)</div>';
+          await new Promise(function(r){ setTimeout(r, 1500); });
+          return load(retriesLeft - 1);
+        }
+        ptToast('Eroare la încărcare: ' + result.error.message, false);
+        return;
+      }
       lastKnownUpdatedAt = (result.data && result.data.updated_at) || null;
       var parsed = result.data && result.data.data;
       if(parsed){
@@ -569,7 +589,20 @@
           save();
         }
       }
-    } catch(e){ /* first run */ }
+    } catch(e){
+      // O eroare ARUNCATĂ aici (nu doar result.error) e mereu o problemă reală de conexiune — un
+      // rînd lipsă (prima folosire a aplicației) nu aruncă, doar întoarce data:null. Înainte,
+      // orice excepție de-aici era tratată tăcut ca "prima rulare" — un blip real de rețea arăta
+      // identic cu "nicio dată încă" (catalog complet gol), fără nicio eroare vizibilă și fără
+      // nicio reîncercare.
+      if(retriesLeft > 0){
+        var cmpRetry2 = document.getElementById('tab-compare');
+        if(cmpRetry2) cmpRetry2.innerHTML = '<div class="panel empty">Se încarcă… (reîncerc conexiunea cu serverul)</div>';
+        await new Promise(function(r){ setTimeout(r, 1500); });
+        return load(retriesLeft - 1);
+      }
+      ptToast('Nu am putut încărca datele: ' + (e && e.message ? e.message : String(e)) + '. Reîncarcă pagina (F5) ca să reîncerci — dacă persistă, verifică status.supabase.com.', false);
+    }
   }
   function applyImportedState(parsed){
     state.suppliers = parsed.suppliers || [];
@@ -5019,9 +5052,27 @@
       fb.className = 'feedback err'; fb.textContent = 'Completează email și parolă.';
       return;
     }
-    var result = await supabaseClient.auth.signInWithPassword({ email: email, password: password });
+    var result, retriesLeft = 2;
+    while(true){
+      try {
+        result = await supabaseClient.auth.signInWithPassword({ email: email, password: password });
+      } catch(e){
+        result = { error: { message: (e && e.message) ? e.message : String(e) } };
+      }
+      if(!result.error) break;
+      // Un blip trecător de conexiune (server Supabase temporar de neatins) merită reîncercat
+      // tăcut, cu o pauză scurtă — la fel ca la salvare (doSaveNow). O parolă greșită vine mereu
+      // ca eroare "curată" ("Invalid login credentials"), nu ca eșec de rețea — aceea nu se
+      // rezolvă reîncercînd, deci apare imediat, fără nicio pauză inutilă.
+      if(!isTransientNetworkError(result.error.message) || retriesLeft <= 0) break;
+      retriesLeft--;
+      fb.textContent = 'Serverul nu răspunde încă — reîncerc…';
+      await new Promise(function(r){ setTimeout(r, 1500); });
+    }
     if(result.error){
-      fb.className = 'feedback err'; fb.textContent = 'Autentificare eșuată: ' + result.error.message;
+      fb.className = 'feedback err';
+      fb.textContent = 'Autentificare eșuată: ' + result.error.message +
+        (isTransientNetworkError(result.error.message) ? ' — dacă persistă, e posibil ca Supabase să aibă o problemă momentană (verifică status.supabase.com); încearcă și un restart al proiectului din dashboard-ul Supabase.' : '');
       return;
     }
     fb.style.display = 'none';
