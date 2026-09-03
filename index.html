@@ -4405,6 +4405,36 @@
         var msSell = msLive(MS_PRICE_ATTRS.sellPrice);
         if(msSell) p.sellPrice = Math.round(msSell);
       }
+      // BUG GRAV reparat: Secundar/Pachet 1/2/3 rămîneau "înghețate" la valoarea calculată cu ocazia
+      // ULTIMEI editări a Prețului de vânzare — o dată ce p.pachetXPrice avea o valoare stocată,
+      // pkgTierCalc (mai jos) o folosea mereu ca atare, fără să mai recalculeze din procentul păstrat.
+      // Cascada de recalculare exista DOAR în ptSetSellPrice (deci doar dacă tastai chiar tu în cîmpul
+      // Preț de vânzare) — dacă prețul de vânzare se schimba pe altă cale (sincronizare live din
+      // MoySklad chiar mai sus, reimport, redeschiderea comenzii altă zi), pachetele rămîneau la vechea
+      // valoare, deși procentul lor păstrat spunea clar alta. Recalculăm aici, la fiecare randare, din
+      // procentul păstrat (sau formula implicită) și Prețul de vânzare CURENT — dar NUMAI pentru
+      // cîmpurile neverificate manual (verificarea le îngheață intenționat, la fel ca peste tot în
+      // tabel) — apoi lăsăm sincronizarea live din MoySklad de mai jos să suprascrie dacă acolo chiar
+      // există o valoare proprie pentru Secundar/Pachet 2/3.
+      if(p.sellPrice != null){
+        if(!isFieldReviewed(o, k, 'secondary')){
+          var livePctSecondary = (p.secondaryPct != null) ? p.secondaryPct : 15;
+          p.secondaryPrice = Math.round(p.sellPrice * (1 - livePctSecondary/100));
+        }
+        if(!isFieldReviewed(o, k, 'pachet1')){
+          // Pachet 1 e prin definiție mereu exact 70% din Preț de vânzare, fără procent propriu.
+          p.pachet1Price = Math.round(p.sellPrice * 0.70);
+        }
+        var liveMarkupPct = sc.cost ? (((p.sellPrice - sc.cost)/sc.cost)*100) : null;
+        if(!isFieldReviewed(o, k, 'pachet2')){
+          var livePct2 = (p.pachet2Pct != null) ? p.pachet2Pct : (liveMarkupPct != null ? pachet2Discount(liveMarkupPct) : null);
+          if(livePct2 != null) p.pachet2Price = Math.round(p.sellPrice * (1 - livePct2/100));
+        }
+        if(!isFieldReviewed(o, k, 'pachet3')){
+          var livePct3 = (p.pachet3Pct != null) ? p.pachet3Pct : (liveMarkupPct != null ? pachet3Discount(liveMarkupPct) : null);
+          if(livePct3 != null) p.pachet3Price = Math.round(p.sellPrice * (1 - livePct3/100));
+        }
+      }
       if(!isFieldReviewed(o, k, 'secondary')){
         var msSecondary = msLive(MS_PRICE_ATTRS.secondaryPrice);
         if(msSecondary) p.secondaryPrice = Math.round(msSecondary);
@@ -4429,7 +4459,6 @@
       // exact cazurile în care importul din MoySklad chiar eșuase (cerut explicit: fără ghicit).
       var sellVal = (p.sellPrice != null) ? p.sellPrice : '';
       var secondaryPct = (p.secondaryPct != null) ? p.secondaryPct : 15;
-      if(p.secondaryPrice == null && p.sellPrice != null){ p.secondaryPrice = Math.round(p.sellPrice * (1 - secondaryPct/100)); save(); }
       var secondaryVal = (p.secondaryPrice != null) ? p.secondaryPrice : '';
       var markupPct = (p.sellPrice != null && sc.cost) ? (((p.sellPrice - sc.cost)/sc.cost)*100) : null;
 
