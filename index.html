@@ -242,6 +242,10 @@
     </form>
   </div>
   <div class="wrap" id="pt-app-wrap" style="display:none">
+    <div id="pt-offline-banner" style="display:none;align-items:center;gap:10px;background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:var(--radius);padding:10px 16px;margin-bottom:12px;font-size:12.5px;line-height:1.4">
+      <span style="flex-shrink:0">⚠</span>
+      <span id="pt-offline-banner-text" style="flex:1">Fără conexiune la server — lucrezi pe ultima copie salvată local. Modificările tale rămân pe acest calculator și se trimit automat de îndată ce revine conexiunea.</span>
+    </div>
     <div class="card pt-header">
       <h1 title="Compară furnizori pe barcode/nume, construiește comenzi, urmărește scumpirile.">Panou achiziții</h1>
       <div class="tabs">
@@ -426,6 +430,85 @@
   }
 
 
+  // ================= MOD OFFLINE (copie locală de rezervă, sincronizare automată) =================
+  // Cât timp Supabase nu răspunde (indisponibil, proiect repornit, incident), aplicația continuă
+  // să funcționeze pe o copie a datelor ținută în localStorage — utilizatorul poate vedea și
+  // EDITA în continuare, iar modificările se trimit singure de îndată ce conexiunea revine. Bara
+  // permanentă (renderOfflineBanner) rămâne vizibilă tot timpul cât suntem offline, exact ca să
+  // se știe clar că nu se sincronizează încă — dacă lucrează 2 persoane simultan cât una e offline,
+  // cea care se reconectează a doua poate suprascrie modificările celeilalte (aceeași limitare pe
+  // care doSaveNow o are deja pentru două file/calculatoare care salvează în paralel — avertizăm
+  // clar, dar nu blocăm salvarea, ca să nu riscăm să pierdem chiar modificarea curentă).
+  var OFFLINE_BACKUP_KEY = 'pt_offline_backup_v1';
+  var RECONNECT_RETRY_MS = 20000;
+  var offlineMode = false;
+  var reconnectTimer = null;
+  function saveLocalBackupNow(){
+    try {
+      localStorage.setItem(OFFLINE_BACKUP_KEY, JSON.stringify({ state: state, lastKnownUpdatedAt: lastKnownUpdatedAt, savedAt: new Date().toISOString() }));
+    } catch(e){ /* localStorage plin sau indisponibil (mod privat etc.) — copia locală e doar o plasă suplimentară, nu blocăm nimic dacă eșuează */ }
+  }
+  function loadLocalBackup(){
+    try {
+      var raw = localStorage.getItem(OFFLINE_BACKUP_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch(e){ return null; }
+  }
+  function setOfflineBanner(on, text){
+    var el = document.getElementById('pt-offline-banner');
+    if(!el) return;
+    el.style.display = on ? 'flex' : 'none';
+    if(on && text){ var t = document.getElementById('pt-offline-banner-text'); if(t) t.textContent = text; }
+  }
+  function enterOfflineMode(text){
+    offlineMode = true;
+    setOfflineBanner(true, text || 'Fără conexiune la server — lucrezi pe o copie locală. Modificările tale rămân pe acest calculator și se trimit automat de îndată ce revine conexiunea. Dacă lucrați 2 în același timp, evitați să editați aceleași lucruri până revine — cel care se reconectează al doilea poate suprascrie ce a făcut celălalt.');
+    scheduleReconnectAttempt();
+  }
+  function exitOfflineMode(){
+    offlineMode = false;
+    if(reconnectTimer){ clearTimeout(reconnectTimer); reconnectTimer = null; }
+    setOfflineBanner(false);
+  }
+  function scheduleReconnectAttempt(){
+    if(reconnectTimer) return;
+    reconnectTimer = setTimeout(async function(){
+      reconnectTimer = null;
+      if(!offlineMode) return;
+      var ok = await tryReconnectAndSync();
+      if(!ok) scheduleReconnectAttempt();
+    }, RECONNECT_RETRY_MS);
+  }
+  // La reconectare: verificăm dacă altcineva a salvat cât am fost offline (aceeași verificare
+  // "stale" ca la o salvare normală) — dacă da, avertizăm CLAR înainte să trimitem, dar tot
+  // trimitem (nu blocăm), ca modificările proprii, reale, să nu se piardă complet.
+  async function tryReconnectAndSync(){
+    try {
+      var check = await supabaseClient.from('app_state').select('updated_at').eq('id', STATE_ROW_ID).maybeSingle();
+      if(check.error) return false;
+      var remoteUpdatedAt = check.data && check.data.updated_at;
+      if(remoteUpdatedAt && lastKnownUpdatedAt && remoteUpdatedAt !== lastKnownUpdatedAt){
+        ptToast('⚠ Cât ai fost offline, s-a salvat o altă versiune a datelor (alt tab/calculator). Trimit oricum modificările tale locale, ca să nu le pierzi — verifică datele după ce revii online, ca să nu fi suprascris ceva important.', false);
+      }
+      exitOfflineMode();
+      await doSaveNow(true);
+      ptToast('✓ Conexiunea a revenit — modificările tale s-au trimis.', true);
+      return true;
+    } catch(e){ return false; }
+  }
+  // Folosit de load() cînd Supabase nu răspunde deloc la pornire (nici după reîncercări) — dacă
+  // există o copie locală de la o sesiune anterioară, pornim pe ea în loc de un ecran gol, ca
+  // utilizatorul să poată vedea și continua să lucreze imediat, nu doar după ce revine conexiunea.
+  function tryLoadFromLocalBackup(){
+    var backup = loadLocalBackup();
+    if(!backup || !backup.state) return false;
+    applyImportedState(backup.state);
+    lastKnownUpdatedAt = backup.lastKnownUpdatedAt || null;
+    var when = backup.savedAt ? new Date(backup.savedAt).toLocaleString('ro-RO') : 'necunoscut';
+    enterOfflineMode('Fără conexiune la server — lucrezi pe o copie locală salvată la ' + when + '. Modificările tale rămân pe acest calculator și se trimit automat de îndată ce revine conexiunea. Dacă lucrați 2 în același timp, evitați să editați aceleași lucruri până revine — cel care se reconectează al doilea poate suprascrie ce a făcut celălalt.');
+    return true;
+  }
+
   var saveTimer = null;
   var lastKnownUpdatedAt = null;
   var staleWarningShown = false;
@@ -455,6 +538,9 @@
   }
   async function doSaveNow(skipStaleCheck, retriesLeft){
     if(retriesLeft === undefined) retriesLeft = 2;
+    // Copia locală se reîmprospătează la ÎNCEPUTUL fiecărei încercări de salvare, indiferent dacă
+    // reușește sau nu — dacă exact acum pică conexiunea, ultima stare bună rămâne oricum pe disc.
+    saveLocalBackupNow();
     try {
       // Verificăm dacă altcineva (alt tab, alt calculator) a salvat între timp — cu o singură
       // versiune partajată, o salvare de-a noastră ar suprascrie orbește modificările lor.
@@ -494,6 +580,7 @@
           return doSaveNow(true, retriesLeft - 1);
         }
         ptToast('Salvarea nu a reușit: ' + result.error.message, false);
+        if(isTransientNetworkError(result.error.message)) enterOfflineMode();
       }
       // NU resetăm staleWarningShown aici — dacă altcineva/altă filă tot salvează în paralel,
       // fiecare salvare a NOASTRĂ ar re-declanșa avertismentul, într-un potop de notificări
@@ -505,7 +592,8 @@
         await new Promise(function(r){ setTimeout(r, 1500); });
         return doSaveNow(true, retriesLeft - 1);
       }
-      ptToast('Eroare la salvare: ' + (e && e.message ? e.message : 'necunoscută') + '. Modificarea ar putea să nu fi fost păstrată.', false);
+      ptToast('Eroare la salvare: ' + (e && e.message ? e.message : 'necunoscută') + '. Modificarea rămâne salvată local pe acest calculator și se trimite automat de îndată ce revine conexiunea.', false);
+      enterOfflineMode();
     }
   }
   // ================= ISTORIC VERSIUNI (plasă de siguranță în caz de ștergere din greșeală) =================
@@ -567,6 +655,7 @@
           await new Promise(function(r){ setTimeout(r, 1500); });
           return load(retriesLeft - 1);
         }
+        if(tryLoadFromLocalBackup()) return;
         ptToast('Eroare la încărcare: ' + result.error.message, false);
         return;
       }
@@ -605,6 +694,7 @@
         await new Promise(function(r){ setTimeout(r, 1500); });
         return load(retriesLeft - 1);
       }
+      if(tryLoadFromLocalBackup()) return;
       ptToast('Nu am putut încărca datele: ' + (e && e.message ? e.message : String(e)) + '. Reîncarcă pagina (F5) ca să reîncerci — dacă persistă, verifică status.supabase.com.', false);
     }
   }
