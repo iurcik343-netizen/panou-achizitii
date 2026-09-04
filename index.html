@@ -120,6 +120,11 @@
   #pt-root .pt-paste-header span:last-child { border-right: none; }
   #pt-root .pt-paste-header span.pt-req { color: var(--accent); }
   #pt-root textarea#pt-add-text { border-radius: 0 0 8px 8px; margin-bottom: 4px; }
+  #pt-root .pt-group-label { font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 9px; }
+  #pt-root .pt-badge-neutral { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 11px; color: var(--text-soft); background: var(--panel); border: 1px solid var(--border); padding: 2px 8px; border-radius: 10px; }
+  #pt-root .pt-danger-zone { border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent); border-radius: var(--radius); padding: 12px 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #pt-root .pt-info-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-soft); border: 1px solid var(--border); padding: 3px 10px; border-radius: 11px; }
+  #pt-root .pt-info-chip.pt-info-chip-accent { color: var(--accent); background: var(--accent-tint); border-color: var(--accent-dim); }
   #pt-root .search-row { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
   #pt-root .search-row input { margin-bottom: 0; }
   #pt-root .stat-strip { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
@@ -3315,6 +3320,7 @@
     var saved = (editingPL && editingPL.mapping) ? { mapping: editingPL.mapping } : (currentSid ? state.importMappings[currentSid] : null);
 
     var html = '';
+    var infoChips = [];
     if(importFiles && importFiles.length > 1){
       html += '<div class="hint" style="margin-top:0"><b>' + importFiles.length + ' fișiere încărcate</b> — maparea de mai jos (bazată pe primul fișier) se aplică la toate:</div>';
       html += '<div class="preview-wrap" style="margin-bottom:14px"><table><thead><tr><th>Fișier</th><th>Brand detectat</th></tr></thead><tbody>' +
@@ -3324,10 +3330,13 @@
       // Brandul vine mereu din numele fișierului ("Brand, orice.xlsx") — arătăm clar ce s-a detectat
       // și pentru un singur fișier, nu doar cînd sînt mai multe deodată, ca să nu importe cineva
       // produse fără brand fără să-și dea seama de ce (numele fișierului nu avea virgulă).
-      html += '<div class="hint" style="margin-top:0">Brand detectat din numele fișierului: ' + (importState.detectedBrand ? ('<b>' + escAttr(importState.detectedBrand) + '</b>') : '<span style="color:var(--text-soft)">niciunul — redenumește fișierul ca „Brand, restul numelui" dacă vrei să se completeze automat</span>') + '</div>';
+      infoChips.push('<span class="pt-info-chip pt-info-chip-accent">Brand detectat: ' + (importState.detectedBrand ? ('<b>' + escAttr(importState.detectedBrand) + '</b>') : '<span style="color:var(--text-soft)">niciunul — redenumește fișierul ca „Brand, restul numelui"</span>') + '</span>');
     }
     if(importState.skippedRows > 0){
-      html += '<div class="hint" style="margin-top:0">Am sărit automat primele ' + importState.skippedRows + ' rând' + (importState.skippedRows>1?'uri':'') + ' din fișier (probabil detalii de firmă) și am găsit rândul de antet cu coloanele produsului.</div>';
+      infoChips.push('<span class="pt-info-chip">' + importState.skippedRows + ' rând' + (importState.skippedRows>1?'uri':'') + ' de antet sărite automat</span>');
+    }
+    if(infoChips.length){
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + infoChips.join('') + '</div>';
     }
     if(saved){
       html += '<div class="feedback ok" style="margin-bottom:10px">✓ Am completat maparea folosită ultima dată pentru acest furnizor. Verific-o și corectează dacă structura fișierului s-a schimbat.</div>';
@@ -4935,69 +4944,91 @@
     renderSuppliers();
   };
 
+  function supplierFieldHtml(key, s){
+    var f = SUPPLIER_FIELDS.find(function(x){ return x.key === key; });
+    if(!f) return '';
+    if(f.type === 'select'){
+      return '<div><label>' + f.label + '</label><select id="pt-sup-' + f.key + '-' + s.id + '">' +
+        f.options.map(function(o){ return '<option value="' + o + '" ' + (s[f.key]===o?'selected':'') + '>' + (o || '— nesetat —') + '</option>'; }).join('') +
+        '</select></div>';
+    }
+    return '<div><label>' + f.label + '</label><input type="' + (f.type||'text') + '" ' + (f.type==='number'?'step="0.1" placeholder="ex: 5"':'') + ' id="pt-sup-' + f.key + '-' + s.id + '" value="' + (s[f.key]||'').toString().replace(/"/g,'&quot;') + '"></div>';
+  }
   function renderSuppliers(){
     var el = document.getElementById('tab-suppliers');
     var prevScrollY = window.scrollY;
     var html = '<div class="panel"><h2>Furnizori</h2><div class="hint">Adaugă furnizorii cu care lucrezi. Apasă pe un furnizor ca să-i editezi numele și să adaugi date complete (bancare, contacte, depozit) — toate opționale.</div>';
     html += '<div class="row"><div style="flex:2"><input type="text" id="pt-new-supplier" placeholder="Nume furnizor" onkeydown="if(event.key===\'Enter\'){event.preventDefault();document.getElementById(\'pt-add-supplier-btn\').click();}"></div><div><button class="btn-primary" id="pt-add-supplier-btn" style="width:100%">Adaugă</button></div></div>';
+    html += '</div>';
     if(state.suppliers.length === 0){
-      html += '<div class="hint">Niciun furnizor adăugat încă.</div>';
+      html += '<div class="panel empty">Niciun furnizor adăugat încă — adaugă primul mai sus.</div>';
     } else {
+      html += '<div class="pt-pending-panel">';
       state.suppliers.forEach(function(s){
         var isOpen = expandedSupplierId === s.id;
-        html += '<div class="supplier-chip" style="cursor:pointer' + (isOpen ? ';background:var(--accent-soft);border-color:var(--accent)' : '') + '" onclick="ptToggleSupplierEdit(\'' + s.id + '\')"><span>' + (isOpen ? '▾ ' : '') + s.name + (isOpen?'':' <span style="color:var(--text-soft);font-weight:400;font-size:11.5px">(apasă pentru detalii)</span>') + '</span>' +
-          '<button class="icon-svg-btn icon-svg-danger" onclick="event.stopPropagation();ptDeleteSupplier(\'' + s.id + '\')">' + ICON_DELETE + ' șterge</button></div>';
+        var supPriceLists = state.priceLists.filter(function(pl){ return pl.supplierId === s.id; }).sort(function(a,b){ return a.fileName.localeCompare(b.fileName, undefined, {sensitivity:'base', numeric:true}); });
+        var pendingCountSup = supPriceLists.filter(function(pl){ return pl.pending; }).length;
+        html += '<div class="pt-pending-row' + (isOpen ? ' pt-pending-editing' : '') + '" style="cursor:pointer" onclick="ptToggleSupplierEdit(\'' + s.id + '\')">' +
+          '<span style="flex:1;min-width:0;font-weight:' + (isOpen?'600':'500') + ';color:' + (isOpen?'var(--accent)':'var(--text)') + '">' + (isOpen?'▾ ':'▸ ') + escAttr(s.name) + '</span>' +
+          '<span style="font-size:11.5px;color:var(--text-soft);white-space:nowrap">' + supPriceLists.length + ' liste de preț</span>' +
+          (pendingCountSup ? '<span class="pt-pending-badge">⧗ ' + pendingCountSup + ' în așteptare</span>' : '') +
+          (s.defaultCurrency ? '<span class="pt-badge-neutral" style="width:44px;text-align:center">' + s.defaultCurrency + '</span>' : '') +
+          '<button class="icon-svg-btn icon-svg-danger" onclick="event.stopPropagation();ptDeleteSupplier(\'' + s.id + '\')" title="Șterge furnizorul">' + ICON_DELETE + ' șterge</button>' +
+          '</div>';
         if(isOpen){
-          html += '<div class="panel" style="margin-top:-4px;margin-bottom:14px" onclick="event.stopPropagation()">';
-          html += '<label>Nume furnizor</label><input type="text" id="pt-sup-name-' + s.id + '" value="' + (s.name||'').replace(/"/g,'&quot;') + '">';
-          html += '<div class="map-grid">';
-          SUPPLIER_FIELDS.forEach(function(f){
-            if(f.type === 'select'){
-              html += '<div><label>' + f.label + '</label><select id="pt-sup-' + f.key + '-' + s.id + '">' +
-                f.options.map(function(o){ return '<option value="' + o + '" ' + (s[f.key]===o?'selected':'') + '>' + (o || '— nesetat —') + '</option>'; }).join('') +
-                '</select></div>';
-            } else {
-              html += '<div><label>' + f.label + '</label><input type="' + (f.type||'text') + '" ' + (f.type==='number'?'step="0.1" placeholder="ex: 5"':'') + ' id="pt-sup-' + f.key + '-' + s.id + '" value="' + (s[f.key]||'').toString().replace(/"/g,'&quot;') + '"></div>';
-            }
-          });
-          html += '</div>';
+          html += '<div style="padding:0 14px 14px;background:var(--accent-tint-2)" onclick="event.stopPropagation()">';
+          html += '<div class="card" style="border-color:var(--accent-dim);padding:14px 16px;display:flex;flex-direction:column;gap:14px;margin-top:13px;margin-bottom:13px">';
+          html += '<div class="map-grid"><div><label>Nume furnizor</label><input type="text" id="pt-sup-name-' + s.id + '" value="' + (s.name||'').replace(/"/g,'&quot;') + '"></div>' +
+            supplierFieldHtml('discountPct', s) + supplierFieldHtml('defaultCurrency', s) + supplierFieldHtml('companyName', s) + '</div>';
+          html += '<div><div class="pt-group-label">Date de firmă</div><div class="map-grid">' +
+            ['companyReg','companyAddress','bankName','bankAccount','bankSwift','notes'].map(function(k){ return supplierFieldHtml(k, s); }).join('') + '</div></div>';
+          html += '<div><div class="pt-group-label">Contacte și depozit</div><div class="map-grid">' +
+            ['warehouseAddress','warehouseKeeperName','warehouseKeeperPhone','warehouseKeeperEmail','managerName','managerPhone','managerEmail'].map(function(k){ return supplierFieldHtml(k, s); }).join('') + '</div></div>';
           html += '<div class="row"><div><button class="btn-primary" onclick="ptSaveSupplierDetails(\'' + s.id + '\')" style="width:100%">Salvează</button></div>' +
-            '<div><button class="btn-outline" onclick="ptCopySupplierData(\'' + s.id + '\')" style="width:100%">Copiază toate datele</button></div></div>';
-          var supPriceLists = state.priceLists.filter(function(pl){ return pl.supplierId === s.id; }).sort(function(a,b){ return a.fileName.localeCompare(b.fileName, undefined, {sensitivity:'base', numeric:true}); });
-          var pendingCountSup = supPriceLists.filter(function(pl){ return pl.pending; }).length;
-          var plOpen = priceListsOpenFor === s.id;
-          html += '<div style="margin-top:14px">' +
-            '<button class="chip" onclick="event.stopPropagation();ptTogglePriceListsView(\'' + s.id + '\')">📄 Price listuri adăugate (' + supPriceLists.length + ')' + (pendingCountSup ? ' · ⏳ ' + pendingCountSup + ' în așteptare' : '') + ' ' + (plOpen?'▴':'▾') + '</button></div>';
-          if(plOpen){
-            if(!supPriceLists.length){
-              html += '<div class="hint">Niciun price list urmărit încă pentru acest furnizor — apar aici pe măsură ce importi Excel-uri din tab-ul „Adaugă listă de preț”.</div>';
-            } else {
-              html += '<div class="panel" style="padding:0;margin-top:8px;margin-bottom:0">';
-              supPriceLists.forEach(function(pl){
-                html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none' + (pl.pending ? ';background:var(--rank3-bg)' : '') + '">' +
-                  '<span>' + (pl.pending ? '⏳ ' : '') + escAttr(pl.fileName) + (pl.brand ? ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + escAttr(pl.brand) + ')</span>' : '') + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + (pl.pending ? 'neimportat încă' : (fmtDateDMY(pl.importedAt) + ' · ' + pl.productKeys.length + ' produse')) + '</span></span>' +
-                  '<span class="entry-actions"><button class="icon-link" onclick="event.stopPropagation();ptEditPriceList(\'' + pl.id + '\')" title="' + (pl.pending ? 'Verifică maparea și importă produsele' : 'Corectează maparea coloanelor pentru acest price list, fără să reîncarci fișierul') + '">' + (pl.pending ? '▶ verifică și importă' : (ICON_EDIT + ' editează')) + '</button>' +
-                  '<button class="icon-svg-btn icon-svg-danger" onclick="event.stopPropagation();ptDeletePriceList(\'' + pl.id + '\')" title="Șterge acest price list' + (pl.pending ? '' : ' — elimină prețurile lui de la acest furnizor, ca să poți reimporta o versiune curată') + '">' + ICON_DELETE + '</button></span>' +
-                  '</div>';
-              });
-              html += '</div>';
+            '<div><button class="btn-outline" onclick="ptCopySupplierData(\'' + s.id + '\')" style="width:100%">' + ICON_COPY + ' Copiază toate datele</button></div></div>';
+          html += '</div>';
+          // Lista de preț urmărite: primele 6 implicit, "arată tot" doar dacă mai sînt — evită un
+          // perete de zeci de rânduri pentru furnizorii vechi, cu istoric lung de importuri.
+          var plShowAll = priceListsOpenFor === s.id;
+          var plToShow = plShowAll ? supPriceLists : supPriceLists.slice(0, 6);
+          html += '<div class="card" style="padding:0;overflow:hidden;margin-bottom:13px">';
+          html += '<div class="pt-pending-head"><span>Liste de preț</span><span class="pt-badge-neutral">' + supPriceLists.length + '</span>' +
+            (pendingCountSup ? '<span class="pt-pending-badge">⧗ ' + pendingCountSup + ' în așteptare</span>' : '') + '<div style="flex:1"></div>' +
+            (supPriceLists.length > 6 ? '<button class="icon-link" onclick="event.stopPropagation();ptTogglePriceListsView(\'' + s.id + '\')">' + (plShowAll ? '▴ restrânge' : '▾ arată tot') + '</button>' : '') +
+            '</div>';
+          if(!supPriceLists.length){
+            html += '<div class="hint" style="margin:12px 14px">Niciun price list urmărit încă pentru acest furnizor — apar aici pe măsură ce importi Excel-uri din tab-ul „Adaugă listă de preț”.</div>';
+          } else {
+            plToShow.forEach(function(pl){
+              html += '<div class="pt-pending-row' + (pl.pending ? ' pt-pending-editing' : '') + '">' +
+                (pl.pending ? '<span style="color:var(--rank3);flex-shrink:0">⧗</span>' : '') +
+                '<span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escAttr(pl.fileName) + (pl.brand ? ' <span style="color:var(--text-soft);font-size:11.5px">(' + escAttr(pl.brand) + ')</span>' : '') + '</span>' +
+                '<span style="font-size:11px;color:var(--text-dim);font-family:var(--mono);white-space:nowrap">' + (pl.pending ? 'neimportat încă' : (fmtDateDMY(pl.importedAt) + ' · ' + pl.productKeys.length + ' produse')) + '</span>' +
+                (pl.pending ? '<button class="btn-outline" style="height:26px;padding:0 13px;font-size:11.5px" onclick="event.stopPropagation();ptEditPriceList(\'' + pl.id + '\')">Verifică și importă</button>' : '<button class="icon-link" onclick="event.stopPropagation();ptEditPriceList(\'' + pl.id + '\')" title="Corectează maparea coloanelor pentru acest price list, fără să reîncarci fișierul">' + ICON_EDIT + ' editează</button>') +
+                '<button class="icon-svg-btn icon-svg-danger" onclick="event.stopPropagation();ptDeletePriceList(\'' + pl.id + '\')" title="Șterge acest price list' + (pl.pending ? '' : ' — elimină prețurile lui de la acest furnizor, ca să poți reimporta o versiune curată') + '">' + ICON_DELETE + '</button>' +
+                '</div>';
+            });
+            if(!plShowAll && supPriceLists.length > 6){
+              html += '<div style="padding:9px 14px;font-family:var(--mono);font-size:11px;color:var(--text-dim)">încă ' + (supPriceLists.length - 6) + ' liste</div>';
             }
           }
-          html += '<div class="row" style="margin-top:14px">';
+          html += '</div>';
+          html += '<div class="pt-danger-zone">';
           if(pendingWipeSupplierId === s.id){
-            html += '<div style="flex:1"><div class="feedback err" style="margin-bottom:6px">Sigur ștergi toate produsele acestui furnizor? Nu se poate anula automat.</div>' +
-              '<div class="row"><div><button class="btn-outline" style="width:100%;background:var(--bad);color:#fff;border-color:var(--bad)" onclick="ptConfirmWipeSupplierProducts(\'' + s.id + '\')">Da, șterge definitiv</button></div>' +
-              '<div><button class="btn-outline" style="width:100%" onclick="ptCancelWipe()">Anulează</button></div></div></div>';
+            html += '<div style="flex:1"><div style="font-size:12.5px;font-weight:600;color:var(--bad);margin-bottom:2px">Sigur?</div><div style="font-size:11.5px;color:var(--text-soft)">Nu se poate anula automat.</div></div>' +
+              '<button class="btn-outline" style="background:var(--bad);color:#fff;border-color:var(--bad)" onclick="ptConfirmWipeSupplierProducts(\'' + s.id + '\')">Da, șterge definitiv</button>' +
+              '<button class="btn-outline" onclick="ptCancelWipe()">Anulează</button>';
           } else {
-            html += '<div><button class="btn-outline" style="width:100%;border-color:var(--bad);color:var(--bad)" onclick="ptAskWipeSupplierProducts(\'' + s.id + '\')">Șterge toate produsele acestui furnizor (redo import)</button></div>';
+            html += '<div style="flex:1"><div style="font-size:12.5px;font-weight:600;color:var(--bad);margin-bottom:2px">Zonă periculoasă</div><div style="font-size:11.5px;color:var(--text-soft)">Șterge toate produsele acestui furnizor, ca să refaci importul de la zero. Listele de preț rămân.</div></div>' +
+              '<button class="btn-outline" style="border-color:var(--bad);color:var(--bad)" onclick="ptAskWipeSupplierProducts(\'' + s.id + '\')">' + ICON_DELETE + ' Șterge toate produsele</button>';
           }
           html += '</div>';
           html += '<div id="pt-sup-feedback-' + s.id + '"></div>';
           html += '</div>';
         }
       });
+      html += '</div>';
     }
-    html += '</div>';
     el.innerHTML = html;
     window.scrollTo(0, prevScrollY);
     document.getElementById('pt-add-supplier-btn').addEventListener('click', function(){
