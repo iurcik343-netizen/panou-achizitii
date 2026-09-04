@@ -2242,7 +2242,11 @@
         html += '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:4px 10px;font-size:10.5px;margin-bottom:8px;display:inline-block">' + keys.length + ' produse — afișez primele ' + RENDER_LIMIT + '. Caută sau filtrează pe brand pentru restul.</div><div style="flex-basis:100%"></div>';
       }
 
-      var suppliersList = state.suppliers.filter(function(s){ return keys.some(function(k){ return !!state.products[k].bySupplier[s.id]; }); });
+      // Doar prezența unei intrări bySupplier nu e destul — un produs poate fi asociat unui furnizor
+      // NUMAI printr-o comandă/factură (fără preț de listă real, vezi doOrderImport), caz în care
+      // coloana ar arăta „—” pe tot rândul. Cerem un preț real (price != null), altfel coloana
+      // apărea goală de sus până jos pentru furnizori fără niciun produs relevant la filtrul curent.
+      var suppliersList = state.suppliers.filter(function(s){ return keys.some(function(k){ var e = state.products[k].bySupplier[s.id]; return e && e.price != null; }); });
       var visibleSuppliers = suppliersList.filter(function(s){ return !isColHidden('cmp', 'sup_' + s.id); });
       var colspan = visibleSuppliers.length + 2 +
         (msOn && !isColHidden('cmp','hist') ? 1 : 0) +
