@@ -97,6 +97,29 @@
   #pt-root .feedback { font-size: 12.5px; padding: 10px 12px; border-radius: 7px; margin-top: 8px; white-space: pre-line; }
   #pt-root .feedback.ok { background: var(--rank1-bg); color: var(--rank1); }
   #pt-root .feedback.err { background: var(--bad-bg); color: var(--bad); }
+  #pt-root .feedback.warn { background: var(--rank3-bg); color: var(--rank3); }
+  /* Toggle Excel/Lipește text — din designul „Adaugă listă de preț": buton dreptunghiular, nu
+     pastilă (.chip e rotunjită 20px și e folosită pentru filtre/statusuri, nu pentru moduri). */
+  #pt-root .pt-mode-toggle { display: flex; gap: 6px; align-items: center; }
+  #pt-root button.pt-mode-toggle-btn { height: 34px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; font-size: 12.5px; font-weight: 500; color: var(--text-soft); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; white-space: nowrap; font-family: var(--sans); }
+  #pt-root button.pt-mode-toggle-btn.active { font-weight: 600; color: var(--accent); background: var(--accent-tint); border-color: var(--accent); }
+  #pt-root .pt-import-grid { display: grid; grid-template-columns: 300px minmax(0,1fr); gap: 14px; align-items: end; }
+  #pt-root .pt-dropzone { height: 34px; box-sizing: border-box; display: flex; align-items: center; gap: 10px; border: 1px dashed var(--accent-dim); border-radius: var(--radius-md); padding: 0 12px; background: var(--accent-tint-2); cursor: pointer; }
+  #pt-root .pt-dropzone.pt-dropzone-over { background: var(--accent-tint); border-color: var(--accent); }
+  #pt-root .pt-dropzone-label { font-size: 12px; color: var(--accent); font-weight: 500; }
+  #pt-root .pt-dropzone-hint { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #pt-root .pt-pending-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px; }
+  #pt-root .pt-pending-head { display: flex; align-items: center; gap: 9px; padding: 11px 14px; background: var(--panel-2); border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+  #pt-root .pt-pending-badge { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 11px; font-weight: 400; color: var(--text-soft); background: var(--rank3-bg); border: 1px solid color-mix(in srgb, var(--rank3) 34%, transparent); padding: 2px 8px; border-radius: 10px; }
+  #pt-root .pt-pending-row { display: flex; align-items: center; gap: 10px; padding: 10px 13px; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
+  #pt-root .pt-pending-row:last-child { border-bottom: none; }
+  #pt-root .pt-pending-row.pt-pending-editing { background: var(--accent-tint-2); box-shadow: inset 3px 0 0 var(--accent); }
+  #pt-root .pt-pending-row.pt-pending-done { background: var(--rank1-bg); }
+  #pt-root .pt-paste-header { display: flex; gap: 0; background: var(--panel-2); border: 1px solid var(--border); border-bottom: none; border-radius: 8px 8px 0 0; padding: 0 2px; overflow-x: auto; }
+  #pt-root .pt-paste-header span { flex: 1; min-width: 74px; padding: 6px 8px; font-size: 9.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--border-soft); }
+  #pt-root .pt-paste-header span:last-child { border-right: none; }
+  #pt-root .pt-paste-header span.pt-req { color: var(--accent); }
+  #pt-root textarea#pt-add-text { border-radius: 0 0 8px 8px; margin-bottom: 4px; }
   #pt-root .search-row { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
   #pt-root .search-row input { margin-bottom: 0; }
   #pt-root .stat-strip { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
@@ -234,6 +257,7 @@
     #pt-root .stat { flex: 1 1 calc(50% - 8px); }
     #pt-root .panel { padding: 14px; }
     .pt-cart-drawer { width: 100vw; padding: 16px; }
+    #pt-root .pt-import-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -2349,7 +2373,10 @@
         if(!isColHidden('cmp','rrp')) html += '<td class="dim">' + colwDivHtml('cmp','rrp',110,rrpCellHtml(p, minLanded)) + '</td>';
         html += '<td style="padding:6px 4px;text-align:center">' + (p.archived ?
           '<button class="icon-link" onclick="ptUnarchiveProduct(\'' + kEsc + '\')" title="Scoate din arhivă">↩</button>' :
-          '<div style="display:flex;flex-direction:column;align-items:center;gap:0"><button class="icon-svg-btn" style="padding:1px" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">' + ICON_ARCHIVE + '</button><button class="icon-svg-btn icon-svg-danger" style="padding:1px" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">' + ICON_DELETE + '</button></div>') + '</td>';
+          // Șterge e ireversibil, arhivează nu — prea aproape una de alta (gap:0) duceau la click-uri
+          // greșite pe ștergere. Le depărtăm mult (12px), arhivează rămâne sus lîngă restul acțiunilor
+          // obișnuite, șterge coboară clar dedesubt, ca să nu se mai nimerească din greșeală.
+          '<div style="display:flex;flex-direction:column;align-items:center;gap:12px"><button class="icon-svg-btn" style="padding:1px" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">' + ICON_ARCHIVE + '</button><button class="icon-svg-btn icon-svg-danger" style="padding:1px" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">' + ICON_DELETE + '</button></div>') + '</td>';
         html += '</tr>';
 
         if(isExpanded){
@@ -2539,9 +2566,9 @@
       el.innerHTML = '<div class="panel"><div class="feedback err">Adaugă mai întâi un furnizor în tab-ul „Furnizori”.</div></div>';
       return;
     }
-    var html = '<div class="subtabs">' +
-      '<button class="chip ' + (addSubtab==='excel'?'active':'') + '" onclick="ptSetAddSubtab(\'excel\')">Fișier Excel (listă preț)</button>' +
-      '<button class="chip ' + (addSubtab==='paste'?'active':'') + '" onclick="ptSetAddSubtab(\'paste\')">Lipește text</button></div>';
+    var html = '<div class="pt-mode-toggle" style="margin-bottom:12px">' +
+      '<button class="pt-mode-toggle-btn ' + (addSubtab==='excel'?'active':'') + '" onclick="ptSetAddSubtab(\'excel\')">📄 Fișier Excel (listă preț)</button>' +
+      '<button class="pt-mode-toggle-btn ' + (addSubtab==='paste'?'active':'') + '" onclick="ptSetAddSubtab(\'paste\')">📝 Lipește text</button></div>';
     html += '<div id="pt-add-body"></div>';
     el.innerHTML = html;
     if(addSubtab === 'excel') renderExcelImport();
@@ -3076,17 +3103,22 @@
   function renderExcelImport(){
     var body = document.getElementById('pt-add-body');
     var html = '<div class="panel"><h2>Importă din Excel</h2><div class="hint">Poți încărca mai multe fișiere deodată (ex: câte unul per brand). Fișierele NU creează produse imediat — rămân „în așteptare" până verifici maparea coloanelor pentru fiecare, mai jos, și apeși „Importă produsele" pe rând.</div>';
-    html += '<label>Furnizor</label><select id="pt-imp-supplier">' + supplierOptions(preselectImportSupplier) + '</select>';
-    html += '<label>Fișiere' + (editingPriceListId ? ' (opțional — completează doar dacă vrei să încarci o versiune nouă a fișierului)' : ' (poți selecta mai multe)') + '</label><input type="file" id="pt-imp-file" accept=".xlsx,.xls,.csv" multiple>';
+    html += '<div class="pt-import-grid">' +
+      '<label style="margin-bottom:0"><span>Furnizor</span><select id="pt-imp-supplier" style="margin-bottom:0">' + supplierOptions(preselectImportSupplier) + '</select></label>' +
+      '<div><label style="margin-bottom:5px">Fișiere' + (editingPriceListId ? ' (opțional — completează doar dacă vrei să încarci o versiune nouă a fișierului)' : ' (poți selecta mai multe)') + '</label>' +
+      '<div class="pt-dropzone" id="pt-imp-dropzone" onclick="document.getElementById(\'pt-imp-file\').click()">' +
+      '<span class="pt-dropzone-label">Alege fișiere</span><span class="pt-dropzone-hint">sau trage-le aici · brandul se ia din numele fișierului</span></div>' +
+      '<input type="file" id="pt-imp-file" accept=".xlsx,.xls,.csv" multiple style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;margin:0;padding:0;border:0">' +
+      '</div></div>';
     // Maparea se deschide chiar sub fișierul editat (dacă e unul „în așteptare"), nu la capătul
     // paginii — altfel, cu 24 de fișiere în listă, trebuia să derulezi mult ca s-o găsești.
     var editingIsPending = editingPriceListId && state.priceLists.some(function(pl){ return pl.id === editingPriceListId && pl.pending; });
     if(editingPriceListId && !editingIsPending){
-      html += '<div class="feedback ok">✏️ Verifici price list-ul „' + escAttr(importState.fileName) + '" — corectează maparea de mai jos și apasă „Importă produsele", <b>fără să mai selectezi fișierul din nou</b>. <button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button></div>' +
+      html += '<div class="feedback ok">' + ICON_EDIT + ' Verifici price list-ul „' + escAttr(importState.fileName) + '" — corectează maparea de mai jos și apasă „Importă produsele", <b>fără să mai selectezi fișierul din nou</b>. <button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button></div>' +
         '<div id="pt-imp-mapping"></div>';
     }
-    html += '<div id="pt-imp-pending"></div>';
     html += '</div>';
+    html += '<div id="pt-imp-pending"></div>';
     body.innerHTML = html;
     preselectImportSupplier = null;
 
@@ -3100,23 +3132,28 @@
       if(!pendingHere.length && !justAppliedHere.length){ box.innerHTML = ''; return; }
       var rowsHtml = pendingHere.map(function(pl){
         var isEditingThis = editingPriceListId === pl.id;
-        var row = '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
-          '<span>' + escAttr(pl.fileName) + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + (pl.rows ? pl.rows.length : 0) + ' rânduri</span></span>' +
-          '<span>' + (isEditingThis ? '<button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button>' : '<button class="btn-outline" onclick="ptEditPriceList(\'' + pl.id + '\')">Verifică și importă</button>') +
-          ' <button class="icon-svg-btn icon-svg-danger" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge — nu mai am nevoie de acest price list">' + ICON_DELETE + '</button></span>' +
+        var row = '<div class="pt-pending-row' + (isEditingThis ? ' pt-pending-editing' : '') + '">' +
+          '<span style="color:var(--rank3);flex-shrink:0">⧗</span>' +
+          '<span style="flex:1;min-width:0"><b style="font-weight:500">' + escAttr(pl.fileName) + '</b> <span style="color:var(--text-dim);font-size:11px;font-family:var(--mono)">· ' + (pl.rows ? pl.rows.length : 0) + ' rânduri</span></span>' +
+          (isEditingThis ? '<button class="btn-quiet" style="height:28px;padding:0 13px;font-size:11.5px" onclick="ptCancelEditPriceList()">Anulează</button>' : '<button class="btn-outline" style="height:28px;padding:0 13px;font-size:11.5px" onclick="ptEditPriceList(\'' + pl.id + '\')">Verifică și importă</button>') +
+          '<button class="icon-svg-btn icon-svg-danger" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge — nu mai am nevoie de acest price list">' + ICON_DELETE + '</button>' +
           '</div>';
-        if(isEditingThis) row += '<div id="pt-imp-mapping" style="padding:12px 14px;border-bottom:1px solid var(--border)"></div>';
+        if(isEditingThis) row += '<div id="pt-imp-mapping" style="padding:14px 16px;border-bottom:1px solid var(--border-soft)"></div>';
         return row;
       }).join('');
       var doneHtml = justAppliedHere.map(function(pl){
-        return '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;background:var(--rank1-bg)">' +
-          '<span style="color:var(--rank1);font-weight:600">✓ ' + escAttr(pl.fileName) + ' — importat (' + pl.productKeys.length + ' produse)</span>' +
-          '<span><button class="icon-link" onclick="ptEditPriceList(\'' + pl.id + '\')">' + ICON_EDIT + ' editează</button> <button class="icon-svg-btn icon-svg-danger" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge">' + ICON_DELETE + '</button></span>' +
+        return '<div class="pt-pending-row pt-pending-done">' +
+          '<span style="color:var(--rank1);flex-shrink:0">✓</span>' +
+          '<span style="flex:1;min-width:0;color:var(--rank1);font-weight:600">' + escAttr(pl.fileName) + ' — importat (' + pl.productKeys.length + ' produse)</span>' +
+          '<button class="icon-link" onclick="ptEditPriceList(\'' + pl.id + '\')">' + ICON_EDIT + ' editează</button>' +
+          '<button class="icon-svg-btn icon-svg-danger" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge">' + ICON_DELETE + '</button>' +
           '</div>';
       }).join('');
-      box.innerHTML = '<div class="panel" style="background:var(--rank3-bg);border-color:var(--rank3)">' +
-        (pendingHere.length ? '<h2 style="margin:0 0 8px;font-size:15px">⏳ În așteptare (' + pendingHere.length + ')</h2>' : '<h2 style="margin:0 0 8px;font-size:15px">✓ Gata</h2>') +
-        '<div class="panel" style="padding:0;margin-bottom:0;background:var(--panel)">' + doneHtml + rowsHtml + '</div></div>';
+      box.innerHTML = '<div class="pt-pending-panel">' +
+        '<div class="pt-pending-head"><span style="color:var(--rank3)">⧗</span>' +
+        (pendingHere.length ? ('<span>În așteptare</span><span class="pt-pending-badge">' + pendingHere.length + '</span>') : '<span>✓ Gata</span>') +
+        '<div style="flex:1"></div><span style="font-size:11.5px;color:var(--text-dim);font-weight:400">' + (pendingHere.length ? 'nimic nu se importă până nu apeși pe fiecare' : '') + '</span></div>' +
+        doneHtml + rowsHtml + '</div>';
     }
     renderPendingList();
 
@@ -3131,11 +3168,10 @@
     });
     if(editingPriceListId && importState) renderMapping();
 
-    document.getElementById('pt-imp-file').addEventListener('change', function(ev){
-      var fileList = Array.prototype.slice.call(ev.target.files || []);
+    function handleFiles(fileList){
       if(!fileList.length) return;
       var sid = document.getElementById('pt-imp-supplier').value;
-      if(!sid){ ptToast('Selectează furnizorul înainte de a încărca fișiere.', false); ev.target.value = ''; return; }
+      if(!sid){ ptToast('Selectează furnizorul înainte de a încărca fișiere.', false); return; }
       var parsed = [];
       var pendingCount = fileList.length;
       fileList.forEach(function(file){
@@ -3192,13 +3228,29 @@
               }
             });
             save();
-            ev.target.value = '';
+            var fileInput = document.getElementById('pt-imp-file');
+            if(fileInput) fileInput.value = '';
             ptToast(parsed.length + ' fișier(e) încărcate' + (reusedCount ? (', ' + reusedCount + ' recunoscute ca actualizare a unei liste deja importate (maparea se completează automat)') : '') + ' — verifică mai jos înainte să se creeze produse.', true);
             renderExcelImport();
           }
         };
         reader.readAsArrayBuffer(file);
       });
+    }
+
+    document.getElementById('pt-imp-file').addEventListener('change', function(ev){
+      handleFiles(Array.prototype.slice.call(ev.target.files || []));
+    });
+    // Zona de "trage fișierele aici" — același handleFiles ca la selecția clasică din dialog,
+    // ca să nu existe două căi de import cu comportamente ușor diferite.
+    var dz = document.getElementById('pt-imp-dropzone');
+    dz.addEventListener('dragover', function(ev){ ev.preventDefault(); dz.classList.add('pt-dropzone-over'); });
+    dz.addEventListener('dragleave', function(){ dz.classList.remove('pt-dropzone-over'); });
+    dz.addEventListener('drop', function(ev){
+      ev.preventDefault();
+      dz.classList.remove('pt-dropzone-over');
+      var files = Array.prototype.slice.call((ev.dataTransfer && ev.dataTransfer.files) || []);
+      handleFiles(files);
     });
   }
 
@@ -3278,7 +3330,7 @@
       html += '<div class="hint" style="margin-top:0">Am sărit automat primele ' + importState.skippedRows + ' rând' + (importState.skippedRows>1?'uri':'') + ' din fișier (probabil detalii de firmă) și am găsit rândul de antet cu coloanele produsului.</div>';
     }
     if(saved){
-      html += '<div class="feedback ok" style="margin-bottom:10px">Am completat maparea folosită ultima dată pentru acest furnizor. Verific-o și corectează dacă structura fișierului s-a schimbat.</div>';
+      html += '<div class="feedback ok" style="margin-bottom:10px">✓ Am completat maparea folosită ultima dată pentru acest furnizor. Verific-o și corectează dacă structura fișierului s-a schimbat.</div>';
     }
     html += '<div class="map-grid">';
     FIELD_DEFS.forEach(function(f){
@@ -3328,6 +3380,27 @@
     });
     html += '</tbody></table>';
     preview.innerHTML = html;
+
+    // Câte rânduri chiar vor fi sărite la import — nu doar cele 5 din previzualizare, ci din tot
+    // fișierul — arătat AICI, înainte de import, nu doar ca număr în toast-ul de după (CLAUDE.md
+    // regula 5: nu importa silent date incomplete, arată clar ce rânduri au probleme).
+    var missingBox = document.getElementById('pt-missing-warn');
+    if(missingBox) missingBox.remove();
+    if(m.name >= 0 && m.price >= 0 && importState.rows.length){
+      var missingCount = importState.rows.filter(function(r){
+        var name = String(r[m.name]||'').trim();
+        var price = parseFloat(String(r[m.price]).replace(',','.'));
+        return !name || isNaN(price);
+      }).length;
+      if(missingCount > 0){
+        var mw = document.createElement('div');
+        mw.id = 'pt-missing-warn';
+        mw.className = 'feedback warn';
+        mw.style.marginTop = '8px';
+        mw.textContent = '⚠ ' + missingCount + ' rând' + (missingCount>1?'uri':'') + ' din ' + importState.rows.length + ' nu are produs/preț — va fi sărit la import.';
+        preview.parentNode.insertBefore(mw, preview.nextSibling);
+      }
+    }
 
     var warnBox = document.getElementById('pt-currency-warn');
     if(warnBox) warnBox.remove();
@@ -3464,15 +3537,23 @@
     renderExcelImport();
   }
 
+  var PASTE_HEADER_COLS = [
+    { label: 'Nume', req: true }, { label: 'Preț', req: true }, { label: 'Barcode' }, { label: 'Cantitate' },
+    { label: 'Brand' }, { label: 'RRP' }, { label: 'Monedă' }, { label: 'Transport' }, { label: 'MOQ' }, { label: 'Greutate(g)' }
+  ];
   function renderPasteImport(){
     var body = document.getElementById('pt-add-body');
     var html = '<div class="panel"><h2>Lipește text</h2>' +
-      '<div class="hint">O linie per produs, câmpurile separate prin TAB (lipit din Excel): <b>Nume [TAB] Preț [TAB] Barcode [TAB] Cantitate [TAB] Brand [TAB] RRP [TAB] Monedă [TAB] Transport [TAB] MOQ [TAB] Greutate(g)</b>. Doar Nume și Preț sunt obligatorii, restul poți lăsa gol.</div>';
-    html += '<label>Furnizor</label><select id="pt-add-supplier">' + supplierOptions() + '</select>';
-    html += '<div class="row"><div><label>Brand implicit (dacă lista e pentru un singur brand)</label><input type="text" id="pt-add-brand" placeholder="ex: Celimax"></div>' +
+      '<div class="hint">O linie per produs, câmpurile separate prin TAB — exact cum ies dintr-o selecție copiată din Excel. Doar <b>Nume</b> și <b>Preț</b> sunt obligatorii; restul pot rămâne goale.</div>';
+    html += '<div class="row" style="margin-bottom:0">' +
+      '<div><label>Furnizor</label><select id="pt-add-supplier">' + supplierOptions() + '</select></div>' +
+      '<div><label>Brand implicit</label><input type="text" id="pt-add-brand" placeholder="ex: Celimax"></div>' +
       '<div><label>Monedă implicită</label><select id="pt-add-currency"><option value="USD">USD</option><option value="MDL">MDL</option><option value="EUR">EUR</option><option value="KRW">KRW (won coreean)</option></select></div>' +
       '<div><label>Transport implicit</label><select id="pt-add-freight">' + freightOptionsHtml('sea') + '</select></div></div>';
-    html += '<label>Listă de preț</label><textarea id="pt-add-text" placeholder="Snail Mucin Essence\t7.50\t8801234567890\t100ml\tCOSRX\t180"></textarea>';
+    html += '<label>Listă de preț</label>' +
+      '<div class="pt-paste-header">' + PASTE_HEADER_COLS.map(function(c){ return '<span' + (c.req ? ' class="pt-req"' : '') + '>' + c.label + (c.req ? ' *' : '') + '</span>'; }).join('') + '</div>' +
+      '<textarea id="pt-add-text" placeholder="Snail Mucin Essence\t7.50\t8801234567890\t100ml\tCOSRX\t180"></textarea>' +
+      '<span style="font-size:11px;color:var(--text-dim)">Antetul de deasupra arată ordinea coloanelor — nu se lipește, e doar reper.</span>';
     html += '<button class="btn-primary" id="pt-add-submit">Procesează lista</button><div id="pt-add-feedback"></div></div>';
     body.innerHTML = html;
 
