@@ -1991,6 +1991,33 @@
     editingProductKey = null;
     save(); renderCompare();
   };
+  // Prețul de vânzare/secundar sînt cîmpuri PE PRODUS (state.products[key].sellPrice/.secondaryPrice),
+  // nu pe comandă — de-aia pot fi editate direct aici, din Comparație produse, fără să deschizi o
+  // comandă anume. Cascada spre secundar (din procentul păstrat) e aceeași ca la editarea din
+  // Comenzi (ptSetSellPrice) — Pachet 1/2/3 NU se ating aici, utilizatorul a cerut explicit doar
+  // cele două cîmpuri de bază; ele oricum se recalculează singure, la nevoie, când produsul e
+  // văzut într-o comandă (vezi cascada din buildOrderPricingTableInnerHtml).
+  window.ptSetProductSellPrice = function(key, val){
+    var p = state.products[key];
+    if(!p) return;
+    var n = parseFloat(val);
+    p.sellPrice = isNaN(n) ? null : Math.round(n);
+    if(p.sellPrice != null){
+      var pct = (p.secondaryPct != null) ? p.secondaryPct : 15;
+      p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100));
+    }
+    save(); renderCompare();
+  };
+  window.ptSetProductSecondaryPrice = function(key, val){
+    var p = state.products[key];
+    if(!p) return;
+    var n = parseFloat(val);
+    p.secondaryPrice = isNaN(n) ? null : Math.round(n);
+    if(p.secondaryPrice != null && p.sellPrice != null && p.sellPrice > 0){
+      p.secondaryPct = Math.round((1 - p.secondaryPrice / p.sellPrice) * 100);
+    }
+    save(); renderCompare();
+  };
   window.ptEditEntry = function(key, sid){ editingEntry = key + '||' + sid; editingProductKey = null; renderCompare(); };
   window.ptCancelEntryEdit = function(){ editingEntry = null; renderCompare(); };
   window.ptSaveEntryEdit = function(key, sid){
@@ -2391,6 +2418,8 @@
         if(isExpanded){
           html += '<tr><td class="detail-panel-cell" colspan="' + colspan + '"><div class="detail-panel">';
 
+          html += '<div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap">';
+          html += '<div style="flex:1;min-width:220px">';
           if(editingProductKey === k){
             html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">' +
               '<input type="text" id="pt-edit-name-' + idSafe + '" value="' + escAttr(p.displayName) + '" placeholder="Nume produs" style="flex:2;min-width:160px;margin-bottom:0">' +
@@ -2409,6 +2438,16 @@
               html += historyRestHtml(msProd.id);
             }
           }
+          html += '</div>';
+          // Preț de vânzare / secundar: cîmpuri pe produs (nu pe comandă), editabile direct de aici —
+          // ptSetProductSellPrice/ptSetProductSecondaryPrice mai sus.
+          html += '<div style="flex-shrink:0;width:180px">' +
+            '<div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;margin-bottom:6px">Preț de vânzare</div>' +
+            '<div style="display:flex;flex-direction:column;gap:8px">' +
+            '<div><div style="font-size:10px;color:var(--text-dim);margin-bottom:2px">Principal (MDL)</div><input type="number" step="0.01" value="' + (p.sellPrice!=null?p.sellPrice:'') + '" onchange="ptSetProductSellPrice(\'' + kEsc + '\',this.value)" style="margin-bottom:0"></div>' +
+            '<div><div style="font-size:10px;color:var(--text-dim);margin-bottom:2px">Secundar (MDL)</div><input type="number" step="0.01" value="' + (p.secondaryPrice!=null?p.secondaryPrice:'') + '" onchange="ptSetProductSecondaryPrice(\'' + kEsc + '\',this.value)" style="margin-bottom:0"></div>' +
+            '</div></div>';
+          html += '</div>';
 
           var rows = Object.keys(p.bySupplier).map(function(sid){ return { sid: sid, e: p.bySupplier[sid] }; });
           // Intrările fără preț real de listă (doar asociate printr-o comandă/factură — vezi
