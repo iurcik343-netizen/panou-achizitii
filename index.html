@@ -90,6 +90,9 @@
   #pt-root button.icon-x:hover { color: var(--bad); background: var(--bad-bg); }
   #pt-root button.icon-link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 11.5px; padding: 2px 6px; font-weight: 600; border-radius: 5px; transition: background .15s ease; }
   #pt-root button.icon-link:hover { background: var(--accent-soft); }
+  #pt-root button.icon-svg-btn { background: none; border: none; color: var(--text-dim); cursor: pointer; padding: 3px 5px; line-height: 1; display: inline-flex; align-items: center; border-radius: 5px; transition: color .15s ease, background .15s ease; }
+  #pt-root button.icon-svg-btn:hover { color: var(--accent); background: var(--accent-tint-2); }
+  #pt-root button.icon-svg-btn.icon-svg-danger:hover { color: var(--bad); background: var(--bad-bg); }
   #pt-root .supplier-chip { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; font-size: 14px; background: var(--panel); box-shadow: var(--shadow-sm); }
   #pt-root .feedback { font-size: 12.5px; padding: 10px 12px; border-radius: 7px; margin-top: 8px; white-space: pre-line; }
   #pt-root .feedback.ok { background: var(--rank1-bg); color: var(--rank1); }
@@ -322,6 +325,14 @@
   function normName(s){ return String(s||'').toLowerCase().trim().replace(/\s+/g,' '); }
   function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
   function fmt(n){ return isFinite(n) ? Number(n).toFixed(2) : '—'; }
+
+  // ================= ICONIȚE SVG (șterge/editează/arhivează) =================
+  // Setul nou de iconițe, din designul liste de preț/Furnizori/Produse MoySklad — înlocuiește ✏️/📦/✕
+  // peste tot unde înseamnă chiar aceste trei acțiuni (nu și ✕ de „închide"/"anulează"/"elimină din
+  // coș", care rămân neschimbate — nu sînt „șterge" în sensul de acțiune ireversibilă pe o înregistrare).
+  var ICON_EDIT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M16.6 3.6a2 2 0 0 1 2.8 2.8L7.5 18.3l-3.7 1 1-3.7Z"/><path d="M15 5.2 18.8 9"/></svg>';
+  var ICON_DELETE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M4 7h16M9.5 7V4.8a.8.8 0 0 1 .8-.8h3.4a.8.8 0 0 1 .8.8V7"/><path d="M6.5 7l.8 12.2a.8.8 0 0 0 .8.8h7.8a.8.8 0 0 0 .8-.8L17.5 7"/><path d="M10.4 11v6M13.6 11v6"/></svg>';
+  var ICON_ARCHIVE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M3 7h18M5 7v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V7M3 7l1.6-3h14.8L21 7"/><path d="M12 11v5m0 0-2.2-2.2M12 16l2.2-2.2"/></svg>';
 
   // ================= REDIMENSIONARE COLOANE (persistă local, per dispozitiv) =================
   var COLWIDTH_KEY = 'pt_col_widths_v1';
@@ -1695,13 +1706,13 @@
       sortedFolders.forEach(function(f){
         html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;cursor:pointer" onclick="ptSelectBrand(\'' + f.id + '\')">' +
           '<span>' + escAttr(f.name) + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + (countByBrand[f.id]||0) + ' produse)</span></span>' +
-          '<span class="entry-actions"><button class="icon-link" onclick="event.stopPropagation();ptRenameBrand(\'' + f.id + '\',\'' + jsAttrEscape(f.name) + '\')">✏️</button><button class="icon-link" onclick="event.stopPropagation();ptArchiveBrand(\'' + f.id + '\',\'' + jsAttrEscape(f.name) + '\')">📦</button></span>' +
+          '<span class="entry-actions"><button class="icon-svg-btn" onclick="event.stopPropagation();ptRenameBrand(\'' + f.id + '\',\'' + jsAttrEscape(f.name) + '\')" title="Redenumește">' + ICON_EDIT + '</button><button class="icon-svg-btn" onclick="event.stopPropagation();ptArchiveBrand(\'' + f.id + '\',\'' + jsAttrEscape(f.name) + '\')" title="Arhivează">' + ICON_ARCHIVE + '</button></span>' +
           '</div>';
       });
       if(noBrandCount > 0 && hBrands.indexOf(NO_BRAND) === -1){
         html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;cursor:pointer" onclick="ptSelectBrand(\'' + NO_BRAND + '\')">' +
           '<span>Fără brand <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + noBrandCount + ' produse)</span></span>' +
-          '<span class="entry-actions"><button class="icon-link" onclick="event.stopPropagation();ptArchiveBrand(\'' + NO_BRAND + '\',\'Fără brand\')">📦</button></span></div>';
+          '<span class="entry-actions"><button class="icon-svg-btn" onclick="event.stopPropagation();ptArchiveBrand(\'' + NO_BRAND + '\',\'Fără brand\')" title="Arhivează">' + ICON_ARCHIVE + '</button></span></div>';
       }
       html += '</div>';
       el.innerHTML = html;
@@ -1716,8 +1727,8 @@
     var hiddenInBrandCount = brandProductIds.filter(function(id){ return hProducts.indexOf(id) !== -1; }).length;
     html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
       '<div><button class="icon-link" onclick="ptBackToBrands()">◀ Toate brandurile</button> <h2 style="display:inline;margin-left:8px">' + escAttr(brandName) + '</h2></div>' +
-      '<span><button class="btn-outline" onclick="ptArchiveBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">📦 Arhivează tot brandul (' + brandProductIds.length + ')</button> ' +
-      (selectedBrandId !== NO_BRAND ? '<button class="icon-link" onclick="ptRenameBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">✏️ redenumește</button>' : '') + '</span>' +
+      '<span><button class="btn-outline" onclick="ptArchiveBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">' + ICON_ARCHIVE + ' Arhivează tot brandul (' + brandProductIds.length + ')</button> ' +
+      (selectedBrandId !== NO_BRAND ? '<button class="icon-link" onclick="ptRenameBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">' + ICON_EDIT + ' redenumește</button>' : '') + '</span>' +
       '</div>';
 
     html += '<div class="search-row" style="display:flex;gap:8px;align-items:center"><input type="text" id="pt-catalog-search" placeholder="Caută după nume sau barcode…" value="' + catalogSearchTerm.replace(/"/g,'') + '" style="flex:1"></div>';
@@ -1743,7 +1754,7 @@
     if(selCount > 0 && !catalogShowHiddenProducts){
       html += '<div class="panel" style="padding:8px 14px;background:var(--accent-soft);border-color:var(--accent);display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' +
         '<span style="font-size:12.5px;color:var(--accent-dark)">' + selCount + ' selectate</span>' +
-        '<button class="btn-outline" onclick="ptBulkArchive()">📦 Arhivează selectate</button>' +
+        '<button class="btn-outline" onclick="ptBulkArchive()">' + ICON_ARCHIVE + ' Arhivează selectate</button>' +
         '</div>';
     }
 
@@ -2094,8 +2105,8 @@
       '<select id="pt-brand-filter" style="flex:1;margin-bottom:0"><option value="">Toate brandurile' + (allBrands.length ? ' (' + allBrands.length + ')' : '') + '</option>' +
       allBrands.map(function(b){ return '<option value="' + escAttr(b) + '" ' + (brandFilter===b?'selected':'') + '>' + b + '</option>'; }).join('') +
       '</select>' +
-      ((!showArchived && (searchTerm || brandFilter) && keys.length > 0) ? '<button class="btn-outline" onclick="ptArchiveFilteredProducts()" style="white-space:nowrap">📦 Arhivează toate din acest filtru (' + keys.length + ')</button>' : '') +
-      '<button class="chip ' + (showArchived?'active':'') + '" onclick="ptToggleShowArchived()" style="white-space:nowrap">📦 Arhivate (' + archivedCount + ')</button>' +
+      ((!showArchived && (searchTerm || brandFilter) && keys.length > 0) ? '<button class="btn-outline" onclick="ptArchiveFilteredProducts()" style="white-space:nowrap">' + ICON_ARCHIVE + ' Arhivează toate din acest filtru (' + keys.length + ')</button>' : '') +
+      '<button class="chip ' + (showArchived?'active':'') + '" onclick="ptToggleShowArchived()" style="white-space:nowrap">' + ICON_ARCHIVE + ' Arhivate (' + archivedCount + ')</button>' +
       '<span style="width:1px;align-self:stretch;background:var(--border);flex:none"></span>' +
       '<span style="font-size:11px;color:var(--text-soft);font-weight:600;text-transform:uppercase;flex:none">Sortare</span>' +
       sortBtnHtml('name', 'Denumire') +
@@ -2305,7 +2316,7 @@
         if(!isColHidden('cmp','rrp')) html += '<td class="dim">' + colwDivHtml('cmp','rrp',110,rrpCellHtml(p, minLanded)) + '</td>';
         html += '<td style="padding:6px 4px;text-align:center">' + (p.archived ?
           '<button class="icon-link" onclick="ptUnarchiveProduct(\'' + kEsc + '\')" title="Scoate din arhivă">↩</button>' :
-          '<div style="display:flex;flex-direction:column;align-items:center;gap:0"><button class="icon-link" style="padding:1px" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">📦</button><button class="icon-x" style="padding:1px" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">✕</button></div>') + '</td>';
+          '<div style="display:flex;flex-direction:column;align-items:center;gap:0"><button class="icon-svg-btn" style="padding:1px" onclick="ptArchiveProduct(\'' + kEsc + '\')" title="Arhivează — nu va mai apărea, nici la reimport">' + ICON_ARCHIVE + '</button><button class="icon-svg-btn icon-svg-danger" style="padding:1px" onclick="ptDeleteProduct(\'' + kEsc + '\')" title="Șterge definitiv">' + ICON_DELETE + '</button></div>') + '</td>';
         html += '</tr>';
 
         if(isExpanded){
@@ -2320,7 +2331,7 @@
               '<button class="icon-link" onclick="ptSaveProductEdit(\'' + kEsc + '\')">✓ salvează</button>' +
               '<button class="icon-x" onclick="ptCancelProductEdit()">✕ anulează</button></div>';
           } else {
-            html += '<div style="margin-bottom:10px"><button class="icon-link" onclick="ptEditProduct(\'' + kEsc + '\')">✏️ editează numele/brandul/cantitatea/barcode-ul</button></div>';
+            html += '<div style="margin-bottom:10px"><button class="icon-link" onclick="ptEditProduct(\'' + kEsc + '\')">' + ICON_EDIT + ' editează numele/brandul/cantitatea/barcode-ul</button></div>';
           }
           if(msOn){
             if(!msProd){
@@ -2347,7 +2358,7 @@
               if(e.lastPurchase) extrasStub.push('ultima achiziție: ' + fmt(e.lastPurchase.price) + ' ' + e.lastPurchase.currency + ' (' + e.lastPurchase.date + ')');
               html += '<div class="entry-row"><div class="entry-main"><b>' + supplierName(r.sid) + '</b>' +
                 '<span class="entry-dim">fără preț de listă' + (extrasStub.length ? ' · ' + extrasStub.join(' · ') : '') + '</span></div>' +
-                '<span class="entry-actions"><button class="icon-link" onclick="ptEditEntry(\'' + kEsc + '\',\'' + r.sid + '\')">✏️</button><button class="icon-x" onclick="ptDeleteEntry(\'' + kEsc + '\',\'' + r.sid + '\')">✕</button></span></div>';
+                '<span class="entry-actions"><button class="icon-svg-btn" onclick="ptEditEntry(\'' + kEsc + '\',\'' + r.sid + '\')" title="Editează">' + ICON_EDIT + '</button><button class="icon-svg-btn icon-svg-danger" onclick="ptDeleteEntry(\'' + kEsc + '\',\'' + r.sid + '\')" title="Șterge">' + ICON_DELETE + '</button></span></div>';
               return;
             }
             var rankClass = (idx < 3 && e.price != null && rankHighlightOn['rank' + (idx+1)]) ? ('rank-' + (idx+1)) : '';
@@ -2379,7 +2390,7 @@
                 '<span class="entry-dim">→ ' + fmt(e.landedCost) + ' MDL</span>' +
                 '<span class="entry-dim">' + extras.join(' · ') + '</span>' +
                 '</div>' +
-                '<span class="entry-actions"><button class="icon-link" onclick="ptAddToCart(\'' + r.sid + '\',\'' + kEsc + '\')" title="Adaugă în coș">🛒' + (inCart2 ? inCart2 : '') + '</button><button class="icon-link" onclick="ptEditEntry(\'' + kEsc + '\',\'' + r.sid + '\')">✏️</button><button class="icon-x" onclick="ptDeleteEntry(\'' + kEsc + '\',\'' + r.sid + '\')">✕</button></span></div>';
+                '<span class="entry-actions"><button class="icon-link" onclick="ptAddToCart(\'' + r.sid + '\',\'' + kEsc + '\')" title="Adaugă în coș">🛒' + (inCart2 ? inCart2 : '') + '</button><button class="icon-svg-btn" onclick="ptEditEntry(\'' + kEsc + '\',\'' + r.sid + '\')" title="Editează">' + ICON_EDIT + '</button><button class="icon-svg-btn icon-svg-danger" onclick="ptDeleteEntry(\'' + kEsc + '\',\'' + r.sid + '\')" title="Șterge">' + ICON_DELETE + '</button></span></div>';
             }
           });
 
@@ -3059,7 +3070,7 @@
         var row = '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none">' +
           '<span>' + escAttr(pl.fileName) + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + (pl.rows ? pl.rows.length : 0) + ' rânduri</span></span>' +
           '<span>' + (isEditingThis ? '<button class="icon-link" onclick="ptCancelEditPriceList()">Anulează</button>' : '<button class="btn-outline" onclick="ptEditPriceList(\'' + pl.id + '\')">Verifică și importă</button>') +
-          ' <button class="icon-x" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge — nu mai am nevoie de acest price list">✕</button></span>' +
+          ' <button class="icon-svg-btn icon-svg-danger" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge — nu mai am nevoie de acest price list">' + ICON_DELETE + '</button></span>' +
           '</div>';
         if(isEditingThis) row += '<div id="pt-imp-mapping" style="padding:12px 14px;border-bottom:1px solid var(--border)"></div>';
         return row;
@@ -3067,7 +3078,7 @@
       var doneHtml = justAppliedHere.map(function(pl){
         return '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none;background:var(--rank1-bg)">' +
           '<span style="color:var(--rank1);font-weight:600">✓ ' + escAttr(pl.fileName) + ' — importat (' + pl.productKeys.length + ' produse)</span>' +
-          '<span><button class="icon-link" onclick="ptEditPriceList(\'' + pl.id + '\')">✏️ editează</button> <button class="icon-x" onclick="ptDeletePriceList(\'' + pl.id + '\')">✕</button></span>' +
+          '<span><button class="icon-link" onclick="ptEditPriceList(\'' + pl.id + '\')">' + ICON_EDIT + ' editează</button> <button class="icon-svg-btn icon-svg-danger" onclick="ptDeletePriceList(\'' + pl.id + '\')" title="Șterge">' + ICON_DELETE + '</button></span>' +
           '</div>';
       }).join('');
       box.innerHTML = '<div class="panel" style="background:var(--rank3-bg);border-color:var(--rank3)">' +
@@ -3867,7 +3878,7 @@
         '<td style="padding:9px 10px;text-align:right"><span class="num" style="font-size:12px;color:var(--text-soft)">' + (o.landedTotal ? ('~' + fmt(o.landedTotal) + ' MDL') : '—') + '</span></td>' +
         '<td style="padding:9px 10px;text-align:right;white-space:nowrap">' +
           '<button class="btn-quiet" style="height:28px;font-size:11.5px;padding:0 10px" onclick="ptToggleOrderDetail(\'' + o.id + '\')">' + (isOpen ? '▲ Închide' : '▼ Deschide') + '</button>' +
-          ' <button class="icon-x" onclick="ptDeleteOrder(\'' + o.id + '\')">✕</button>' +
+          ' <button class="icon-svg-btn icon-svg-danger" onclick="ptDeleteOrder(\'' + o.id + '\')" title="Șterge comanda">' + ICON_DELETE + '</button>' +
         '</td></tr>';
     });
     listHtml += '</tbody></table></div></div>';
@@ -4821,7 +4832,7 @@
       state.suppliers.forEach(function(s){
         var isOpen = expandedSupplierId === s.id;
         html += '<div class="supplier-chip" style="cursor:pointer' + (isOpen ? ';background:var(--accent-soft);border-color:var(--accent)' : '') + '" onclick="ptToggleSupplierEdit(\'' + s.id + '\')"><span>' + (isOpen ? '▾ ' : '') + s.name + (isOpen?'':' <span style="color:var(--text-soft);font-weight:400;font-size:11.5px">(apasă pentru detalii)</span>') + '</span>' +
-          '<button class="icon-x" onclick="event.stopPropagation();ptDeleteSupplier(\'' + s.id + '\')">✕ șterge</button></div>';
+          '<button class="icon-svg-btn icon-svg-danger" onclick="event.stopPropagation();ptDeleteSupplier(\'' + s.id + '\')">' + ICON_DELETE + ' șterge</button></div>';
         if(isOpen){
           html += '<div class="panel" style="margin-top:-4px;margin-bottom:14px" onclick="event.stopPropagation()">';
           html += '<label>Nume furnizor</label><input type="text" id="pt-sup-name-' + s.id + '" value="' + (s.name||'').replace(/"/g,'&quot;') + '">';
@@ -4851,8 +4862,8 @@
               supPriceLists.forEach(function(pl){
                 html += '<div class="supplier-chip" style="margin:0;border-radius:0;border-left:none;border-right:none;border-top:none' + (pl.pending ? ';background:var(--rank3-bg)' : '') + '">' +
                   '<span>' + (pl.pending ? '⏳ ' : '') + escAttr(pl.fileName) + (pl.brand ? ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">(' + escAttr(pl.brand) + ')</span>' : '') + ' <span class="dim" style="color:var(--text-soft);font-size:11.5px">· ' + (pl.pending ? 'neimportat încă' : (fmtDateDMY(pl.importedAt) + ' · ' + pl.productKeys.length + ' produse')) + '</span></span>' +
-                  '<span class="entry-actions"><button class="icon-link" onclick="event.stopPropagation();ptEditPriceList(\'' + pl.id + '\')" title="' + (pl.pending ? 'Verifică maparea și importă produsele' : 'Corectează maparea coloanelor pentru acest price list, fără să reîncarci fișierul') + '">' + (pl.pending ? '▶ verifică și importă' : '✏️ editează') + '</button>' +
-                  '<button class="icon-x" onclick="event.stopPropagation();ptDeletePriceList(\'' + pl.id + '\')" title="Șterge acest price list' + (pl.pending ? '' : ' — elimină prețurile lui de la acest furnizor, ca să poți reimporta o versiune curată') + '">✕</button></span>' +
+                  '<span class="entry-actions"><button class="icon-link" onclick="event.stopPropagation();ptEditPriceList(\'' + pl.id + '\')" title="' + (pl.pending ? 'Verifică maparea și importă produsele' : 'Corectează maparea coloanelor pentru acest price list, fără să reîncarci fișierul') + '">' + (pl.pending ? '▶ verifică și importă' : (ICON_EDIT + ' editează')) + '</button>' +
+                  '<button class="icon-svg-btn icon-svg-danger" onclick="event.stopPropagation();ptDeletePriceList(\'' + pl.id + '\')" title="Șterge acest price list' + (pl.pending ? '' : ' — elimină prețurile lui de la acest furnizor, ca să poți reimporta o versiune curată') + '">' + ICON_DELETE + '</button></span>' +
                   '</div>';
               });
               html += '</div>';
