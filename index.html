@@ -699,7 +699,21 @@
   // înlocuiască, poate la fel de ușor să "meargă înainte" din nou dacă se răzgîndește.
   var HISTORY_SNAPSHOT_MIN_GAP_MS = 15 * 60 * 1000;
   var HISTORY_KEEP_COUNT = 200;
+  // BUG reparat: lastHistorySnapshotAt era doar în memorie — resetat la 0 la FIECARE reîncărcare de
+  // pagină. Asta făcea ca pragul de "cel mult un instantaneu la 15 minute" să nu se respecte de fapt
+  // între sesiuni: orice pagină nou deschisă credea că n-a existat NICIODATĂ un instantaneu și crea
+  // unul imediat, la prima salvare — pe o zi cu multe reporniri ale paginii (normal pentru o echipă),
+  // asta putea crea mult mai mult de un instantaneu/15min, „împingând" mai repede decît intenționat
+  // instantaneele vechi în afara ferestrei de 200 păstrate (care ar trebui să acopere ~50 de ore, nu
+  // doar câteva). Se reîmprospătează din baza de date la încărcare (vezi load()), ca pragul să fie
+  // real, nu doar per-sesiune.
   var lastHistorySnapshotAt = 0;
+  async function refreshLastHistorySnapshotAt(){
+    try {
+      var res = await supabaseClient.from('app_state_history').select('created_at').order('created_at', { ascending: false }).limit(1).maybeSingle();
+      if(res.data && res.data.created_at) lastHistorySnapshotAt = new Date(res.data.created_at).getTime();
+    } catch(e){ /* rămâne 0 — cel mai rău caz, un instantaneu în plus, nu unul lipsă */ }
+  }
   async function saveHistorySnapshotNow(){
     try {
       lastHistorySnapshotAt = Date.now();
@@ -759,6 +773,7 @@
       // nu un eșec — fie prima folosire a aplicației, fie un state gol legitim. dataLoadedOk devine
       // true înainte de save()-ul de migrare de mai jos, altfel ar fi blocat de gardul din doSaveNow.
       dataLoadedOk = true;
+      refreshLastHistorySnapshotAt(); // fire-and-forget — nu blochează încărcarea restului
       if(parsed){
         state.suppliers = parsed.suppliers || [];
         state.products = parsed.products || {};
