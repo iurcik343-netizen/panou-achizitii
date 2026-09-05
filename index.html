@@ -2028,33 +2028,6 @@
     editingProductKey = null;
     save(); renderCompare();
   };
-  // Prețul de vânzare/secundar sînt cîmpuri PE PRODUS (state.products[key].sellPrice/.secondaryPrice),
-  // nu pe comandă — de-aia pot fi editate direct aici, din Comparație produse, fără să deschizi o
-  // comandă anume. Cascada spre secundar (din procentul păstrat) e aceeași ca la editarea din
-  // Comenzi (ptSetSellPrice) — Pachet 1/2/3 NU se ating aici, utilizatorul a cerut explicit doar
-  // cele două cîmpuri de bază; ele oricum se recalculează singure, la nevoie, când produsul e
-  // văzut într-o comandă (vezi cascada din buildOrderPricingTableInnerHtml).
-  window.ptSetProductSellPrice = function(key, val){
-    var p = state.products[key];
-    if(!p) return;
-    var n = parseFloat(val);
-    p.sellPrice = isNaN(n) ? null : Math.round(n);
-    if(p.sellPrice != null){
-      var pct = (p.secondaryPct != null) ? p.secondaryPct : 15;
-      p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100));
-    }
-    save(); renderCompare();
-  };
-  window.ptSetProductSecondaryPrice = function(key, val){
-    var p = state.products[key];
-    if(!p) return;
-    var n = parseFloat(val);
-    p.secondaryPrice = isNaN(n) ? null : Math.round(n);
-    if(p.secondaryPrice != null && p.sellPrice != null && p.sellPrice > 0){
-      p.secondaryPct = Math.round((1 - p.secondaryPrice / p.sellPrice) * 100);
-    }
-    save(); renderCompare();
-  };
   window.ptEditEntry = function(key, sid){ editingEntry = key + '||' + sid; editingProductKey = null; renderCompare(); };
   window.ptCancelEntryEdit = function(){ editingEntry = null; renderCompare(); };
   window.ptSaveEntryEdit = function(key, sid){
@@ -2476,13 +2449,27 @@
             }
           }
           html += '</div>';
-          // Preț de vânzare / secundar: cîmpuri pe produs (nu pe comandă), editabile direct de aici —
-          // ptSetProductSellPrice/ptSetProductSecondaryPrice mai sus.
+          // Doar informativ (nu editabil aici — editarea reală se face în Comenzi, unde există
+          // contextul complet de coeficient/reviewedFields). Preț de vânzare/secundar arată valoarea
+          // locală dacă există, altfel valoarea LIVE din MoySklad (aceeași convenție ca peste tot:
+          // >0 înseamnă real, un 0 din MoySklad înseamnă „necompletat”). Preț furnizor în $ arată
+          // corectarea manuală locală (buyPriceOverrideUsd) dacă există, altfel valoarea live.
+          if(msProd) ensureMsAttrsLoaded(msProd.id);
+          var msAttrsForP = (msProd && msAttrsCache[msProd.id] && msAttrsCache[msProd.id].attrs) || null;
+          function priceInfoRow(label, local, msAttrId, unit){
+            var live = msAttrsForP && msAttrsForP[msAttrId] > 0 ? msAttrsForP[msAttrId] : null;
+            var val = local != null ? local : live;
+            return '<div style="display:flex;justify-content:space-between;gap:10px">' +
+              '<span style="color:var(--text-dim)">' + label + '</span>' +
+              (val != null ? ('<b style="font-family:var(--mono)">' + fmt(val) + ' ' + unit + '</b>') : '<span style="color:var(--text-dim)">—</span>') +
+              '</div>';
+          }
           html += '<div style="flex-shrink:0;width:180px">' +
-            '<div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;margin-bottom:6px">Preț de vânzare</div>' +
-            '<div style="display:flex;flex-direction:column;gap:8px">' +
-            '<div><div style="font-size:10px;color:var(--text-dim);margin-bottom:2px">Principal (MDL)</div><input type="number" step="0.01" value="' + (p.sellPrice!=null?p.sellPrice:'') + '" onchange="ptSetProductSellPrice(\'' + kEsc + '\',this.value)" style="margin-bottom:0"></div>' +
-            '<div><div style="font-size:10px;color:var(--text-dim);margin-bottom:2px">Secundar (MDL)</div><input type="number" step="0.01" value="' + (p.secondaryPrice!=null?p.secondaryPrice:'') + '" onchange="ptSetProductSecondaryPrice(\'' + kEsc + '\',this.value)" style="margin-bottom:0"></div>' +
+            '<div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;margin-bottom:6px">Prețuri</div>' +
+            '<div style="display:flex;flex-direction:column;gap:6px;font-size:12.5px">' +
+            priceInfoRow('Vânzare', p.sellPrice, MS_PRICE_ATTRS.sellPrice, 'MDL') +
+            priceInfoRow('Secundar', p.secondaryPrice, MS_PRICE_ATTRS.secondaryPrice, 'MDL') +
+            priceInfoRow('Furnizor', p.buyPriceOverrideUsd, MS_PRICE_ATTRS.buyPriceUsd, '$') +
             '</div></div>';
           html += '</div>';
 
