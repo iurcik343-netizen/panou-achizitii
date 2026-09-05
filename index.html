@@ -581,6 +581,7 @@
     var backup = loadLocalBackup();
     if(!backup || !backup.state) return false;
     applyImportedState(backup.state);
+    dataLoadedOk = true;
     lastKnownUpdatedAt = backup.lastKnownUpdatedAt || null;
     var when = backup.savedAt ? new Date(backup.savedAt).toLocaleString('ro-RO') : 'necunoscut';
     enterOfflineMode('Fără conexiune la server — lucrezi pe o copie locală salvată la ' + when + '. Modificările tale rămân pe acest calculator și se trimit automat de îndată ce revine conexiunea. Dacă lucrați 2 în același timp, evitați să editați aceleași lucruri până revine — cel care se reconectează al doilea poate suprascrie ce a făcut celălalt.');
@@ -591,6 +592,14 @@
   var lastKnownUpdatedAt = null;
   var staleWarningShown = false;
   var sizeWarningShown = false;
+  // BUG GRAV reparat: dacă load() eșua complet (Supabase indisponibil ȘI nicio copie locală pe acel
+  // calculator), state rămânea la valorile implicite goale, dar aplicația continua normal — inclusiv
+  // fetchRates() din startApp(), care reușește oricum (ia cursul de la alt serviciu, nu Supabase) și
+  // apela save() fără nicio verificare, suprascriind silențios datele reale din Supabase cu un state
+  // gol. dataLoadedOk devine true DOAR după ce load() chiar a populat state-ul (din server sau din
+  // backup local) — doSaveNow() refuză să salveze cât timp rămâne false, indiferent ce a declanșat
+  // salvarea, ca protecție și pentru orice alt cod viitor care ar putea apela save() prea devreme.
+  var dataLoadedOk = false;
   function save(){
     if(saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(doSaveNow, 200);
@@ -616,6 +625,13 @@
   }
   async function doSaveNow(skipStaleCheck, retriesLeft){
     if(retriesLeft === undefined) retriesLeft = 2;
+    // Nu s-a încărcat încă vreo dată reală (nici din server, nici din backup local) — a salva acum
+    // ar suprascrie datele reale din Supabase (și copia locală bună) cu un state gol. Vezi comentariul
+    // de la dataLoadedOk.
+    if(!dataLoadedOk){
+      ptToast('Datele nu s-au încărcat încă — salvarea e blocată, ca să nu se piardă ceva. Reîncarcă pagina (F5).', false);
+      return;
+    }
     // Copia locală se reîmprospătează la ÎNCEPUTUL fiecărei încercări de salvare, indiferent dacă
     // reușește sau nu — dacă exact acum pică conexiunea, ultima stare bună rămâne oricum pe disc.
     saveLocalBackupNow();
@@ -733,12 +749,16 @@
           await new Promise(function(r){ setTimeout(r, 1500); });
           return load(retriesLeft - 1);
         }
-        if(tryLoadFromLocalBackup()) return;
+        if(tryLoadFromLocalBackup()) return true;
         ptToast('Eroare la încărcare: ' + result.error.message, false);
-        return;
+        return false;
       }
       lastKnownUpdatedAt = (result.data && result.data.updated_at) || null;
       var parsed = result.data && result.data.data;
+      // Un răspuns fără eroare, chiar și fără date (rînd inexistent) e un răspuns REAL de la server,
+      // nu un eșec — fie prima folosire a aplicației, fie un state gol legitim. dataLoadedOk devine
+      // true înainte de save()-ul de migrare de mai jos, altfel ar fi blocat de gardul din doSaveNow.
+      dataLoadedOk = true;
       if(parsed){
         state.suppliers = parsed.suppliers || [];
         state.products = parsed.products || {};
@@ -760,6 +780,7 @@
           save();
         }
       }
+      return true;
     } catch(e){
       // O eroare ARUNCATĂ aici (nu doar result.error) e mereu o problemă reală de conexiune — un
       // rînd lipsă (prima folosire a aplicației) nu aruncă, doar întoarce data:null. Înainte,
@@ -772,8 +793,9 @@
         await new Promise(function(r){ setTimeout(r, 1500); });
         return load(retriesLeft - 1);
       }
-      if(tryLoadFromLocalBackup()) return;
+      if(tryLoadFromLocalBackup()) return true;
       ptToast('Nu am putut încărca datele: ' + (e && e.message ? e.message : String(e)) + '. Reîncarcă pagina (F5) ca să reîncerci — dacă persistă, verifică status.supabase.com.', false);
+      return false;
     }
   }
   function applyImportedState(parsed){
@@ -5435,7 +5457,16 @@
     if(appStarted) return;
     appStarted = true;
     document.getElementById('tab-compare').innerHTML = '<div class="panel empty">Se încarcă…</div>';
-    await load();
+    var loadedOk = await load();
+    if(!loadedOk){
+      // load() a eșuat complet — nici serverul, nici o copie locală. NU continuăm ca și cum ar fi
+      // un cont nou și gol (arăta identic cu "0 furnizori, 0 produse" reale — exact confuzia care a
+      // dus la suprascrierea datelor reale cu un state gol, vezi comentariul de la dataLoadedOk).
+      // Blocăm clar, cu buton de reîncercare — fetchRates()/save() NU pornesc cât timp state-ul nu
+      // e cel real.
+      document.getElementById('tab-compare').innerHTML = '<div class="panel empty"><div class="feedback err">Nu am putut încărca datele de pe server, și nu există nicio copie locală salvată pe acest calculator/browser. NU e nimic pierdut — dar continuarea acum ar risca să suprascrie datele reale cu un ecran gol, așa că lucrul e blocat până se rezolvă. Verifică conexiunea la internet, apoi <button class="icon-link" onclick="location.reload()">reîncarcă pagina</button>.</div></div>';
+      return;
+    }
     if(!state.settings.ratesUpdatedAt){
       fetchRates().then(function(ok){
         autoFetchFailed = !ok;
