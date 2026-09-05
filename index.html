@@ -2540,7 +2540,19 @@
     }
     setInnerHtmlKeepingFocus(el, html);
     var s = document.getElementById('pt-search');
-    if(s){ s.addEventListener('input', function(ev){ searchTerm = normName(ev.target.value); renderCompare(); var i=document.getElementById('pt-search'); i.focus(); i.setSelectionRange(i.value.length,i.value.length); }); }
+    // BUG reparat: la fiecare literă, tot tab-ul se rerandează, iar input-ul nou își lua valoarea
+    // din searchTerm — care e deja normalizat (.toLowerCase().trim(), pentru filtrare insensibilă
+    // la majuscule/spații). Efectul vizibil: literele mari deveneau mici, iar un spațiu (mereu "la
+    // capăt" chiar după ce-l tastezi) era șters de trim() la fiecare rerandare — păreau blocate.
+    // searchTerm rămâne normalizat pentru filtrare, dar valoarea AFIȘATĂ trebuie restaurată exact
+    // cum a tastat utilizatorul, nu din searchTerm.
+    if(s){ s.addEventListener('input', function(ev){
+      var rawVal = ev.target.value;
+      searchTerm = normName(rawVal);
+      renderCompare();
+      var i = document.getElementById('pt-search');
+      if(i){ i.value = rawVal; i.focus(); i.setSelectionRange(rawVal.length, rawVal.length); }
+    }); }
     var bf = document.getElementById('pt-brand-filter');
     if(bf){ bf.addEventListener('change', function(ev){ brandFilter = ev.target.value; searchTerm = ''; renderCompare(); }); }
     var qr = document.getElementById('pt-quick-rate');
