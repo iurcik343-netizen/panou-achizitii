@@ -79,6 +79,8 @@ export default {
       if (url.searchParams.has('rawproduct')) return await handleRawProduct(url.searchParams.get('rawproduct'), baseHeaders, corsHeaders);
       if (url.searchParams.has('reconcile')) return await handleReconcile(baseHeaders, corsHeaders, env, url.searchParams.get('send') === '1');
       if (url.searchParams.has('fc_debug')) return await handleFiscalCloudDebug(corsHeaders, env);
+      if (url.searchParams.has('efactura_wsdl')) return await handleEFacturaWsdl(corsHeaders, env);
+      if (url.searchParams.has('efactura_test')) return await handleEFacturaTest(url, corsHeaders, env);
       return await handleStock(baseHeaders, corsHeaders);
     } catch (err) {
       return json({ error: 'Eroare neașteptată în proxy', detail: String(err) }, 500, corsHeaders);
@@ -649,6 +651,85 @@ async function sumCardRevenue(storeId, startDateStr, endDateStr, baseHeaders) {
   if (!res.ok) return null;
   const data = await res.json();
   return (data.rows || []).reduce((sum, r) => sum + (Number(r.proceedsNoCash) || 0), 0);
+}
+
+// ================= SIA "e-Factura" (SFS) — punte SOAP, fază de conectivitate =================
+// Serviciul e SOAP/WCF (basicHttpBinding, TransportWithMessageCredential) — autentificarea se face
+// prin WS-Security UsernameToken în antetul SOAP, nu Basic Auth pe HTTP. Namespace-urile exacte
+// (ex. "http://tempuri.org/") NU sunt încă verificate contra WSDL-ului real al contului — de-aia
+// ?efactura_wsdl=1 aduce WSDL-ul brut (de obicei accesibil fără autentificare) și ?efactura_test=1
+// întoarce XML-ul de răspuns BRUT, necontrolat, ca să vedem exact ce vine înapoi înainte să scriem
+// un parser — nu presupunem un format de răspuns pe care nu l-am văzut niciodată.
+const EFACTURA_DEFAULT_URL = 'https://api-test.fisc.md/Service.svc';
+
+function escapeXml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+}
+function soapEnvelope(user, password, bodyXml) {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+  <soap:Header>
+    <wsse:Security soap:mustUnderstand="1">
+      <wsse:UsernameToken>
+        <wsse:Username>${escapeXml(user)}</wsse:Username>
+        <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">${escapeXml(password)}</wsse:Password>
+      </wsse:UsernameToken>
+    </wsse:Security>
+  </soap:Header>
+  <soap:Body>
+${bodyXml}
+  </soap:Body>
+</soap:Envelope>`;
+}
+async function callEFactura(soapAction, bodyXml, env) {
+  const apiUrl = env.EFACTURA_API_URL || EFACTURA_DEFAULT_URL;
+  const user = env.EFACTURA_USER;
+  const password = env.EFACTURA_PASSWORD;
+  if (!user || !password) return { ok: false, error: 'Lipsesc secretele EFACTURA_USER / EFACTURA_PASSWORD pe Worker.' };
+  const envelope = soapEnvelope(user, password, bodyXml);
+  let res;
+  try {
+    res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': soapAction },
+      body: envelope,
+    });
+  } catch (err) {
+    return { ok: false, error: 'Eroare de conectare la SIA e-Factura', detail: String(err) };
+  }
+  const text = await res.text();
+  return { ok: res.ok, status: res.status, raw: text };
+}
+
+// Diagnostic — aduce WSDL-ul brut al serviciului (de obicei public, fără autentificare), ca să
+// confirmăm namespace-urile și numele exacte ale elementelor înainte de a construi restul metodelor.
+async function handleEFacturaWsdl(corsHeaders, env) {
+  const apiUrl = env.EFACTURA_API_URL || EFACTURA_DEFAULT_URL;
+  let res;
+  try {
+    res = await fetch(apiUrl + '?singleWsdl');
+    if (!res.ok || (res.headers.get('content-type') || '').indexOf('xml') === -1) res = await fetch(apiUrl + '?wsdl');
+  } catch (err) {
+    return json({ error: 'Eroare de conectare la SIA e-Factura', detail: String(err) }, 502, corsHeaders);
+  }
+  const text = await res.text();
+  return new Response(text, { status: res.status, headers: { ...corsHeaders, 'Content-Type': 'application/xml' } });
+}
+
+// Test de conectivitate — GetTaxpayersInfo pe un singur IDNO, doar citire, fără nicio factură reală.
+async function handleEFacturaTest(url, corsHeaders, env) {
+  const idno = url.searchParams.get('idno');
+  if (!idno) return json({ error: 'Lipsește parametrul idno (codul fiscal de testat), ex: ?efactura_test=1&idno=1002600004030' }, 400, corsHeaders);
+  const bodyXml = `    <GetTaxpayersInfo xmlns="http://tempuri.org/">
+      <request xmlns:a="http://tempuri.org/">
+        <a:RequestId>${crypto.randomUUID()}</a:RequestId>
+        <a:FiscalCodes xmlns:b="http://schemas.microsoft.com/2003/10/Serialization/Arrays">
+          <b:string>${escapeXml(idno)}</b:string>
+        </a:FiscalCodes>
+      </request>
+    </GetTaxpayersInfo>`;
+  const result = await callEFactura('http://tempuri.org/IService/GetTaxpayersInfo', bodyXml, env);
+  return json(result, result.ok ? 200 : 502, corsHeaders);
 }
 
 // ================= FISCALCLOUD / IntelectSoft — suma reală de card, per magazin =================
