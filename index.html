@@ -5489,6 +5489,15 @@
         if(settingsTab && settingsTab.style.display !== 'none') renderSettings();
       });
     }
+    // Catalogul MoySklad (stoc, preț) e ținut doar în cache local și înainte se sincroniza STRICT
+    // manual — la o zi nouă, stocul afișat în Comparație produse putea fi vechi de zile întregi,
+    // fără niciun semnal, pînă apăsa cineva "Actualizează MoySklad". Sincronizăm automat, discret,
+    // la pornire, dacă nu s-a mai sincronizat sau are peste 24h (același prag ca avertismentul din
+    // Comenzi) — nu blochează afișarea, doar actualizează în fundal.
+    if(state.settings.moyskladProxyUrl && !catalogSyncing){
+      var catalogIsStale = !catalogUpdatedAt || (Date.now() - new Date(catalogUpdatedAt).getTime()) > 24*3600*1000;
+      if(catalogIsStale) window.ptSyncCatalog();
+    }
     renderCompare();
   }
 
