@@ -392,7 +392,13 @@
     try { return JSON.parse(localStorage.getItem(COLWIDTH_KEY)) || {}; } catch(e){ return {}; }
   })();
   function getColWidth(table, col, dflt){
-    return (colWidths[table] && colWidths[table][col]) || dflt;
+    if(colWidths[table] && colWidths[table][col] != null) return colWidths[table][col];
+    // Coloanele de furnizor (sup_<id>) apar/dispar în funcție de filtrul de brand — un furnizor
+    // nemaivăzut încă ar porni mereu de la același dflt îngust, obligând utilizatorul să
+    // redimensioneze din nou la fiecare schimbare de brand. În loc de asta, orice furnizor nou
+    // moștenește ultima lățime aleasă manual pentru UN furnizor, oricare ar fi fost el.
+    if(col.indexOf('sup_') === 0 && colWidths[table] && colWidths[table].__supDefault != null) return colWidths[table].__supDefault;
+    return dflt;
   }
   function saveColWidthsToStorage(){
     try { localStorage.setItem(COLWIDTH_KEY, JSON.stringify(colWidths)); } catch(e){}
@@ -415,6 +421,7 @@
       handle.classList.remove('active');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      if(col.indexOf('sup_') === 0) colWidths[table].__supDefault = colWidths[table][col];
       saveColWidthsToStorage();
     }
     document.addEventListener('mousemove', onMove);
@@ -1905,7 +1912,9 @@
     var term = searchTermRaw.trim();
     if(!term){ ptToast('Scrie mai întâi ceva în căutare ca să-l poți fixa.', false); return; }
     var list = pinnedBrandsList();
-    var idx = list.indexOf(term);
+    // Comparație insensibilă la majuscule — altfel "Purito" și "purito" ajung două fixate
+    // separate pentru practic aceeași căutare.
+    var idx = list.findIndex(function(t){ return t.toLowerCase() === term.toLowerCase(); });
     if(idx !== -1) list.splice(idx, 1); else list.push(term);
     save();
     renderCompare();
@@ -2194,7 +2203,7 @@
       (msOn ? ('<button class="btn-outline" onclick="ptSyncCatalog()" ' + (catalogSyncing ? 'disabled' : '') + '>' + (catalogSyncing ? 'Se actualizează…' : (ICON_SYNC + ' Actualizează MoySklad')) + '</button>' +
         '<span style="font-size:11px;color:var(--text-soft)">' + (catalogUpdatedAt ? (new Date(catalogUpdatedAt).toLocaleString('ro-RO') + ' · ' + catalogProducts.length + ' produse') : 'Nesincronizat încă') + '</span>') : '') +
       '</div>';
-    var isPinned = searchTermRaw && pinnedBrandsList().indexOf(searchTermRaw.trim()) !== -1;
+    var isPinned = searchTermRaw && pinnedBrandsList().some(function(t){ return t.toLowerCase() === searchTermRaw.trim().toLowerCase(); });
     html += '<div class="search-row"><input type="text" id="pt-search" placeholder="Caută după nume, brand, barcode sau mărime…" value="' + searchTermRaw.replace(/"/g,'') + '" style="flex:2">' +
       ((searchTerm || brandFilter) ? '<button class="btn-outline" onclick="ptClearFilters()" title="Golește căutarea și filtrul de brand" style="white-space:nowrap;flex:none">✕ curăță filtrele</button>' : '') +
       '<button class="chip' + (isPinned ? ' active' : '') + '" onclick="ptTogglePinSearch()" title="' + (isPinned ? 'Fixată — scoate din acces rapid' : 'Fixează această căutare ca acces rapid') + '" style="flex:none">📌</button>' +
@@ -2217,7 +2226,7 @@
     if(pinnedBrandsList().length){
       html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:-6px 0 12px">' +
         pinnedBrandsList().slice().sort(function(a,b){ return a.localeCompare(b, undefined, {sensitivity:'base'}); }).map(function(term){
-          return '<span class="chip ' + (searchTermRaw.trim() === term ? 'active' : '') + '" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px" onclick="ptApplyPinnedSearch(\'' + jsAttrEscape(term) + '\')">📌 ' + escAttr(term) +
+          return '<span class="chip ' + (searchTermRaw.trim().toLowerCase() === term.toLowerCase() ? 'active' : '') + '" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px" onclick="ptApplyPinnedSearch(\'' + jsAttrEscape(term) + '\')">📌 ' + escAttr(term) +
             '<button class="icon-x" style="padding:0 2px" onclick="event.stopPropagation();ptUnpinSearch(\'' + jsAttrEscape(term) + '\')" title="Scoate din fixate">✕</button></span>';
         }).join('') +
         '</div>';
@@ -2301,7 +2310,7 @@
         resizableThHtml('cmp', 'name', 'Produs', 260, 160, 640, false) +
         (msOn && !isColHidden('cmp','hist') ? resizableThHtml('cmp', 'hist', 'Istoric', 220, 26, 500) : '') +
         (msOn && !isColHidden('cmp','ms') ? resizableThHtml('cmp', 'ms', 'Stoc', 90, 26, 220) : '') +
-        visibleSuppliers.map(function(s){ return resizableThHtml('cmp', 'sup_' + s.id, escAttr(s.name), 130, 26, 320); }).join('') +
+        visibleSuppliers.map(function(s){ return resizableThHtml('cmp', 'sup_' + s.id, escAttr(s.name), 150, 26, 320); }).join('') +
         (!isColHidden('cmp','rrp') ? resizableThHtml('cmp', 'rrp', 'RRP', 110, 26, 260) : '') +
         '<th style="width:32px"></th></tr></thead><tbody>';
 
