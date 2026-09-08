@@ -1890,6 +1890,10 @@
 
   // ================= COMPARE TAB =================
   var searchTerm = '';
+  // searchTerm e mereu normalizat (lowercase, trim) — necesar pentru filtrarea insensibilă la
+  // majuscule. searchTermRaw ține exact ce a tastat utilizatorul, pentru afișare în input și
+  // pentru fixate (📌) — altfel un termen fixat cu litere mari ("Dr.Althea") se salva mic de tot.
+  var searchTermRaw = '';
   var brandFilter = '';
   var showArchived = false;
   var filteredKeysForArchive = [];
@@ -1898,7 +1902,7 @@
   var compareSortSupplierId = ''; // gol = "cel mai bun preț, orice furnizor" (comportamentul de dinainte)
   function pinnedBrandsList(){ return state.settings.pinnedBrands || (state.settings.pinnedBrands = []); }
   window.ptTogglePinSearch = function(){
-    var term = searchTerm.trim();
+    var term = searchTermRaw.trim();
     if(!term){ ptToast('Scrie mai întâi ceva în căutare ca să-l poți fixa.', false); return; }
     var list = pinnedBrandsList();
     var idx = list.indexOf(term);
@@ -1907,7 +1911,8 @@
     renderCompare();
   };
   window.ptApplyPinnedSearch = function(term){
-    searchTerm = term;
+    searchTermRaw = term;
+    searchTerm = normName(term);
     renderCompare();
   };
   window.ptUnpinSearch = function(term){
@@ -2123,13 +2128,13 @@
   window.ptArchiveFilteredProducts = function(){
     var toArchive = filteredKeysForArchive.slice();
     if(!toArchive.length){ ptToast('Niciun produs de arhivat în acest filtru.', false); return; }
-    var filterDesc = [searchTerm ? '„' + searchTerm + '"' : null, brandFilter ? 'brand „' + brandFilter + '"' : null].filter(Boolean).join(' + ') || 'filtrul curent';
+    var filterDesc = [searchTermRaw ? '„' + searchTermRaw + '"' : null, brandFilter ? 'brand „' + brandFilter + '"' : null].filter(Boolean).join(' + ') || 'filtrul curent';
     if(!confirm('Arhivezi ' + toArchive.length + ' produse din ' + filterDesc + '?')) return;
     toArchive.forEach(function(k){ if(state.products[k]) state.products[k].archived = true; });
     save(); renderCompare();
     ptToast(toArchive.length + ' produse arhivate.', true);
   };
-  window.ptClearFilters = function(){ searchTerm = ''; brandFilter = ''; renderCompare(); };
+  window.ptClearFilters = function(){ searchTerm = ''; searchTermRaw = ''; brandFilter = ''; renderCompare(); };
   function perSupplierBarcodeLine(p){
     var sids = Object.keys(p.bySupplier);
     if(sids.length < 2) return '';
@@ -2189,8 +2194,8 @@
       (msOn ? ('<button class="btn-outline" onclick="ptSyncCatalog()" ' + (catalogSyncing ? 'disabled' : '') + '>' + (catalogSyncing ? 'Se actualizează…' : (ICON_SYNC + ' Actualizează MoySklad')) + '</button>' +
         '<span style="font-size:11px;color:var(--text-soft)">' + (catalogUpdatedAt ? (new Date(catalogUpdatedAt).toLocaleString('ro-RO') + ' · ' + catalogProducts.length + ' produse') : 'Nesincronizat încă') + '</span>') : '') +
       '</div>';
-    var isPinned = searchTerm && pinnedBrandsList().indexOf(searchTerm) !== -1;
-    html += '<div class="search-row"><input type="text" id="pt-search" placeholder="Caută după nume, brand, barcode sau mărime…" value="' + searchTerm.replace(/"/g,'') + '" style="flex:2">' +
+    var isPinned = searchTermRaw && pinnedBrandsList().indexOf(searchTermRaw.trim()) !== -1;
+    html += '<div class="search-row"><input type="text" id="pt-search" placeholder="Caută după nume, brand, barcode sau mărime…" value="' + searchTermRaw.replace(/"/g,'') + '" style="flex:2">' +
       ((searchTerm || brandFilter) ? '<button class="btn-outline" onclick="ptClearFilters()" title="Golește căutarea și filtrul de brand" style="white-space:nowrap;flex:none">✕ curăță filtrele</button>' : '') +
       '<button class="chip' + (isPinned ? ' active' : '') + '" onclick="ptTogglePinSearch()" title="' + (isPinned ? 'Fixată — scoate din acces rapid' : 'Fixează această căutare ca acces rapid') + '" style="flex:none">📌</button>' +
       '<select id="pt-brand-filter" style="flex:1;margin-bottom:0"><option value="">Toate brandurile' + (allBrands.length ? ' (' + allBrands.length + ')' : '') + '</option>' +
@@ -2212,7 +2217,7 @@
     if(pinnedBrandsList().length){
       html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:-6px 0 12px">' +
         pinnedBrandsList().slice().sort(function(a,b){ return a.localeCompare(b, undefined, {sensitivity:'base'}); }).map(function(term){
-          return '<span class="chip ' + (searchTerm === term ? 'active' : '') + '" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px" onclick="ptApplyPinnedSearch(\'' + jsAttrEscape(term) + '\')">📌 ' + escAttr(term) +
+          return '<span class="chip ' + (searchTermRaw.trim() === term ? 'active' : '') + '" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px" onclick="ptApplyPinnedSearch(\'' + jsAttrEscape(term) + '\')">📌 ' + escAttr(term) +
             '<button class="icon-x" style="padding:0 2px" onclick="event.stopPropagation();ptUnpinSearch(\'' + jsAttrEscape(term) + '\')" title="Scoate din fixate">✕</button></span>';
         }).join('') +
         '</div>';
@@ -2540,21 +2545,19 @@
     }
     setInnerHtmlKeepingFocus(el, html);
     var s = document.getElementById('pt-search');
-    // BUG reparat: la fiecare literă, tot tab-ul se rerandează, iar input-ul nou își lua valoarea
-    // din searchTerm — care e deja normalizat (.toLowerCase().trim(), pentru filtrare insensibilă
-    // la majuscule/spații). Efectul vizibil: literele mari deveneau mici, iar un spațiu (mereu "la
-    // capăt" chiar după ce-l tastezi) era șters de trim() la fiecare rerandare — păreau blocate.
-    // searchTerm rămâne normalizat pentru filtrare, dar valoarea AFIȘATĂ trebuie restaurată exact
-    // cum a tastat utilizatorul, nu din searchTerm.
+    // searchTermRaw ține exact ce tastează utilizatorul (majuscule/spații intacte) — folosit la
+    // afișare și la fixate (📌). searchTerm e normalizat separat (.toLowerCase().trim()) doar
+    // pentru filtrarea insensibilă la majuscule/spații a produselor.
     if(s){ s.addEventListener('input', function(ev){
       var rawVal = ev.target.value;
+      searchTermRaw = rawVal;
       searchTerm = normName(rawVal);
       renderCompare();
       var i = document.getElementById('pt-search');
       if(i){ i.value = rawVal; i.focus(); i.setSelectionRange(rawVal.length, rawVal.length); }
     }); }
     var bf = document.getElementById('pt-brand-filter');
-    if(bf){ bf.addEventListener('change', function(ev){ brandFilter = ev.target.value; searchTerm = ''; renderCompare(); }); }
+    if(bf){ bf.addEventListener('change', function(ev){ brandFilter = ev.target.value; searchTerm = ''; searchTermRaw = ''; renderCompare(); }); }
     var qr = document.getElementById('pt-quick-rate');
     if(qr){ qr.addEventListener('change', function(ev){ state.settings.exchangeRate = parseFloat(ev.target.value) || state.settings.exchangeRate; recomputeAllLandedCosts(); save(); renderCompare(); }); }
     var qk = document.getElementById('pt-quick-krw');
