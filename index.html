@@ -4374,7 +4374,7 @@
           // local s-a golit". Verificăm > 0, nu != null, la toate cîmpurile de preț de mai jos.
           if(a[MS_PRICE_ATTRS.buyPriceUsd] > 0) p.buyPriceOverrideUsd = a[MS_PRICE_ATTRS.buyPriceUsd];
           if(a[MS_PRICE_ATTRS.sellPrice] > 0) p.sellPrice = Math.round(a[MS_PRICE_ATTRS.sellPrice]);
-          if(a[MS_PRICE_ATTRS.secondaryPrice] > 0) p.secondaryPrice = Math.round(a[MS_PRICE_ATTRS.secondaryPrice]);
+          if(a[MS_PRICE_ATTRS.secondaryPrice] > 0) p.secondaryPrice = a[MS_PRICE_ATTRS.secondaryPrice];
           if(a[MS_PRICE_ATTRS.pachet1] > 0) p.pachet1Price = a[MS_PRICE_ATTRS.pachet1];
           if(a[MS_PRICE_ATTRS.pachet2] > 0) p.pachet2Price = a[MS_PRICE_ATTRS.pachet2];
           if(a[MS_PRICE_ATTRS.pachet3] > 0) p.pachet3Price = a[MS_PRICE_ATTRS.pachet3];
@@ -4445,10 +4445,10 @@
           if(sc.usdPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.buyPriceUsd, value: Math.round(sc.usdPrice * 100) / 100 });
           if(p.sellPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.sellPrice, value: p.sellPrice });
           if(p.secondaryPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.secondaryPrice, value: p.secondaryPrice });
-          if(pachete.pachet1 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet1, value: Math.round(pachete.pachet1) });
-          if(pachete.pachet2 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet2, value: Math.round(pachete.pachet2) });
+          if(pachete.pachet1 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet1, value: Math.round(pachete.pachet1 * 100) / 100 });
+          if(pachete.pachet2 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet2, value: Math.round(pachete.pachet2 * 100) / 100 });
         }
-        if(pachete.pachet3 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet3, value: Math.round(pachete.pachet3) });
+        if(pachete.pachet3 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet3, value: Math.round(pachete.pachet3 * 100) / 100 });
         if(!attrsToSet.length) return;
         try {
           var r = await moyskladPost('setAttrs', { id: mp.id, attributes: attrsToSet });
@@ -4514,7 +4514,8 @@
     if(calc.isAlert) bottomParts.push('<span style="color:var(--bad)">⚠ aproape/sub sinecost</span>');
     // Valoarea calculată automat trebuie să fie value= real, nu placeholder — un placeholder nu
     // se poate selecta/copia, ceea ce bloca exact fluxul pentru care exista cîmpul.
-    var shownVal = calc.effVal != null ? Math.round(calc.effVal) : '';
+    // Cu 2 zecimale (bani reali), nu rotunjit la leu întreg — la fel ca restul prețurilor din tabel.
+    var shownVal = calc.effVal != null ? fmt(calc.effVal) : '';
     return '<div class="pt-pkgs-row">' +
         '<span class="pt-pkgs-label">' + label + '</span>' +
         '<input class="qty-input pt-price-input" type="number" step="0.01" style="' + borderStyle + '" value="' + shownVal + '" onchange="' + priceOnchange + '">' +
@@ -4536,7 +4537,7 @@
         { c: p2Calc, pct: p2Calc.effPct },
         { c: p3Calc, pct: p3Calc.effPct }
       ];
-      var vals = entries.map(function(e){ return e.c.effVal != null ? Math.round(e.c.effVal) : '—'; }).join(' · ');
+      var vals = entries.map(function(e){ return e.c.effVal != null ? fmt(e.c.effVal) : '—'; }).join(' · ');
       var pcts = entries.map(function(e){ return e.pct != null ? Math.round(e.pct) : '—'; }).join(' · ');
       return '<td' + tdStyle + '><button class="pt-pkgs-pill" onclick="ptTogglePackagesRow(\'' + kEsc + '\')" title="Secundar și Pachetele 1/2/3 — click pentru a le vedea și edita pe toate">' +
         '<span class="pt-pkgs-pill-vals">' + vals + ' <span style="color:var(--text-dim);font-size:11px">▾</span></span>' +
@@ -4699,22 +4700,25 @@
       // tabel) — apoi lăsăm sincronizarea live din MoySklad de mai jos să suprascrie dacă acolo chiar
       // există o valoare proprie pentru Secundar/Pachet 2/3.
       if(p.sellPrice != null){
+        // Preț rotunjit la 2 zecimale (banuți reali), NU la leu întreg — un preț calculat din
+        // procent (ex: 70% din preț de vânzare) aproape mereu cade pe bani, iar rotunjirea la
+        // întreg falsifica atât valoarea afișată cât și cea trimisă mai departe în MoySklad.
         if(!isFieldReviewed(o, k, 'secondary')){
           var livePctSecondary = (p.secondaryPct != null) ? p.secondaryPct : 15;
-          p.secondaryPrice = Math.round(p.sellPrice * (1 - livePctSecondary/100));
+          p.secondaryPrice = Math.round(p.sellPrice * (1 - livePctSecondary/100) * 100) / 100;
         }
         if(!isFieldReviewed(o, k, 'pachet1')){
           // Pachet 1 e prin definiție mereu exact 70% din Preț de vânzare, fără procent propriu.
-          p.pachet1Price = Math.round(p.sellPrice * 0.70);
+          p.pachet1Price = Math.round(p.sellPrice * 0.70 * 100) / 100;
         }
         var liveMarkupPct = sc.cost ? (((p.sellPrice - sc.cost)/sc.cost)*100) : null;
         if(!isFieldReviewed(o, k, 'pachet2')){
           var livePct2 = (p.pachet2Pct != null) ? p.pachet2Pct : (liveMarkupPct != null ? pachet2Discount(liveMarkupPct) : null);
-          if(livePct2 != null) p.pachet2Price = Math.round(p.sellPrice * (1 - livePct2/100));
+          if(livePct2 != null) p.pachet2Price = Math.round(p.sellPrice * (1 - livePct2/100) * 100) / 100;
         }
         if(!isFieldReviewed(o, k, 'pachet3')){
           var livePct3 = (p.pachet3Pct != null) ? p.pachet3Pct : (liveMarkupPct != null ? pachet3Discount(liveMarkupPct) : null);
-          if(livePct3 != null) p.pachet3Price = Math.round(p.sellPrice * (1 - livePct3/100));
+          if(livePct3 != null) p.pachet3Price = Math.round(p.sellPrice * (1 - livePct3/100) * 100) / 100;
         }
       }
       if(!isFieldReviewed(o, k, 'secondary')){
@@ -4830,15 +4834,15 @@
     // rămîneau "înghețate" la valoarea calculată/importată prima dată.
     if(p.sellPrice != null){
       var pct = (p.secondaryPct != null) ? p.secondaryPct : 15;
-      p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100));
-      p.pachet1Price = Math.round(p.sellPrice * 0.70); // Pachet 1 e mereu -30% fix, fără procent propriu.
+      p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100) * 100) / 100;
+      p.pachet1Price = Math.round(p.sellPrice * 0.70 * 100) / 100; // Pachet 1 e mereu -30% fix, fără procent propriu.
       var ordForCoef = state.orders.find(function(x){ return x.id === openOrderId; });
       var sc = getOrderLineSinecost(ordForCoef, key);
       var markupPct = sc.cost ? (((p.sellPrice - sc.cost)/sc.cost)*100) : null;
       var pct2 = (p.pachet2Pct != null) ? p.pachet2Pct : (markupPct != null ? pachet2Discount(markupPct) : null);
       var pct3 = (p.pachet3Pct != null) ? p.pachet3Pct : (markupPct != null ? pachet3Discount(markupPct) : null);
-      if(pct2 != null) p.pachet2Price = Math.round(p.sellPrice * (1 - pct2/100));
-      if(pct3 != null) p.pachet3Price = Math.round(p.sellPrice * (1 - pct3/100));
+      if(pct2 != null) p.pachet2Price = Math.round(p.sellPrice * (1 - pct2/100) * 100) / 100;
+      if(pct3 != null) p.pachet3Price = Math.round(p.sellPrice * (1 - pct3/100) * 100) / 100;
     }
     markFieldReviewed(key, 'sell');
     save(); renderOrderDetailTable();
@@ -4846,7 +4850,7 @@
   window.ptSetSecondaryPrice = function(key, val){
     var n = parseFloat(val);
     var p = state.products[key];
-    p.secondaryPrice = isNaN(n) ? null : Math.round(n);
+    p.secondaryPrice = isNaN(n) ? null : n;
     if(p.secondaryPrice != null && p.sellPrice != null && p.sellPrice > 0){
       p.secondaryPct = Math.round((1 - p.secondaryPrice / p.sellPrice) * 100);
     }
@@ -4858,7 +4862,7 @@
     if(isNaN(pct)) return;
     var p = state.products[key];
     p.secondaryPct = pct;
-    if(p.sellPrice != null) p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100));
+    if(p.sellPrice != null) p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100) * 100) / 100;
     markFieldReviewed(key, 'secondary');
     save(); renderOrderDetailTable();
   };
@@ -4879,7 +4883,7 @@
     var p = state.products[key];
     p['pachet' + idx + 'Pct'] = pct;
     markFieldReviewed(key, 'pachet' + idx);
-    if(p.sellPrice != null) p['pachet' + idx + 'Price'] = p.sellPrice * (1 - pct/100);
+    if(p.sellPrice != null) p['pachet' + idx + 'Price'] = Math.round(p.sellPrice * (1 - pct/100) * 100) / 100;
     save(); renderOrderDetailTable();
   };
   // Restaurarea poziției e ACUM necondiționată, la fiecare randare — nu doar la editările "de
