@@ -4374,7 +4374,7 @@
           // local s-a golit". Verificăm > 0, nu != null, la toate cîmpurile de preț de mai jos.
           if(a[MS_PRICE_ATTRS.buyPriceUsd] > 0) p.buyPriceOverrideUsd = a[MS_PRICE_ATTRS.buyPriceUsd];
           if(a[MS_PRICE_ATTRS.sellPrice] > 0) p.sellPrice = Math.round(a[MS_PRICE_ATTRS.sellPrice]);
-          if(a[MS_PRICE_ATTRS.secondaryPrice] > 0) p.secondaryPrice = a[MS_PRICE_ATTRS.secondaryPrice];
+          if(a[MS_PRICE_ATTRS.secondaryPrice] > 0) p.secondaryPrice = Math.round(a[MS_PRICE_ATTRS.secondaryPrice]);
           if(a[MS_PRICE_ATTRS.pachet1] > 0) p.pachet1Price = a[MS_PRICE_ATTRS.pachet1];
           if(a[MS_PRICE_ATTRS.pachet2] > 0) p.pachet2Price = a[MS_PRICE_ATTRS.pachet2];
           if(a[MS_PRICE_ATTRS.pachet3] > 0) p.pachet3Price = a[MS_PRICE_ATTRS.pachet3];
@@ -4496,7 +4496,7 @@
     var displayDiscPct = (effVal != null && sellPrice) ? Math.round((1 - effVal/sellPrice)*100) : (effPct != null ? Math.round(effPct) : null);
     return { effVal: effVal, effPct: effPct, isAlert: isAlert, marginPct: marginPct, profitLei: profitLei, displayDiscPct: displayDiscPct };
   }
-  function pkgRowLineHtml(label, calc, priceOnchange, pctOnchange, borderStyle){
+  function pkgRowLineHtml(label, calc, priceOnchange, pctOnchange, borderStyle, wholeNumber){
     // Reducerea (-30% etc.) stătea inline lîngă cîmp doar la pachetul needitabil, dar jos la
     // celelalte — inconsecvent. Acum stă mereu jos, la fel ca "ad +Y%", indiferent de pachet.
     var pctControl = pctOnchange
@@ -4514,8 +4514,8 @@
     if(calc.isAlert) bottomParts.push('<span style="color:var(--bad)">⚠ aproape/sub sinecost</span>');
     // Valoarea calculată automat trebuie să fie value= real, nu placeholder — un placeholder nu
     // se poate selecta/copia, ceea ce bloca exact fluxul pentru care exista cîmpul.
-    // Cu 2 zecimale (bani reali), nu rotunjit la leu întreg — la fel ca restul prețurilor din tabel.
-    var shownVal = calc.effVal != null ? fmt(calc.effVal) : '';
+    // Pachet 1/2/3: 2 zecimale (bani reali). Secundar: rotunjit la leu întreg — cerut explicit așa.
+    var shownVal = calc.effVal != null ? (wholeNumber ? Math.round(calc.effVal) : fmt(calc.effVal)) : '';
     return '<div class="pt-pkgs-row">' +
         '<span class="pt-pkgs-label">' + label + '</span>' +
         '<input class="qty-input pt-price-input" type="number" step="0.01" style="' + borderStyle + '" value="' + shownVal + '" onchange="' + priceOnchange + '">' +
@@ -4532,12 +4532,12 @@
     var tdStyle = anyAlert ? ' style="background:var(--bad-bg)"' : '';
     if(expandedPackagesKey !== k){
       var entries = [
-        { c: secCalc, pct: secCalc.effPct },
+        { c: secCalc, pct: secCalc.effPct, whole: true },
         { c: p1Calc, pct: p1Calc.displayDiscPct },
         { c: p2Calc, pct: p2Calc.effPct },
         { c: p3Calc, pct: p3Calc.effPct }
       ];
-      var vals = entries.map(function(e){ return e.c.effVal != null ? fmt(e.c.effVal) : '—'; }).join(' · ');
+      var vals = entries.map(function(e){ return e.c.effVal != null ? (e.whole ? Math.round(e.c.effVal) : fmt(e.c.effVal)) : '—'; }).join(' · ');
       var pcts = entries.map(function(e){ return e.pct != null ? Math.round(e.pct) : '—'; }).join(' · ');
       return '<td' + tdStyle + '><button class="pt-pkgs-pill" onclick="ptTogglePackagesRow(\'' + kEsc + '\')" title="Secundar și Pachetele 1/2/3 — click pentru a le vedea și edita pe toate">' +
         '<span class="pt-pkgs-pill-vals">' + vals + ' <span style="color:var(--text-dim);font-size:11px">▾</span></span>' +
@@ -4546,7 +4546,7 @@
       '</button></td>';
     }
     return '<td' + tdStyle + '><div style="display:flex;flex-direction:column;gap:6px;align-items:stretch;min-width:190px">' +
-      pkgRowLineHtml('Secundar', secCalc, 'ptSetSecondaryPrice(\'' + kEsc + '\',this.value)', 'ptSetSecondaryPct(\'' + kEsc + '\',this.value)', reviewedBorder(o,k,'secondary')) +
+      pkgRowLineHtml('Secundar', secCalc, 'ptSetSecondaryPrice(\'' + kEsc + '\',this.value)', 'ptSetSecondaryPct(\'' + kEsc + '\',this.value)', reviewedBorder(o,k,'secondary'), true) +
       pkgRowLineHtml('Pachet 1', p1Calc, 'ptSetPachetPrice(\'' + kEsc + '\',1,this.value)', null, reviewedBorder(o,k,'pachet1')) +
       pkgRowLineHtml('Pachet 2', p2Calc, 'ptSetPachetPrice(\'' + kEsc + '\',2,this.value)', 'ptSetPachetPct(\'' + kEsc + '\',2,this.value)', reviewedBorder(o,k,'pachet2')) +
       pkgRowLineHtml('Pachet 3', p3Calc, 'ptSetPachetPrice(\'' + kEsc + '\',3,this.value)', 'ptSetPachetPct(\'' + kEsc + '\',3,this.value)', reviewedBorder(o,k,'pachet3')) +
@@ -4705,7 +4705,7 @@
         // întreg falsifica atât valoarea afișată cât și cea trimisă mai departe în MoySklad.
         if(!isFieldReviewed(o, k, 'secondary')){
           var livePctSecondary = (p.secondaryPct != null) ? p.secondaryPct : 15;
-          p.secondaryPrice = Math.round(p.sellPrice * (1 - livePctSecondary/100) * 100) / 100;
+          p.secondaryPrice = Math.round(p.sellPrice * (1 - livePctSecondary/100));
         }
         if(!isFieldReviewed(o, k, 'pachet1')){
           // Pachet 1 e prin definiție mereu exact 70% din Preț de vânzare, fără procent propriu.
@@ -4723,7 +4723,7 @@
       }
       if(!isFieldReviewed(o, k, 'secondary')){
         var msSecondary = msLive(MS_PRICE_ATTRS.secondaryPrice);
-        if(msSecondary) p.secondaryPrice = msSecondary;
+        if(msSecondary) p.secondaryPrice = Math.round(msSecondary);
       }
       // Pachet 1 NU intră în sincronizarea live — e prin definiție mereu exact 70% din Preț de
       // vânzare (fără procent propriu, fără excepții, cerut explicit așa). Dacă l-am sincroniza și
@@ -4834,7 +4834,7 @@
     // rămîneau "înghețate" la valoarea calculată/importată prima dată.
     if(p.sellPrice != null){
       var pct = (p.secondaryPct != null) ? p.secondaryPct : 15;
-      p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100) * 100) / 100;
+      p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100));
       p.pachet1Price = Math.round(p.sellPrice * 0.70 * 100) / 100; // Pachet 1 e mereu -30% fix, fără procent propriu.
       var ordForCoef = state.orders.find(function(x){ return x.id === openOrderId; });
       var sc = getOrderLineSinecost(ordForCoef, key);
@@ -4850,7 +4850,7 @@
   window.ptSetSecondaryPrice = function(key, val){
     var n = parseFloat(val);
     var p = state.products[key];
-    p.secondaryPrice = isNaN(n) ? null : n;
+    p.secondaryPrice = isNaN(n) ? null : Math.round(n);
     if(p.secondaryPrice != null && p.sellPrice != null && p.sellPrice > 0){
       p.secondaryPct = Math.round((1 - p.secondaryPrice / p.sellPrice) * 100);
     }
@@ -4862,7 +4862,7 @@
     if(isNaN(pct)) return;
     var p = state.products[key];
     p.secondaryPct = pct;
-    if(p.sellPrice != null) p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100) * 100) / 100;
+    if(p.sellPrice != null) p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100));
     markFieldReviewed(key, 'secondary');
     save(); renderOrderDetailTable();
   };
