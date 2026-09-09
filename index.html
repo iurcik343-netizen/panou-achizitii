@@ -4723,7 +4723,7 @@
       }
       if(!isFieldReviewed(o, k, 'secondary')){
         var msSecondary = msLive(MS_PRICE_ATTRS.secondaryPrice);
-        if(msSecondary) p.secondaryPrice = Math.round(msSecondary);
+        if(msSecondary) p.secondaryPrice = msSecondary;
       }
       // Pachet 1 NU intră în sincronizarea live — e prin definiție mereu exact 70% din Preț de
       // vânzare (fără procent propriu, fără excepții, cerut explicit așa). Dacă l-am sincroniza și
