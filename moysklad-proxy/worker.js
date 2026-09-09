@@ -538,7 +538,20 @@ async function handleSetAttrs(body, baseHeaders, corsHeaders) {
   });
   const data = await putRes.json().catch(() => ({}));
   if (!putRes.ok) return json({ error: (data.errors && data.errors[0] && data.errors[0].error) || 'Eroare la salvarea prețurilor în MoySklad.', detail: data }, putRes.status, corsHeaders);
-  return json({ ok: true }, 200, corsHeaders);
+  // Confirmăm ce s-a salvat CU ADEVĂRAT, din răspunsul PUT — un 200 OK nu garantează că MoySklad
+  // a păstrat exact valoarea trimisă (ex: un tip de preț needitabil manual, rotunjire proprie).
+  // Clientul compară asta cu ce a cerut și marchează produsul dacă nu se potrivesc.
+  const confirmed = {};
+  const returnedSalePrices = data.salePrices || [];
+  for (const u of updates) {
+    if (u.id === BUY_PRICE_MDL_EXTCODE) {
+      confirmed[u.id] = data.buyPrice ? data.buyPrice.value / 100 : null;
+      continue;
+    }
+    const sp = returnedSalePrices.find(sp => sp.priceType && sp.priceType.externalCode === u.id);
+    confirmed[u.id] = sp ? sp.value / 100 : null;
+  }
+  return json({ ok: true, confirmed }, 200, corsHeaders);
 }
 
 // ================= SCRIERE: BRANDURI (grupuri de produse) =================

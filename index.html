@@ -4463,6 +4463,22 @@
             console.error('ptPushPricesToMoySklad eșuat pentru', p.name, k, r.data);
             return;
           }
+          // Un 200 OK nu garantează că MoySklad a păstrat exact ce am trimis — verificăm ce s-a
+          // confirmat efectiv salvat (întors de worker din răspunsul PUT) contra a ce am cerut.
+          // Fără asta, exact bug-ul raportat (preț greșit trimis fără nicio eroare vizibilă) ar
+          // trece complet neobservat — apărea doar "trimis cu succes".
+          var confirmed = (r.data && r.data.confirmed) || {};
+          var mismatched = attrsToSet.filter(function(a){
+            var c = confirmed[a.id];
+            return c == null || Math.abs(c - a.value) > 0.01;
+          });
+          if(mismatched.length){
+            failed++;
+            failedNamesPush.push(p.displayName || k);
+            if(!firstErr) firstErr = 'valoare neconfirmată la ' + (p.displayName || k) + ' — verifică manual în MoySklad';
+            console.error('ptPushPricesToMoySklad: valoare neconfirmată pentru', p.displayName, k, { trimis: attrsToSet, confirmat: confirmed });
+            return;
+          }
           sent++;
         } catch(e){ failed++; failedNamesPush.push(p.displayName || k); if(!firstErr) firstErr = String(e); }
       });
@@ -4592,7 +4608,7 @@
     // — rămâne vizibilă cît timp comanda stă deschisă, nu doar cît ține toast-ul de rezumat, ca să
     // se știe exact ce trebuie verificat/corectat manual, nu doar "11 eșuate" fără nume.
     if(lastMsSyncFailed && lastMsSyncFailed.orderId === orderId){
-      var verb = lastMsSyncFailed.type === 'push' ? 'trimis în' : 'importate din';
+      var verb = lastMsSyncFailed.type === 'push' ? 'salvat corect în' : 'importate din';
       var parts = [];
       if(lastMsSyncFailed.failedNames.length){
         parts.push('<div><b>⚠ Eroare la ' + lastMsSyncFailed.failedNames.length + ' produs' + (lastMsSyncFailed.failedNames.length===1?'':'e') + ' (nu s-au ' + verb + ' MoySklad):</b> ' + lastMsSyncFailed.failedNames.map(escAttr).join(', ') + '</div>');
@@ -4697,8 +4713,7 @@
       // valoare, deși procentul lor păstrat spunea clar alta. Recalculăm aici, la fiecare randare, din
       // procentul păstrat (sau formula implicită) și Prețul de vânzare CURENT — dar NUMAI pentru
       // cîmpurile neverificate manual (verificarea le îngheață intenționat, la fel ca peste tot în
-      // tabel) — apoi lăsăm sincronizarea live din MoySklad de mai jos să suprascrie dacă acolo chiar
-      // există o valoare proprie pentru Secundar/Pachet 2/3.
+      // tabel). Asta e sursa finală de adevăr pentru Secundar/Pachet 1/2/3 — vezi de ce mai jos.
       if(p.sellPrice != null){
         // Preț rotunjit la 2 zecimale (banuți reali), NU la leu întreg — un preț calculat din
         // procent (ex: 70% din preț de vânzare) aproape mereu cade pe bani, iar rotunjirea la
@@ -4721,24 +4736,17 @@
           if(livePct3 != null) p.pachet3Price = Math.round(p.sellPrice * (1 - livePct3/100) * 100) / 100;
         }
       }
-      if(!isFieldReviewed(o, k, 'secondary')){
-        var msSecondary = msLive(MS_PRICE_ATTRS.secondaryPrice);
-        if(msSecondary) p.secondaryPrice = Math.round(msSecondary);
-      }
-      // Pachet 1 NU intră în sincronizarea live — e prin definiție mereu exact 70% din Preț de
-      // vânzare (fără procent propriu, fără excepții, cerut explicit așa). Dacă l-am sincroniza și
-      // pe el din MoySklad, ar intra în conflict direct cu propria lui formulă fixă: la fiecare
-      // schimbare a Prețului de vânzare, formula îl recalculează corect, dar randarea următoare
-      // l-ar suprascrie înapoi cu valoarea (acum neactualizată) din MoySklad, dînd impresia că
-      // "nu se schimbă niciodată".
-      if(!isFieldReviewed(o, k, 'pachet2')){
-        var msP2 = msLive(MS_PRICE_ATTRS.pachet2);
-        if(msP2) p.pachet2Price = msP2;
-      }
-      if(!isFieldReviewed(o, k, 'pachet3')){
-        var msP3 = msLive(MS_PRICE_ATTRS.pachet3);
-        if(msP3) p.pachet3Price = msP3;
-      }
+      // BUG GRAV reparat: Secundar/Pachet 2/Pachet 3 AICI se mai suprascriau o dată cu "valoarea
+      // live" din msAttrsCache — care NU e de fapt live, e un instantaneu luat o singură dată per
+      // produs per sesiune de pagină (ensureMsAttrsLoaded nu reîncearcă după primul succes, vezi mai
+      // sus). Rezultatul: editezi procentul, prețul se recalculează corect (cascada de mai sus) —
+      // dar chiar în continuare, tot pe randarea asta, se suprascria înapoi cu instantaneul vechi,
+      // dinainte de editare. Prețul greșit ăsta rămînea afișat și — mult mai grav — era exact ce se
+      // trimitea mai departe în MoySklad la "Trimite prețuri", corupînd prețul real acolo cu o
+      // valoare stale. Exact bug-ul deja evitat intenționat la Pachet 1 (vezi comentariul lui) —
+      // acum toate patru (Secundar, Pachet 1/2/3) se comportă la fel: procentul păstrat + Prețul de
+      // vânzare curent sînt sursa de adevăr; singura cale de a aduce o valoare NOUĂ din MoySklad e
+      // butonul explicit "Importă prețuri".
       // Prețul de vânzare vine STRICT din ce are produsul deja setat (import/sincronizare live de
       // mai sus, sau editare manuală anterioară) — NU mai ghicim un preț din adaosul implicit cînd
       // lipsește. Un preț "calculat" din adaosul generic arăta identic cu unul real, ascunzînd
