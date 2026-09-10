@@ -683,6 +683,29 @@ async function sumCardRevenue(storeId, startDateStr, endDateStr, baseHeaders) {
 // clarificăm cu SFS un interval de IP-uri acceptat sau rutăm apelurile printr-un IP fix.
 const EFACTURA_DEFAULT_URL = 'https://apiefactura-pre.sfs.md';
 
+// SFS cere IP static la whitelisting, iar Cloudflare Workers nu are unul (egress distribuit pe
+// rețeaua globală) — confirmat direct de eroarea 403 la testul inițial. Soluția: un mic releu PHP
+// găzduit pe hosting-ul existent (sublime.md), cu IP fix, care retransmite cererea către SFS.
+// Dacă EFACTURA_RELAY_URL/EFACTURA_RELAY_SECRET nu sunt setate, cade automat pe fetch direct
+// (util dacă SFS acceptă vreodată intervalul de IP-uri Cloudflare, fără să mai schimbăm codul).
+async function relayFetch(targetUrl, opts, env) {
+  const relayUrl = env.EFACTURA_RELAY_URL;
+  const relaySecret = env.EFACTURA_RELAY_SECRET;
+  if (!relayUrl || !relaySecret) {
+    return fetch(targetUrl, { method: opts.method || 'GET', headers: opts.headers || {}, body: opts.body });
+  }
+  const form = new URLSearchParams();
+  form.set('url', targetUrl);
+  form.set('method', opts.method || 'GET');
+  form.set('headers', JSON.stringify(opts.headers || {}));
+  form.set('body', opts.body || '');
+  return fetch(relayUrl, {
+    method: 'POST',
+    headers: { 'X-Relay-Secret': relaySecret, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form.toString(),
+  });
+}
+
 function escapeXml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
 }
@@ -710,11 +733,11 @@ async function callEFactura(soapAction, bodyXml, env) {
   const envelope = soapEnvelope(user, password, bodyXml);
   let res;
   try {
-    res = await fetch(apiUrl, {
+    res = await relayFetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': soapAction },
       body: envelope,
-    });
+    }, env);
   } catch (err) {
     return { ok: false, error: 'Eroare de conectare la SIA e-Factura', detail: String(err) };
   }
@@ -736,7 +759,7 @@ async function handleEFacturaWsdl(corsHeaders, env) {
   const attempts = [];
   for (const candidateUrl of candidates) {
     try {
-      const res = await fetch(candidateUrl);
+      const res = await relayFetch(candidateUrl, { method: 'GET' }, env);
       const contentType = res.headers.get('content-type') || '';
       const looksLikeWsdl = res.ok && contentType.indexOf('xml') !== -1;
       if (looksLikeWsdl) {
