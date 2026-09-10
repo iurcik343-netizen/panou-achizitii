@@ -4382,10 +4382,17 @@
           // o editare manuală — altfel, la prima modificare ulterioară a prețului de vînzare,
           // valorile tocmai importate ar fi înlocuite cu formula generică în loc să urmeze
           // reducerea reală adusă din MoySklad.
+          // BUG GRAV reparat: procentul reținut aici era rotunjit la întreg (14%, nu 14.14%) — inofensiv
+          // cît timp cîmpul rămînea "verificat manual" (înghețat), dar în clipa în care redevenea
+          // neverificat (chiar la randarea următoare după import — importul nu marchează nimic ca
+          // verificat — sau după "Deblochează cîmpurile"), cascada de recalculare din procent
+          // reconstruia prețul din procentul rotunjit, nu din cel exact, și prețul tocmai importat
+          // "aluneca" cu 1 leu (ex: 510 → 511). Reținem procentul EXACT (fracționar) — afișarea în
+          // cîmpul de procent tot arată rotunjit, dar reconstrucția prețului rămîne fidelă 100%.
           if(p.sellPrice != null && p.sellPrice > 0){
-            if(p.secondaryPrice != null) p.secondaryPct = Math.round((1 - p.secondaryPrice/p.sellPrice)*100);
-            if(p.pachet2Price != null) p.pachet2Pct = Math.round((1 - p.pachet2Price/p.sellPrice)*100);
-            if(p.pachet3Price != null) p.pachet3Pct = Math.round((1 - p.pachet3Price/p.sellPrice)*100);
+            if(p.secondaryPrice != null) p.secondaryPct = (1 - p.secondaryPrice/p.sellPrice)*100;
+            if(p.pachet2Price != null) p.pachet2Pct = (1 - p.pachet2Price/p.sellPrice)*100;
+            if(p.pachet3Price != null) p.pachet3Pct = (1 - p.pachet3Price/p.sellPrice)*100;
           }
           imported++;
         } catch(e){ failed++; failedNames.push(p.displayName || k); }
@@ -4859,8 +4866,11 @@
     var n = parseFloat(val);
     var p = state.products[key];
     p.secondaryPrice = isNaN(n) ? null : Math.round(n);
+    // Procent EXACT (fracționar), nu rotunjit — altfel, dacă cîmpul devine mai tîrziu neverificat
+    // (după "Deblochează cîmpurile" sau la un import), reconstrucția prețului din procentul rotunjit
+    // ar da un preț diferit de cel tocmai tastat aici (verificat: poate aluneca și cu 1 leu).
     if(p.secondaryPrice != null && p.sellPrice != null && p.sellPrice > 0){
-      p.secondaryPct = Math.round((1 - p.secondaryPrice / p.sellPrice) * 100);
+      p.secondaryPct = (1 - p.secondaryPrice / p.sellPrice) * 100;
     }
     markFieldReviewed(key, 'secondary');
     save(); renderOrderDetailTable();
@@ -4879,8 +4889,9 @@
     var p = state.products[key];
     var field = 'pachet' + idx + 'Price';
     p[field] = isNaN(n) ? null : n;
+    // Procent EXACT, nu rotunjit — vezi motivul la ptSetSecondaryPrice, aceeași cauză de alunecare.
     if(!isNaN(n) && p.sellPrice != null && p.sellPrice > 0 && idx !== 1){
-      p['pachet' + idx + 'Pct'] = Math.round((1 - n / p.sellPrice) * 100);
+      p['pachet' + idx + 'Pct'] = (1 - n / p.sellPrice) * 100;
     }
     markFieldReviewed(key, 'pachet' + idx);
     save(); renderOrderDetailTable();
@@ -4959,8 +4970,8 @@
         sc.usdPrice!=null?sc.usdPrice.toFixed(2):'', p.sellPrice!=null?p.sellPrice.toFixed(2):'',
         sc.cost!=null?sc.cost.toFixed(2):'', p.secondaryPrice!=null?p.secondaryPrice.toFixed(2):'',
         markupPct!=null?markupPct.toFixed(1):'',
-        eff1!=null?eff1.toFixed(2):'', eff2!=null?eff2.toFixed(2):'', disc2!=null?disc2:'',
-        eff3!=null?eff3.toFixed(2):'', disc3!=null?disc3:'', alertFlag
+        eff1!=null?eff1.toFixed(2):'', eff2!=null?eff2.toFixed(2):'', disc2!=null?Math.round(disc2):'',
+        eff3!=null?eff3.toFixed(2):'', disc3!=null?Math.round(disc3):'', alertFlag
       ]);
     });
     var ws = XLSX.utils.aoa_to_sheet(wsData);
