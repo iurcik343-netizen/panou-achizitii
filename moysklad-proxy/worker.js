@@ -673,7 +673,15 @@ async function sumCardRevenue(storeId, startDateStr, endDateStr, baseHeaders) {
 // ?efactura_wsdl=1 aduce WSDL-ul brut (de obicei accesibil fără autentificare) și ?efactura_test=1
 // întoarce XML-ul de răspuns BRUT, necontrolat, ca să vedem exact ce vine înapoi înainte să scriem
 // un parser — nu presupunem un format de răspuns pe care nu l-am văzut niciodată.
-const EFACTURA_DEFAULT_URL = 'https://api-test.fisc.md/Service.svc';
+// Domeniul de mai jos e cel confirmat oficial de SFS (email 2026-09, cerere TT1653260): mediul de
+// test al platformei API este https://apiefactura-pre.sfs.md/ — diferă de exemplul din ghidul PDF
+// (api-test.fisc.md), care era doar ilustrativ. Calea exactă a serviciului (.svc) NU e confirmată
+// încă — de-aia handleEFacturaWsdl încearcă mai multe variante în loc să presupună una singură.
+// IMPORTANT: SFS a confirmat că restricția de IP se aplică pe mediul de test — accesul a fost
+// acordat pentru IP-ul declarat în formular (cel al stației de lucru), NU pentru IP-urile variabile
+// ale Cloudflare Workers. Primul test e foarte probabil să fie blocat la nivel de rețea până
+// clarificăm cu SFS un interval de IP-uri acceptat sau rutăm apelurile printr-un IP fix.
+const EFACTURA_DEFAULT_URL = 'https://apiefactura-pre.sfs.md';
 
 function escapeXml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
@@ -716,17 +724,31 @@ async function callEFactura(soapAction, bodyXml, env) {
 
 // Diagnostic — aduce WSDL-ul brut al serviciului (de obicei public, fără autentificare), ca să
 // confirmăm namespace-urile și numele exacte ale elementelor înainte de a construi restul metodelor.
+// Calea exactă a serviciului nu e confirmată — încercăm mai multe variante uzuale pentru WCF.
 async function handleEFacturaWsdl(corsHeaders, env) {
-  const apiUrl = env.EFACTURA_API_URL || EFACTURA_DEFAULT_URL;
-  let res;
-  try {
-    res = await fetch(apiUrl + '?singleWsdl');
-    if (!res.ok || (res.headers.get('content-type') || '').indexOf('xml') === -1) res = await fetch(apiUrl + '?wsdl');
-  } catch (err) {
-    return json({ error: 'Eroare de conectare la SIA e-Factura', detail: String(err) }, 502, corsHeaders);
+  const base = (env.EFACTURA_API_URL || EFACTURA_DEFAULT_URL).replace(/\/+$/, '');
+  const candidates = [
+    base + '?singleWsdl',
+    base + '?wsdl',
+    base + '/Service.svc?singleWsdl',
+    base + '/Service.svc?wsdl',
+  ];
+  const attempts = [];
+  for (const candidateUrl of candidates) {
+    try {
+      const res = await fetch(candidateUrl);
+      const contentType = res.headers.get('content-type') || '';
+      const looksLikeWsdl = res.ok && contentType.indexOf('xml') !== -1;
+      if (looksLikeWsdl) {
+        const text = await res.text();
+        return new Response(text, { status: res.status, headers: { ...corsHeaders, 'Content-Type': 'application/xml' } });
+      }
+      attempts.push({ url: candidateUrl, status: res.status, contentType });
+    } catch (err) {
+      attempts.push({ url: candidateUrl, error: String(err) });
+    }
   }
-  const text = await res.text();
-  return new Response(text, { status: res.status, headers: { ...corsHeaders, 'Content-Type': 'application/xml' } });
+  return json({ error: 'Niciuna dintre variantele de URL încercate nu a întors un WSDL valid.', attempts }, 502, corsHeaders);
 }
 
 // Test de conectivitate — GetTaxpayersInfo pe un singur IDNO, doar citire, fără nicio factură reală.
