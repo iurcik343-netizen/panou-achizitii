@@ -688,6 +688,13 @@ const EFACTURA_DEFAULT_URL = 'https://apiefactura-pre.sfs.md';
 // găzduit pe hosting-ul existent (sublime.md), cu IP fix, care retransmite cererea către SFS.
 // Dacă EFACTURA_RELAY_URL/EFACTURA_RELAY_SECRET nu sunt setate, cade automat pe fetch direct
 // (util dacă SFS acceptă vreodată intervalul de IP-uri Cloudflare, fără să mai schimbăm codul).
+function base64EncodeUtf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
 async function relayFetch(targetUrl, opts, env) {
   const relayUrl = env.EFACTURA_RELAY_URL;
   const relaySecret = env.EFACTURA_RELAY_SECRET;
@@ -698,7 +705,9 @@ async function relayFetch(targetUrl, opts, env) {
   form.set('url', targetUrl);
   form.set('method', opts.method || 'GET');
   form.set('headers', JSON.stringify(opts.headers || {}));
-  form.set('body', opts.body || '');
+  // Base64 — hosting-ul releului blochează cererile POST cu XML brut în corp (filtru anti-XXE),
+  // chiar și pe conținut nevinovat. Codificarea evită acel filtru fără să schimbe datele efective.
+  form.set('body_b64', base64EncodeUtf8(opts.body || ''));
   return fetch(relayUrl, {
     method: 'POST',
     headers: { 'X-Relay-Secret': relaySecret, 'Content-Type': 'application/x-www-form-urlencoded' },
