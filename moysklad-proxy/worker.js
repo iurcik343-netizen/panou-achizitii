@@ -746,7 +746,10 @@ ${bodyXml}
 </soap:Envelope>`;
 }
 async function callEFactura(soapAction, bodyXml, env) {
-  const apiUrl = env.EFACTURA_API_URL || EFACTURA_DEFAULT_URL;
+  // Adresa reală de mesagerie SOAP, confirmată din <soap:address location="..."/> în WSDL —
+  // diferă de rădăcina domeniului (care servește doar metadata la ?singleWsdl/?wsdl).
+  const base = (env.EFACTURA_API_URL || EFACTURA_DEFAULT_URL).replace(/\/+$/, '');
+  const apiUrl = base.endsWith('.svc') ? base : base + '/Service.svc';
   const user = env.EFACTURA_USER;
   const password = env.EFACTURA_PASSWORD;
   if (!user || !password) return { ok: false, error: 'Lipsesc secretele EFACTURA_USER / EFACTURA_PASSWORD pe Worker.' };
