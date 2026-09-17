@@ -81,6 +81,7 @@ export default {
       if (url.searchParams.has('fc_debug')) return await handleFiscalCloudDebug(corsHeaders, env);
       if (url.searchParams.has('efactura_wsdl')) return await handleEFacturaWsdl(corsHeaders, env);
       if (url.searchParams.has('efactura_test')) return await handleEFacturaTest(url, corsHeaders, env);
+      if (url.searchParams.has('efactura_probe')) return await handleEFacturaProbe(url, corsHeaders, env);
       return await handleStock(baseHeaders, corsHeaders);
     } catch (err) {
       return json({ error: 'Eroare neașteptată în proxy', detail: String(err) }, 500, corsHeaders);
@@ -816,6 +817,61 @@ async function handleEFacturaTest(url, corsHeaders, env) {
     </GetTaxpayersInfo>`;
   const result = await callEFactura('http://tempuri.org/IService/GetTaxpayersInfo', bodyXml, env);
   return json(result, result.ok ? 200 : 502, corsHeaders);
+}
+
+// Diagnostic — încearcă mai multe variante de headere HTTP pe aceeași cerere reală (aceleași
+// credențiale, același body), ca să vedem dintr-o singură rundă dacă vreo combinație produce un
+// răspuns diferit de eroarea 500 generică. Nu presupune care variantă e corectă — doar le compară.
+async function handleEFacturaProbe(url, corsHeaders, env) {
+  const idno = url.searchParams.get('idno');
+  if (!idno) return json({ error: 'Lipsește parametrul idno' }, 400, corsHeaders);
+  const user = env.EFACTURA_USER;
+  const password = env.EFACTURA_PASSWORD;
+  if (!user || !password) return json({ error: 'Lipsesc secretele EFACTURA_USER / EFACTURA_PASSWORD.' }, 400, corsHeaders);
+
+  const base = (env.EFACTURA_API_URL || EFACTURA_DEFAULT_URL).replace(/\/+$/, '');
+  const apiUrl = base.endsWith('.svc') ? base : base + '/Service.svc';
+  const soapActionRaw = 'http://tempuri.org/IService/GetTaxpayersInfo';
+
+  const bodyXml = `    <GetTaxpayersInfo xmlns="http://tempuri.org/">
+      <request xmlns:a="http://tempuri.org/">
+        <a:RequestId>${crypto.randomUUID()}</a:RequestId>
+        <a:FiscalCodes xmlns:b="http://schemas.microsoft.com/2003/10/Serialization/Arrays">
+          <b:string>${escapeXml(idno)}</b:string>
+        </a:FiscalCodes>
+      </request>
+    </GetTaxpayersInfo>`;
+  const envelope = soapEnvelope(user, password, bodyXml);
+
+  const variants = [
+    { name: 'soapAction fara ghilimele, cu charset', contentType: 'text/xml; charset=utf-8', soapAction: soapActionRaw },
+    { name: 'soapAction CU ghilimele, cu charset', contentType: 'text/xml; charset=utf-8', soapAction: `"${soapActionRaw}"` },
+    { name: 'soapAction fara ghilimele, fara charset', contentType: 'text/xml', soapAction: soapActionRaw },
+    { name: 'soapAction CU ghilimele, fara charset', contentType: 'text/xml', soapAction: `"${soapActionRaw}"` },
+  ];
+
+  const results = [];
+  for (const v of variants) {
+    try {
+      const res = await relayFetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': v.contentType, 'SOAPAction': v.soapAction },
+        body: envelope,
+      }, env);
+      const text = await res.text();
+      results.push({
+        variant: v.name,
+        status: res.status,
+        contentType: res.headers.get('content-type'),
+        etag: res.headers.get('etag'),
+        length: text.length,
+        bodyStart: text.slice(0, 200),
+      });
+    } catch (err) {
+      results.push({ variant: v.name, error: String(err) });
+    }
+  }
+  return json({ results }, 200, corsHeaders);
 }
 
 // ================= FISCALCLOUD / IntelectSoft — suma reală de card, per magazin =================
