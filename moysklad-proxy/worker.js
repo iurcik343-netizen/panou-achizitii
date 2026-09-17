@@ -723,9 +723,14 @@ function soapEnvelope(user, password, bodyXml) {
   // (creare + expirare) e obligatoriu în antetul WS-Security, pe lângă UsernameToken. Fără el,
   // serviciul pare să eșueze cu o eroare nemanipulată (500) doar la cereri text/xml recunoscute
   // corect ca SOAP — alte Content-Type sunt respinse mai devreme, înainte de validarea securității.
+  // Ghidul PDF al SFS nu arată niciodată XML-ul construit manual — exemplele lor (C#) folosesc
+  // ServiceClient generat de .NET WCF, care construiește singur antetul de securitate, cu un
+  // format specific: Timestamp cu milisecunde, și UsernameToken cu atribut wsu:Id propriu.
+  // Aproximăm aici acel format exact, nu doar structura minimă din specificația WS-Security.
   const created = new Date();
   const expires = new Date(created.getTime() + 5 * 60 * 1000);
-  const iso = d => d.toISOString().replace(/\.\d+Z$/, 'Z');
+  const iso = d => d.toISOString(); // păstrează milisecundele, ex. 2026-09-17T10:00:00.000Z
+  const usernameTokenId = 'uuid-' + crypto.randomUUID() + '-1';
   return `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
   <soap:Header>
@@ -734,7 +739,7 @@ function soapEnvelope(user, password, bodyXml) {
         <wsu:Created>${iso(created)}</wsu:Created>
         <wsu:Expires>${iso(expires)}</wsu:Expires>
       </wsu:Timestamp>
-      <wsse:UsernameToken>
+      <wsse:UsernameToken wsu:Id="${usernameTokenId}">
         <wsse:Username>${escapeXml(user)}</wsse:Username>
         <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">${escapeXml(password)}</wsse:Password>
       </wsse:UsernameToken>
