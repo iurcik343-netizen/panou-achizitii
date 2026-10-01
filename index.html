@@ -1552,20 +1552,40 @@
   // explica exact tiparul "unele merg, altele nu, la infinit" — nu erau datele, era cache-ul.
   var msAttrsCache = {};
   var msAttrsRetries = {};
+  var msAttrsNextRetryAt = {};
   var attrsQueue = [];
   var attrsActive = 0;
   var ATTRS_CONCURRENCY = 4; // redus de la 6, ca să scadă șansa de-a lovi o limită de rată la comenzi mari
   var ATTRS_MAX_RETRIES = 5;
+  // BUG CRITIC reparat: nu exista NICIO pauză între reîncercări — un eșec re-rand(a tab-ul
+  // (rerenderVisibleTabsDebounced mai jos), randarea apela din nou ensureMsAttrsLoaded pentru
+  // ACELEAȘI produse eșuate, care erau re-puse instant în coadă (retries < 5, deci nu se opreau),
+  // declanșînd o nouă rundă de cereri — o buclă care se auto-alimenta, fără nicio frînă. La o
+  // comandă/catalog mare, asta a atins sute de cereri/minut către MoySklad, destul cît MoySklad să
+  // dezactiveze accesul API pentru tot contul (eroare 1061, cod 429 repetat o oră întreagă — vezi
+  // emailul lor). Fix: (1) fiecare produs eșuat așteaptă un interval cu backoff exponențial înainte
+  // să fie reîncercat, nu doar "la următoarea randare"; (2) un 429 (limită de rată, nu eroare per
+  // produs) pune pauză pe ÎNTREAGA coadă, nu doar pe produsul respectiv — altfel celelalte 3 cereri
+  // concurente tot loveau aceeași limită în același timp.
+  var attrsGlobalPausedUntil = 0;
+  var ATTRS_RATE_LIMIT_PAUSE_MS = 20000;
   function ensureMsAttrsLoaded(msId){
     var cached = msAttrsCache[msId];
     if(cached === 'loading') return;
     if(cached && cached.attrs) return; // succes deja obținut — nu mai reîncercăm
-    if(cached && cached.error && (msAttrsRetries[msId]||0) >= ATTRS_MAX_RETRIES) return; // renunțăm doar după eșecuri repetate
+    if(cached && cached.error){
+      if((msAttrsRetries[msId]||0) >= ATTRS_MAX_RETRIES) return; // renunțăm doar după eșecuri repetate
+      if(Date.now() < (msAttrsNextRetryAt[msId]||0)) return; // încă în fereastra de backoff — nu reîncercăm degeaba
+    }
     msAttrsCache[msId] = 'loading';
     attrsQueue.push(msId);
     pumpAttrsQueue();
   }
   function pumpAttrsQueue(){
+    if(Date.now() < attrsGlobalPausedUntil){
+      setTimeout(pumpAttrsQueue, attrsGlobalPausedUntil - Date.now() + 50);
+      return;
+    }
     while(attrsActive < ATTRS_CONCURRENCY && attrsQueue.length){
       (function(msId){
         attrsActive++;
@@ -1573,13 +1593,21 @@
           if(data && data.error){
             msAttrsRetries[msId] = (msAttrsRetries[msId]||0) + 1;
             msAttrsCache[msId] = { error: data.detail || data.error };
+            if(data.status === 429){
+              attrsGlobalPausedUntil = Date.now() + ATTRS_RATE_LIMIT_PAUSE_MS;
+              msAttrsNextRetryAt[msId] = attrsGlobalPausedUntil;
+            } else {
+              msAttrsNextRetryAt[msId] = Date.now() + Math.min(30000, 1000 * Math.pow(2, msAttrsRetries[msId]));
+            }
           } else {
             msAttrsCache[msId] = { attrs: (data && data.attributes) || {} };
             delete msAttrsRetries[msId];
+            delete msAttrsNextRetryAt[msId];
           }
         }).catch(function(err){
           msAttrsRetries[msId] = (msAttrsRetries[msId]||0) + 1;
           msAttrsCache[msId] = { error: err && err.message ? err.message : String(err) };
+          msAttrsNextRetryAt[msId] = Date.now() + Math.min(30000, 1000 * Math.pow(2, msAttrsRetries[msId]));
         }).then(function(){
           attrsActive--;
           pumpAttrsQueue();
