@@ -38,23 +38,64 @@ Datele din Supabase **nu sunt afectate niciodată** de o actualizare de cod.
 
 ## 5. Supabase — bază de date și autentificare
 
-### Schema (tabelul `app_state`)
+### Schema — un rând "core" plus trei tabele pe entitate
 
-Tot conținutul aplicației (furnizori, produse, comenzi, setări) e ținut ca **un singur obiect JSON**, într-un singur rând, nu în tabele separate. E simplu și robust pentru un tool cu un singur "document" de lucru.
+Inițial, tot conținutul aplicației (furnizori, produse, comenzi, prețuri) era ținut ca **un singur obiect JSON**, într-un singur rând — simplu, dar nescalabil: la ~9500 produse urmărite și zeci de liste de preț (care păstrează rândurile originale pentru totdeauna, pentru unealta de reparare a prețurilor), documentul a crescut suficient de mare încât Postgres anula salvările ("statement timeout") — orice editare, oricât de mică, rescria tot documentul.
+
+Acum: **furnizorii, coșurile, mapările de import și setările** rămân în rândul vechi (`app_state`, mic, se salvează mereu întreg, la fel ca înainte), dar **produsele, comenzile și listele de preț au fiecare propriul tabel**, cu un rând per entitate — o editare a unui singur produs scrie un singur rând, nu tot catalogul.
 
 ```sql
 create table app_state (
   id text primary key default 'main',
-  data jsonb not null default '{}'::jsonb,
+  data jsonb not null default '{}'::jsonb,  -- {suppliers, carts, importMappings, settings}
   updated_at timestamptz not null default now()
 );
 alter table app_state enable row level security;
 create policy "authenticated select" on app_state for select using (auth.role() = 'authenticated');
 create policy "authenticated insert" on app_state for insert with check (auth.role() = 'authenticated');
 create policy "authenticated update" on app_state for update using (auth.role() = 'authenticated');
+
+create table products (
+  key text primary key,   -- aceeași cheie folosită intern în aplicație (makeKey: barcode sau nume+cantitate)
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table products enable row level security;
+create policy "authenticated select" on products for select using (auth.role() = 'authenticated');
+create policy "authenticated insert" on products for insert with check (auth.role() = 'authenticated');
+create policy "authenticated update" on products for update using (auth.role() = 'authenticated');
+create policy "authenticated delete" on products for delete using (auth.role() = 'authenticated');
+
+create table orders (
+  id text primary key,
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table orders enable row level security;
+create policy "authenticated select" on orders for select using (auth.role() = 'authenticated');
+create policy "authenticated insert" on orders for insert with check (auth.role() = 'authenticated');
+create policy "authenticated update" on orders for update using (auth.role() = 'authenticated');
+create policy "authenticated delete" on orders for delete using (auth.role() = 'authenticated');
+
+create table price_lists (
+  id text primary key,
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table price_lists enable row level security;
+create policy "authenticated select" on price_lists for select using (auth.role() = 'authenticated');
+create policy "authenticated insert" on price_lists for insert with check (auth.role() = 'authenticated');
+create policy "authenticated update" on price_lists for update using (auth.role() = 'authenticated');
+create policy "authenticated delete" on price_lists for delete using (auth.role() = 'authenticated');
 ```
 
-Regula de securitate (RLS): **oricine e logat** poate citi/scrie acest rând. Nu există separare pe utilizator — toată lumea logată vede și editează aceleași date (intenționat, e un tool de echipă).
+Regula de securitate (RLS) e identică pe toate patru: **oricine e logat** poate citi/scrie. Nu există separare pe utilizator — toată lumea logată vede și editează aceleași date (intenționat, e un tool de echipă).
+
+**Migrare automată, o singură dată:** la prima încărcare după ce aceste tabele au fost create, dacă `products`/`orders`/`price_lists` sînt goale dar rândul vechi `app_state` încă are date inline pentru ele, aplicația le mută singură (`fullResyncToTables()` în `index.html`) — idempotent, un al doilea rulaj nu strică nimic. Nu șterge rândul vechi, doar nu mai scrie în el cîmpurile grele de acum încolo.
+
+**Salvare granulară:** fiecare mutație din aplicație marchează ce anume s-a schimbat (`touchProduct`/`touchOrder`/`touchPriceList` în `index.html`), iar la salvare (`doSaveNow`) se scrie DOAR ce e marcat, pe bucăți de ~300 rânduri per cerere (chiar și cînd mii de produse sînt marcate deodată, ca la o schimbare de curs valutar). Rândul `app_state` se salvează întreg de fiecare dată (e mic, nu-i o problemă).
+
+**Resincronizare manuală:** din **Setări → Resincronizare completă cu baza de date**, un buton rescrie tabelele exact din ce e acum în memorie și șterge orice rând rămas fără corespondent local — util dacă ceva pare desincronizat (ex: un tab rămas mult timp offline).
 
 ### Schema (tabelul `app_state_history`)
 

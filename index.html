@@ -588,6 +588,12 @@
     var backup = loadLocalBackup();
     if(!backup || !backup.state) return false;
     applyImportedState(backup.state);
+    // Marcăm TOT ca dirty — altfel, cînd revine conexiunea, tryReconnectAndSync() ar chema
+    // doSaveNow() care acum salvează doar ce e în seturile dirty; fără asta, nimic din copia
+    // locală recuperată aici (produse/comenzi/liste de preț) n-ar ajunge înapoi în tabele.
+    Object.keys(state.products).forEach(touchProduct);
+    state.orders.forEach(function(o){ touchOrder(o.id); });
+    state.priceLists.forEach(function(pl){ touchPriceList(pl.id); });
     dataLoadedOk = true;
     lastKnownUpdatedAt = backup.lastKnownUpdatedAt || null;
     var when = backup.savedAt ? new Date(backup.savedAt).toLocaleString('ro-RO') : 'necunoscut';
@@ -620,6 +626,28 @@
   // browserului ("sigur pleci? modificările s-ar putea să nu fie salvate") — dă-i ocazia să aștepte,
   // în loc să piardă tăcut ce tocmai a făcut.
   var saveInProgress = false;
+  // ================= SALVARE GRANULARĂ (produse/comenzi/liste de preț în tabele proprii) =================
+  // BUG CRITIC reparat: aplicația salva ÎNTREG state-ul (toate produsele, comenzile, listele de preț
+  // — inclusiv rândurile brute originale, păstrate pentru totdeauna) ca un singur document JSON, la
+  // FIECARE modificare, oricât de mică. Cu ~9500+ produse și zeci de liste de preț acumulate, acel
+  // document a crescut suficient de mult încât Postgres anula salvarea ("statement timeout") — o
+  // editare a unui singur preț nu mai apuca niciodată să se salveze. Acum produsele/comenzile/listele
+  // de preț au fiecare propriul tabel în Supabase (un rând per produs/comandă/listă), iar o modificare
+  // salvează DOAR rândurile ei, nu tot catalogul. Furnizorii/coșurile/setările rămân în rândul vechi
+  // ("app_state"), fiind mici și nefiind sursa problemei. Formatul lui `state` în memorie NU se
+  // schimbă deloc — doar load()/doSaveNow() știu acum despre cele 3 tabele noi.
+  var dirtyProductKeys = {};
+  var deletedProductKeys = {};
+  var dirtyOrderIds = {};
+  var deletedOrderIds = {};
+  var dirtyPriceListIds = {};
+  var deletedPriceListIds = {};
+  function touchProduct(k){ if(!k) return; dirtyProductKeys[k] = true; delete deletedProductKeys[k]; }
+  function untrackProduct(k){ if(!k) return; deletedProductKeys[k] = true; delete dirtyProductKeys[k]; }
+  function touchOrder(id){ if(!id) return; dirtyOrderIds[id] = true; delete deletedOrderIds[id]; }
+  function untrackOrder(id){ if(!id) return; deletedOrderIds[id] = true; delete dirtyOrderIds[id]; }
+  function touchPriceList(id){ if(!id) return; dirtyPriceListIds[id] = true; delete deletedPriceListIds[id]; }
+  function untrackPriceList(id){ if(!id) return; deletedPriceListIds[id] = true; delete dirtyPriceListIds[id]; }
   function save(){
     if(saveTimer) clearTimeout(saveTimer);
     saveInProgress = true;
@@ -651,6 +679,123 @@
     var s = String(msg||'');
     return /fetch|network|connection|timeout/i.test(s) || /\b5\d\d\b/.test(s);
   }
+  // ================= SCRIERE ÎN BUCĂȚI (produse/comenzi/liste de preț) =================
+  // Chiar și cînd TOT catalogul e marcat dirty dintr-o dată (ex: schimbarea cursului valutar
+  // recalculează sinecostul la ~9500 produse), o singură cerere cu toate rîndurile ar relua exact
+  // bug-ul de "statement timeout" pe care tabelele separate trebuiau să-l rezolve — de-aia orice
+  // scriere trece prin bucăți (chunk-uri), indiferent de câte id-uri sînt marcate dirty.
+  var SAVE_CHUNK_SIZE = 300;
+  function chunkArray(arr, size){
+    var out = [];
+    for(var i=0; i<arr.length; i+=size) out.push(arr.slice(i, i+size));
+    return out;
+  }
+  async function upsertTableRows(table, rows, retriesLeft){
+    if(retriesLeft === undefined) retriesLeft = 2;
+    try {
+      var result = await supabaseClient.from(table).upsert(rows);
+      if(!result.error) return true;
+    } catch(e){ /* tratat mai jos, la fel ca o eroare normală */ }
+    if(retriesLeft > 0){
+      await new Promise(function(r){ setTimeout(r, 1500); });
+      return upsertTableRows(table, rows, retriesLeft - 1);
+    }
+    return false;
+  }
+  async function deleteTableRows(table, pkField, ids, retriesLeft){
+    if(retriesLeft === undefined) retriesLeft = 2;
+    try {
+      var result = await supabaseClient.from(table).delete().in(pkField, ids);
+      if(!result.error) return true;
+    } catch(e){ /* tratat mai jos, la fel ca o eroare normală */ }
+    if(retriesLeft > 0){
+      await new Promise(function(r){ setTimeout(r, 1500); });
+      return deleteTableRows(table, pkField, ids, retriesLeft - 1);
+    }
+    return false;
+  }
+  function productDataFor(k){ return state.products[k] || null; }
+  function orderDataFor(id){ return state.orders.find(function(x){ return x.id === id; }) || null; }
+  function priceListDataFor(id){ return state.priceLists.find(function(x){ return x.id === id; }) || null; }
+  // Scrie un singur tabel (products/orders/price_lists): upsert pe bucăți pentru id-urile dirty,
+  // delete pe bucăți pentru cele șterse. Întoarce ce NU a reușit (după propriile reîncercări) —
+  // chemătorul decide ce face cu id-urile eșuate (le pune înapoi în seturile live, ca să fie reluate
+  // la salvarea următoare), nu renunță la restul tabelelor doar pentru că una a avut o problemă.
+  async function flushEntityTable(table, pkField, dirtyIds, deletedIds, dataBuilder){
+    var failedDirty = [], failedDeleted = [];
+    var dirtyChunks = chunkArray(dirtyIds, SAVE_CHUNK_SIZE);
+    for(var i=0; i<dirtyChunks.length; i++){
+      var nowIso = new Date().toISOString();
+      var rows = dirtyChunks[i].map(function(k){
+        var data = dataBuilder(k);
+        if(data == null) return null;
+        var row = {}; row[pkField] = k; row.data = data; row.updated_at = nowIso;
+        return row;
+      }).filter(function(r){ return r != null; });
+      if(!rows.length) continue;
+      var ok = await upsertTableRows(table, rows);
+      if(!ok) failedDirty = failedDirty.concat(dirtyChunks[i]);
+    }
+    var deleteChunks = chunkArray(deletedIds, SAVE_CHUNK_SIZE);
+    for(var j=0; j<deleteChunks.length; j++){
+      var ok2 = await deleteTableRows(table, pkField, deleteChunks[j]);
+      if(!ok2) failedDeleted = failedDeleted.concat(deleteChunks[j]);
+    }
+    return { failedDirty: failedDirty, failedDeleted: failedDeleted };
+  }
+  // Citește un tabel întreg, paginat — un singur .select() se oprește implicit la ~1000 rânduri
+  // (limita implicită PostgREST), insuficient pentru produse (~9500+).
+  async function fetchAllRows(table, pkField){
+    var out = [];
+    var pageSize = 1000;
+    var from = 0;
+    while(true){
+      var res = await supabaseClient.from(table).select('*').order(pkField).range(from, from + pageSize - 1);
+      if(res.error) throw new Error(res.error.message);
+      var rows = res.data || [];
+      out = out.concat(rows);
+      if(rows.length < pageSize) break;
+      from += pageSize;
+    }
+    return out;
+  }
+  // Rescrie COMPLET cele 3 tabele (products/orders/price_lists) din ce e ACUM în memorie: scrie
+  // (pe bucăți) tot ce există în state, apoi șterge din tabel orice rând care nu mai are corespondent
+  // în memorie. Pasul de ștergere e ce face asta o adevărată RECONCILIERE, nu doar un upsert — fără
+  // el, o restaurare la un instantaneu mai vechi ar lăsa în tabele produse/comenzi apărute DUPĂ acel
+  // instantaneu, înviindu-le silențios la următoarea încărcare. Folosită la: migrarea inițială (load,
+  // o singură dată), butonul manual "Resincronizare completă" din Setări, și după restaurarea unui
+  // instantaneu din Istoric versiuni. Aruncă eroare pe eșec — apelantul decide ce face (load() nu
+  // setează dataLoadedOk dacă migrarea eșuează, ca să nu riște o salvare pe tabele parțial populate).
+  async function fullResyncToTables(onProgress){
+    var tables = [
+      { table: 'products', pkField: 'key', keys: Object.keys(state.products), dataBuilder: productDataFor },
+      { table: 'orders', pkField: 'id', keys: state.orders.map(function(o){ return o.id; }), dataBuilder: orderDataFor },
+      { table: 'price_lists', pkField: 'id', keys: state.priceLists.map(function(pl){ return pl.id; }), dataBuilder: priceListDataFor }
+    ];
+    for(var t=0; t<tables.length; t++){
+      var cfg = tables[t];
+      var chunks = chunkArray(cfg.keys, SAVE_CHUNK_SIZE);
+      for(var i=0; i<chunks.length; i++){
+        var nowIso = new Date().toISOString();
+        var rows = chunks[i].map(function(k){ var row = {}; row[cfg.pkField] = k; row.data = cfg.dataBuilder(k); row.updated_at = nowIso; return row; });
+        var ok = await upsertTableRows(cfg.table, rows);
+        if(!ok) throw new Error('Nu am putut scrie în tabelul ' + cfg.table);
+        if(onProgress) onProgress(cfg.table, Math.min((i+1)*SAVE_CHUNK_SIZE, cfg.keys.length), cfg.keys.length);
+      }
+      var existingRows = await fetchAllRows(cfg.table, cfg.pkField);
+      var memorySet = {};
+      cfg.keys.forEach(function(k){ memorySet[k] = true; });
+      var toDelete = existingRows.map(function(r){ return r[cfg.pkField]; }).filter(function(id){ return !memorySet[id]; });
+      if(toDelete.length){
+        var delChunks = chunkArray(toDelete, SAVE_CHUNK_SIZE);
+        for(var j=0; j<delChunks.length; j++){
+          var ok2 = await deleteTableRows(cfg.table, cfg.pkField, delChunks[j]);
+          if(!ok2) throw new Error('Nu am putut șterge rândurile vechi din ' + cfg.table);
+        }
+      }
+    }
+  }
   async function doSaveNow(skipStaleCheck, retriesLeft){
     if(retriesLeft === undefined) retriesLeft = 2;
     // Setat aici, nu doar în save() — mai multe locuri din cod apelează doSaveNow(true) direct,
@@ -668,13 +813,26 @@
     // Copia locală se reîmprospătează la ÎNCEPUTUL fiecărei încercări de salvare, indiferent dacă
     // reușește sau nu — dacă exact acum pică conexiunea, ultima stare bună rămâne oricum pe disc.
     saveLocalBackupNow();
+    // Instantaneu + golire a seturilor dirty ÎNAINTE de orice cerere de rețea — dacă apar modificări
+    // noi CÂT TIMP salvarea asta e în desfășurare, repopulează seturile live (golite acum) și nu se
+    // amestecă cu, nici nu se pierd odată cu, ce tocmai trimitem.
+    var snapProductKeys = Object.keys(dirtyProductKeys); dirtyProductKeys = {};
+    var snapProductDeletes = Object.keys(deletedProductKeys); deletedProductKeys = {};
+    var snapOrderIds = Object.keys(dirtyOrderIds); dirtyOrderIds = {};
+    var snapOrderDeletes = Object.keys(deletedOrderIds); deletedOrderIds = {};
+    var snapPriceListIds = Object.keys(dirtyPriceListIds); dirtyPriceListIds = {};
+    var snapPriceListDeletes = Object.keys(deletedPriceListIds); deletedPriceListIds = {};
+    function restoreSnapshotToLiveSets(){
+      snapProductKeys.forEach(touchProduct); snapProductDeletes.forEach(untrackProduct);
+      snapOrderIds.forEach(touchOrder); snapOrderDeletes.forEach(untrackOrder);
+      snapPriceListIds.forEach(touchPriceList); snapPriceListDeletes.forEach(untrackPriceList);
+    }
     try {
-      // Verificăm dacă altcineva (alt tab, alt calculator) a salvat între timp — cu o singură
-      // versiune partajată, o salvare de-a noastră ar suprascrie orbește modificările lor.
-      // Nu blocăm salvarea (ar risca să pierdem chiar modificarea curentă), dar avertizăm clar,
-      // o singură dată, ca să știe să reîncarce pagina înainte să mai schimbe ceva. La flush de
-      // urgență (pagina se închide chiar acum) sărim peste verificare — e o cerere de rețea în
-      // plus, care ar putea consuma tot timpul pe care browserul ni-l mai dă înainte să plece.
+      // Verificăm dacă altcineva (alt tab, alt calculator) a salvat între timp — cu un singur rând
+      // partajat ("core": furnizori/coșuri/mapări/setări), o salvare de-a noastră ar suprascrie orbește
+      // modificările lor pe ACEL rând (produsele/comenzile/listele de preț, fiind în tabele proprii pe
+      // rânduri separate, nu mai au această problemă deloc — exact beneficiul de concurență urmărit).
+      // Nu blocăm salvarea, doar avertizăm o singură dată. La flush de urgență sărim peste verificare.
       if(lastKnownUpdatedAt && !staleWarningShown && !skipStaleCheck){
         try {
           var check = await supabaseClient.from('app_state').select('updated_at').eq('id', STATE_ROW_ID).maybeSingle();
@@ -684,38 +842,63 @@
           }
         } catch(e){ /* verificarea e doar o măsură de siguranță — dacă eșuează, continuăm cu salvarea */ }
       }
-      var payload = JSON.stringify(state);
-      // Pragul e generos — un rând JSONB în Postgres/Supabase duce fără probleme mult peste atît;
-      // avertizăm doar ca semnal timpuriu, nu pentru că am fi aproape de o limită reală. Avertizăm
-      // o singură dată per sesiune, nu la fiecare salvare, ca să nu enerveze degeaba.
-      if(payload.length > 15000000 && !sizeWarningShown){
+      var corePayload = { suppliers: state.suppliers, carts: state.carts, importMappings: state.importMappings, settings: state.settings };
+      var corePayloadStr = JSON.stringify(corePayload);
+      if(corePayloadStr.length > 15000000 && !sizeWarningShown){
         sizeWarningShown = true;
-        ptToast('Atenție: baza de date e mare (~' + Math.round(payload.length/1024) + ' KB). Ia în calcul să ștergi cataloage vechi nefolosite.', false);
+        ptToast('Atenție: datele de bază (furnizori/coșuri/setări) au devenit neobișnuit de mari (~' + Math.round(corePayloadStr.length/1024) + ' KB).', false);
       }
       var nowIso = new Date().toISOString();
       // Cerem rândul înapoi (select) după upsert, ca să reținem exact formatul de timestamp pe
       // care îl întoarce Supabase — dacă am reține în schimb string-ul nostru local (toISOString),
       // comparația de mai sus la salvarea următoare ar pica mereu fals-pozitiv, pentru că Postgres
       // serializează timestamp-urile puțin diferit (alt format de precizie/fus orar).
-      var result = await supabaseClient.from('app_state').upsert({ id: STATE_ROW_ID, data: state, updated_at: nowIso }).select('updated_at').maybeSingle();
-      if(result.error){
-        // Erori de tip timeout/conexiune sînt adesea trecătoare (o interogare paralelă care ținea
-        // rândul ocupat, o reconectare) — încercăm din nou de cîteva ori, tăcut, înainte să deranjăm
-        // utilizatorul cu un mesaj; modificarea lui nu trebuie pierdută doar pentru un blip trecător.
+      var result = await supabaseClient.from('app_state').upsert({ id: STATE_ROW_ID, data: corePayload, updated_at: nowIso }).select('updated_at').maybeSingle();
+      var coreOk = !result.error;
+      if(!coreOk){
+        // Erori de tip timeout/conexiune sînt adesea trecătoare — încercăm din nou de cîteva ori,
+        // tăcut, înainte să deranjăm utilizatorul cu un mesaj; modificarea lui nu trebuie pierdută
+        // doar pentru un blip trecător. Reîncercarea reia TOT (core + tabelele de mai jos), deci
+        // punem înapoi tot ce tocmai am golit din seturile live.
         if(retriesLeft > 0){
+          restoreSnapshotToLiveSets();
           await new Promise(function(r){ setTimeout(r, 1500); });
           return doSaveNow(true, retriesLeft - 1);
         }
         ptToast('Salvarea nu a reușit: ' + result.error.message, false);
         if(isTransientNetworkError(result.error.message)) enterOfflineMode();
+      } else {
+        lastKnownUpdatedAt = (result.data && result.data.updated_at) || nowIso;
+      }
+      // Produsele/comenzile/listele de preț sînt independente de rândul "core" — le scriem indiferent
+      // de rezultatul lui de mai sus (nu are rost să blocăm o parte din cauza alteia, fiind tabele
+      // separate fără nicio legătură între ele).
+      var productsResult = await flushEntityTable('products', 'key', snapProductKeys, snapProductDeletes, productDataFor);
+      var ordersResult = await flushEntityTable('orders', 'id', snapOrderIds, snapOrderDeletes, orderDataFor);
+      var priceListsResult = await flushEntityTable('price_lists', 'id', snapPriceListIds, snapPriceListDeletes, priceListDataFor);
+      // Ce n-a reușit (după propriile reîncercări interne) intră înapoi în seturile LIVE — nu
+      // declanșăm o reîncercare completă a întregii salvări doar pentru atât, salvarea URMĂTOARE
+      // (debounce-ul normal, sau următoarea editare) le reia automat, exact pe acel subset.
+      productsResult.failedDirty.forEach(touchProduct);
+      productsResult.failedDeleted.forEach(untrackProduct);
+      ordersResult.failedDirty.forEach(touchOrder);
+      ordersResult.failedDeleted.forEach(untrackOrder);
+      priceListsResult.failedDirty.forEach(touchPriceList);
+      priceListsResult.failedDeleted.forEach(untrackPriceList);
+      var anyTableFailed = productsResult.failedDirty.length || productsResult.failedDeleted.length ||
+        ordersResult.failedDirty.length || ordersResult.failedDeleted.length ||
+        priceListsResult.failedDirty.length || priceListsResult.failedDeleted.length;
+      if(anyTableFailed){
+        ptToast('O parte din modificări nu s-au salvat încă — reîncercăm automat la următoarea editare. Nu închide pagina dacă poți aștepta puțin.', false);
       }
       // NU resetăm staleWarningShown aici — dacă altcineva/altă filă tot salvează în paralel,
       // fiecare salvare a NOASTRĂ ar re-declanșa avertismentul, într-un potop de notificări
       // identice. O dată e suficient să anunțe problema; soluția cerută (F5) oricum repornește
       // sesiunea și flag-ul, ca să reapară dacă un conflict nou, real, apare mai târziu.
-      else { lastKnownUpdatedAt = (result.data && result.data.updated_at) || nowIso; saveHistorySnapshotIfDue(); }
+      if(coreOk) saveHistorySnapshotIfDue();
       saveInProgress = false;
     } catch(e){
+      restoreSnapshotToLiveSets();
       if(retriesLeft > 0){
         await new Promise(function(r){ setTimeout(r, 1500); });
         return doSaveNow(true, retriesLeft - 1);
@@ -780,6 +963,19 @@
     var res = await supabaseClient.from('app_state_history').select('data').eq('id', id).maybeSingle();
     if(res.error || !res.data){ ptToast('Nu am putut încărca acest instantaneu: ' + (res.error ? res.error.message : 'negăsit'), false); return; }
     applyImportedState(res.data.data);
+    var el = document.getElementById('pt-history-list');
+    // fullResyncToTables (nu doar doSaveNow) e esențial aici — RECONCILIAZĂ tabelele cu memoria,
+    // adică șterge din products/orders/price_lists orice rând apărut DUPĂ acest instantaneu. Un
+    // simplu doSaveNow ar fi scris doar ce era marcat dirty (nimic, aici) și ar fi lăsat intacte —
+    // deci "înviate" silențios — produse/comenzi create după instantaneul restaurat.
+    try {
+      await fullResyncToTables(function(table, done, total){
+        if(el) el.innerHTML = '<div class="hint">Se restaurează… ' + table + ': ' + done + '/' + total + '</div>';
+      });
+    } catch(syncErr){
+      ptToast('Restaurarea a eșuat la scrierea în tabele: ' + (syncErr && syncErr.message ? syncErr.message : syncErr) + '. Reîncearcă.', false);
+      return;
+    }
     await doSaveNow(true);
     location.reload();
   };
@@ -804,31 +1000,62 @@
       }
       lastKnownUpdatedAt = (result.data && result.data.updated_at) || null;
       var parsed = result.data && result.data.data;
-      // Un răspuns fără eroare, chiar și fără date (rînd inexistent) e un răspuns REAL de la server,
-      // nu un eșec — fie prima folosire a aplicației, fie un state gol legitim. dataLoadedOk devine
-      // true înainte de save()-ul de migrare de mai jos, altfel ar fi blocat de gardul din doSaveNow.
-      dataLoadedOk = true;
-      refreshLastHistorySnapshotAt(); // fire-and-forget — nu blochează încărcarea restului
       if(parsed){
         state.suppliers = parsed.suppliers || [];
-        state.products = parsed.products || {};
-        state.orders = parsed.orders || [];
         state.carts = parsed.carts || {};
         state.importMappings = parsed.importMappings || {};
-        state.priceLists = parsed.priceLists || [];
         state.settings = Object.assign(state.settings, parsed.settings || {});
         if(!parsed.settings || parsed.settings.coef === undefined){
           if(parsed.settings && parsed.settings.seaCoef !== undefined) state.settings.coef = parsed.settings.seaCoef;
         }
-        // Migrare unică: un bug marca greșit aproape toate produsele ca „NEW” la prima încărcare
-        // a unui price list (nu doar la actualizări ulterioare). Curățăm o singură dată etichetele
-        // greșite deja salvate — logica de mai jos (doExcelImport) e reparată, deci de acum înainte
-        // se marchează corect doar produsele apărute la o actualizare reală.
-        if(!state.settings.newBadgeMigrated){
-          Object.keys(state.products).forEach(function(k){ state.products[k].isNew = false; });
-          state.settings.newBadgeMigrated = true;
-          save();
+      }
+      // Produsele/comenzile/listele de preț vin acum din tabelele proprii (products/orders/
+      // price_lists), nu din rândul de mai sus — vezi comentariul de la dirtyProductKeys, lîngă
+      // save(). Dacă un tabel e gol dar rândul vechi ÎNCĂ are date vechi inline pentru el (cont
+      // nemigrat încă), migrăm o singură dată aici — idempotent, un rulaj repetat doar rescrie
+      // aceleași rânduri, nu strică nimic.
+      var productRows = await fetchAllRows('products', 'key');
+      var orderRows = await fetchAllRows('orders', 'id');
+      var priceListRows = await fetchAllRows('price_lists', 'id');
+      var legacyProducts = (parsed && parsed.products && Object.keys(parsed.products).length) ? parsed.products : null;
+      var legacyOrders = (parsed && parsed.orders && parsed.orders.length) ? parsed.orders : null;
+      var legacyPriceLists = (parsed && parsed.priceLists && parsed.priceLists.length) ? parsed.priceLists : null;
+      var needsMigration = (productRows.length === 0 && legacyProducts) || (orderRows.length === 0 && legacyOrders) || (priceListRows.length === 0 && legacyPriceLists);
+      if(needsMigration){
+        var cmpMig = document.getElementById('tab-compare');
+        if(cmpMig) cmpMig.innerHTML = '<div class="panel empty">Se migrează baza de date la noul format (o singură dată)… nu închide pagina.</div>';
+        state.products = (productRows.length === 0 && legacyProducts) ? legacyProducts : productRows.reduce(function(acc,r){ acc[r.key]=r.data; return acc; }, {});
+        state.orders = (orderRows.length === 0 && legacyOrders) ? legacyOrders : orderRows.map(function(r){ return r.data; });
+        state.priceLists = (priceListRows.length === 0 && legacyPriceLists) ? legacyPriceLists : priceListRows.map(function(r){ return r.data; });
+        try {
+          await fullResyncToTables(function(table, done, total){
+            if(cmpMig) cmpMig.innerHTML = '<div class="panel empty">Se migrează baza de date la noul format… ' + table + ': ' + done + '/' + total + '</div>';
+          });
+        } catch(migErr){
+          // NU setăm dataLoadedOk — o salvare acum, cu tabelele doar parțial populate, ar risca
+          // mai mult decît ar ajuta. Mai bine blocat clar, cu reîncercare, decît silențios greșit.
+          ptToast('Migrarea datelor la noul format a eșuat: ' + (migErr && migErr.message ? migErr.message : migErr) + '. Reîncarcă pagina (F5) ca să reîncerci.', false);
+          return false;
         }
+      } else {
+        state.products = productRows.reduce(function(acc,r){ acc[r.key]=r.data; return acc; }, {});
+        state.orders = orderRows.map(function(r){ return r.data; });
+        state.priceLists = priceListRows.map(function(r){ return r.data; });
+      }
+      // Un răspuns fără eroare, chiar și fără date (rînd inexistent) e un răspuns REAL de la server,
+      // nu un eșec — fie prima folosire a aplicației, fie un state gol legitim. dataLoadedOk devine
+      // true DOAR după ce tabelele chiar s-au încărcat (sau migrat) cu succes, altfel save()-ul de
+      // mai jos (migrarea veche a etichetei "NEW") ar fi blocat de gardul din doSaveNow.
+      dataLoadedOk = true;
+      refreshLastHistorySnapshotAt(); // fire-and-forget — nu blochează încărcarea restului
+      // Migrare unică: un bug marca greșit aproape toate produsele ca „NEW” la prima încărcare
+      // a unui price list (nu doar la actualizări ulterioare). Curățăm o singură dată etichetele
+      // greșite deja salvate — logica de mai jos (doExcelImport) e reparată, deci de acum înainte
+      // se marchează corect doar produsele apărute la o actualizare reală.
+      if(!state.settings.newBadgeMigrated){
+        Object.keys(state.products).forEach(function(k){ state.products[k].isNew = false; touchProduct(k); });
+        state.settings.newBadgeMigrated = true;
+        save();
       }
       return true;
     } catch(e){
@@ -933,7 +1160,7 @@
   function recomputeAllLandedCosts(){
     Object.keys(state.products).forEach(function(k){
       var p = state.products[k];
-      Object.keys(p.bySupplier).forEach(function(sid){ var e = p.bySupplier[sid]; if(e.price != null) e.landedCost = landedCost(e.price, e.currency, e.freight); });
+      Object.keys(p.bySupplier).forEach(function(sid){ var e = p.bySupplier[sid]; if(e.price != null){ e.landedCost = landedCost(e.price, e.currency, e.freight); touchProduct(k); } });
     });
   }
   function supplierName(id){
@@ -1134,6 +1361,7 @@
     } else {
       prod.bySupplier[sid] = { price: fields.price, currency: fields.currency, freight: fields.freight, landedCost: cost, updatedAt: today, history: [{ date: today, price: fields.price, currency: fields.currency }], moq: (fields.moq !== null && fields.moq !== undefined && !isNaN(fields.moq)) ? fields.moq : null, packQty: packQty, weightGrams: weightGrams, barcode: fields.barcode || '' };
     }
+    touchProduct(key);
     return wasIncrease;
   }
   // ================= REPARARE: PREȚURI CONTAMINATE DE FACTURI, ÎNAINTE DE FIX =================
@@ -1181,6 +1409,7 @@
         if(touched[sid] && touched[sid][k]){ restored++; return; }
         if(e.price == null) return;
         e.price = null; e.currency = null; e.landedCost = null; e.history = [];
+        touchProduct(k);
         cleared++;
       });
     });
@@ -1250,10 +1479,14 @@
     if(!tgt.barcode && src.barcode) tgt.barcode = src.barcode;
     if(!tgt.rrp && src.rrp){ tgt.rrp = src.rrp; tgt.rrpCurrency = src.rrpCurrency; }
     delete state.products[sourceKey];
+    touchProduct(targetKey);
+    untrackProduct(sourceKey);
     // Cheia veche dispare — actualizăm orice ar mai fi referit-o, altfel liniile din comenzi deja
     // înregistrate ar "dispărea" pur și simplu (produsul nu mai există sub acea cheie).
     state.orders.forEach(function(o){
-      o.lines.forEach(function(l){ if(l.key === sourceKey) l.key = targetKey; });
+      var changed = false;
+      o.lines.forEach(function(l){ if(l.key === sourceKey){ l.key = targetKey; changed = true; } });
+      if(changed) touchOrder(o.id);
     });
     Object.keys(state.carts).forEach(function(email){
       Object.keys(state.carts[email]).forEach(function(sid){
@@ -1269,6 +1502,7 @@
       if(idx === -1) return;
       if(pl.productKeys.indexOf(targetKey) === -1) pl.productKeys[idx] = targetKey;
       else pl.productKeys.splice(idx, 1);
+      touchPriceList(pl.id);
     });
     save(); renderCompare(); renderOrderDetailTable();
   };
@@ -1774,7 +2008,7 @@
     var archivedLocally = 0;
     barcodesToArchive.forEach(function(bc){
       var key = 'bc:' + bc;
-      if(state.products[key] && !state.products[key].archived){ state.products[key].archived = true; archivedLocally++; }
+      if(state.products[key] && !state.products[key].archived){ state.products[key].archived = true; touchProduct(key); archivedLocally++; }
     });
     save();
     ptToast('Brand ascuns în aplicație (' + ids.length + ' produse)' + (archivedLocally ? ', și ' + archivedLocally + ' arhivate în Comparație produse' : '') + '. În MoySklad nu s-a schimbat nimic.', true);
@@ -2099,6 +2333,7 @@
     p.quantity = document.getElementById('pt-edit-qty-' + idSafe).value.trim();
     p.barcode = document.getElementById('pt-edit-barcode-' + idSafe).value.trim();
     editingProductKey = null;
+    touchProduct(key);
     save(); renderCompare();
   };
   window.ptEditEntry = function(key, sid){ editingEntry = key + '||' + sid; editingProductKey = null; renderCompare(); };
@@ -2125,6 +2360,7 @@
     e.packQty = (packQty && packQty > 0) ? packQty : null;
     e.barcode = barcodeRaw;
     editingEntry = null;
+    touchProduct(key);
     save(); renderCompare();
   };
   // Coșurile sînt personale — fiecare cont logat are propriile coșuri, separate de ale colegilor,
@@ -2198,7 +2434,7 @@
     if(!toArchive.length){ ptToast('Niciun produs de arhivat în acest filtru.', false); return; }
     var filterDesc = [searchTermRaw ? '„' + searchTermRaw + '"' : null, brandFilter ? 'brand „' + brandFilter + '"' : null].filter(Boolean).join(' + ') || 'filtrul curent';
     if(!confirm('Arhivezi ' + toArchive.length + ' produse din ' + filterDesc + '?')) return;
-    toArchive.forEach(function(k){ if(state.products[k]) state.products[k].archived = true; });
+    toArchive.forEach(function(k){ if(state.products[k]){ state.products[k].archived = true; touchProduct(k); } });
     save(); renderCompare();
     ptToast(toArchive.length + ' produse arhivate.', true);
   };
@@ -2640,9 +2876,11 @@
   window.ptDeleteProduct = function(key){
     var snapshot = JSON.parse(JSON.stringify(state.products[key]));
     delete state.products[key];
+    untrackProduct(key);
     save(); renderCompare();
     ptToastUndo('Produs șters: ' + snapshot.displayName, function(){
       state.products[key] = snapshot;
+      touchProduct(key);
       save(); renderCompare();
     });
   };
@@ -2651,18 +2889,19 @@
     var p = state.products[key];
     if(!p) return;
     p.favorite = !p.favorite;
+    touchProduct(key);
     save(); renderCompare();
   };
   window.ptArchiveProduct = function(key){
-    if(state.products[key]){ state.products[key].archived = true; expandedProductKey = null; }
+    if(state.products[key]){ state.products[key].archived = true; expandedProductKey = null; touchProduct(key); }
     save(); renderCompare();
     ptToastUndo('Produs arhivat: ' + (state.products[key] ? state.products[key].displayName : ''), function(){
-      if(state.products[key]) state.products[key].archived = false;
+      if(state.products[key]){ state.products[key].archived = false; touchProduct(key); }
       save(); renderCompare();
     });
   };
   window.ptUnarchiveProduct = function(key){
-    if(state.products[key]) state.products[key].archived = false;
+    if(state.products[key]){ state.products[key].archived = false; touchProduct(key); }
     save(); renderCompare();
   };
   window.ptDeleteEntry = function(key, sid){
@@ -2675,12 +2914,16 @@
       productSnapshot = JSON.parse(JSON.stringify(state.products[key]));
       delete state.products[key];
       productWasDeleted = true;
+      untrackProduct(key);
+    } else {
+      touchProduct(key);
     }
     save(); renderCompare();
     ptToastUndo('Preț șters (' + supName + ')', function(){
       if(productWasDeleted){ state.products[key] = productSnapshot; }
       else if(!state.products[key]) { /* nothing to restore into */ }
       else { state.products[key].bySupplier[sid] = entrySnapshot; }
+      touchProduct(key);
       save(); renderCompare();
     });
   };
@@ -3087,8 +3330,10 @@
         if(prod && prod.bySupplier[sid]){
           var lpLanded = toUSD(l.price, l.currency) * state.settings.exchangeRate * existingOrder.coef;
           prod.bySupplier[sid].lastPurchase = { price: l.price, currency: l.currency, date: today, qty: l.qty, landedCost: lpLanded };
+          touchProduct(l.key);
         }
       });
+      touchOrder(existingOrder.id);
       save();
       fb.className='feedback ok';
       fb.textContent = 'Comandă actualizată din MoySklad: ' + lines.length + ' produse (' + added + ' noi, ' + updated + ' actualizate)' + (errors>0?(', '+errors+' rânduri ignorate'):'') + '.';
@@ -3103,12 +3348,15 @@
       var msFullyReceived = importOrderFile.moyskladSum > 0 && importOrderFile.moyskladShippedSum >= importOrderFile.moyskladSum;
       initialStatus = msFullyReceived ? 'received' : 'in-transit';
     }
-    state.orders.unshift({ id: uid(), supplierId: sid, date: today, eta: eta, status: initialStatus, freight: freight, coef: coef, landedTotal: landedTotal, lines: lines, totals: totals, moyskladOrderId: msOrderId, moyskladCheckedAt: msOrderId ? Date.now() : null, invoiceNumber: invoiceNumber, invoiceDate: invoiceDate });
+    var newOrderId = uid();
+    state.orders.unshift({ id: newOrderId, supplierId: sid, date: today, eta: eta, status: initialStatus, freight: freight, coef: coef, landedTotal: landedTotal, lines: lines, totals: totals, moyskladOrderId: msOrderId, moyskladCheckedAt: msOrderId ? Date.now() : null, invoiceNumber: invoiceNumber, invoiceDate: invoiceDate });
+    touchOrder(newOrderId);
     lines.forEach(function(l){
       var prod = state.products[l.key];
       if(prod && prod.bySupplier[sid]){
         var lpLanded = toUSD(l.price, l.currency) * state.settings.exchangeRate * coef;
         prod.bySupplier[sid].lastPurchase = { price: l.price, currency: l.currency, date: today, qty: l.qty, landedCost: lpLanded };
+        touchProduct(l.key);
       }
     });
 
@@ -3243,7 +3491,7 @@
       matched++;
       var small = await downscaleImageBlob(imagesByRow[sheetRow], 300);
       var url = await uploadPriceListImage(small, key.replace(/[^a-zA-Z0-9]/g,'_'));
-      if(url){ state.products[key].excelImageUrl = url; uploaded++; }
+      if(url){ state.products[key].excelImageUrl = url; touchProduct(key); uploaded++; }
     }
     if(uploaded > 0){ save(); renderCompare(); }
     if(matched === 0){
@@ -3375,11 +3623,13 @@
                 prevApplied.skippedRows = f.skippedRows;
                 prevApplied.rowOrigIndices = f.rowOrigIndices;
                 prevApplied.pending = true;
+                touchPriceList(prevApplied.id);
                 reusedCount++;
               } else {
                 var newId = uid();
                 pendingRawBuffers[newId] = f.rawBuffer;
                 state.priceLists.push({ id: newId, supplierId: sid, fileName: f.fileName, brand: '', importedAt: null, productKeys: [], headers: f.headers, rows: f.rows, skippedRows: f.skippedRows, rowOrigIndices: f.rowOrigIndices, mapping: null, pending: true });
+                touchPriceList(newId);
               }
             });
             save();
@@ -3659,7 +3909,7 @@
           existingPL.productKeys.forEach(function(k){
             if(newKeySet[k]) return;
             var p = state.products[k];
-            if(p && p.bySupplier[sid]){ delete p.bySupplier[sid]; removedFromSupplier++; }
+            if(p && p.bySupplier[sid]){ delete p.bySupplier[sid]; touchProduct(k); removedFromSupplier++; }
           });
           existingPL.fileName = file.fileName;
           existingPL.brand = fileBrand || '';
@@ -3672,8 +3922,11 @@
           existingPL.pending = false;
           delete pendingRawBuffers[existingPL.id];
           if(wasPending) justAppliedIds[existingPL.id] = true;
+          touchPriceList(existingPL.id);
         } else {
-          state.priceLists.push({ id: uid(), supplierId: sid, fileName: file.fileName, brand: fileBrand || '', importedAt: today, productKeys: touchedKeys, headers: file.headers, rows: file.rows, skippedRows: file.skippedRows || 0, mapping: m, pending: false });
+          var newPlId = uid();
+          state.priceLists.push({ id: newPlId, supplierId: sid, fileName: file.fileName, brand: fileBrand || '', importedAt: today, productKeys: touchedKeys, headers: file.headers, rows: file.rows, skippedRows: file.skippedRows || 0, mapping: m, pending: false });
+          touchPriceList(newPlId);
         }
       }
       // Extragerea și urcarea pozelor lipite în Excel se face în fundal, fără să blocheze
@@ -3779,6 +4032,7 @@
     var p = state.products[key];
     if(!p) return;
     p.barcode = String(val||'').trim();
+    touchProduct(key);
     save(); renderOrderDetailTable(); renderCompare();
   };
 
@@ -4046,8 +4300,10 @@
       var prod = state.products[l.key];
       if(prod && prod.bySupplier[o.supplierId] && prod.bySupplier[o.supplierId].lastPurchase && prod.bySupplier[o.supplierId].lastPurchase.date === o.date){
         prod.bySupplier[o.supplierId].lastPurchase.landedCost = toUSD(l.price, l.currency) * state.settings.exchangeRate * realCoef;
+        touchProduct(l.key);
       }
     });
+    touchOrder(o.id);
     save();
     renderOrderHistory(); renderCompare(); renderOrderRows();
     ptToast('Coeficient real aplicat: ' + fmt(realCoef) + '. Sinecosturile produselor din comandă au fost actualizate.', true);
@@ -4056,6 +4312,7 @@
     var o = state.orders.find(function(x){ return x.id === id; });
     if(!o) return;
     o.freight = val;
+    touchOrder(id);
     save(); renderOrderHistory(); renderCompare();
   };
   window.ptSetOrderCoef = function(id, val){
@@ -4070,8 +4327,10 @@
       var prod = state.products[l.key];
       if(prod && prod.bySupplier[o.supplierId] && prod.bySupplier[o.supplierId].lastPurchase && prod.bySupplier[o.supplierId].lastPurchase.date === o.date){
         prod.bySupplier[o.supplierId].lastPurchase.landedCost = toUSD(l.price, l.currency) * state.settings.exchangeRate * n;
+        touchProduct(l.key);
       }
     });
+    touchOrder(id);
     save();
     renderOrderHistory(); renderCompare(); renderOrderRows();
     ptToast('Coeficient actualizat: ' + fmt(n) + '. Sinecosturile produselor din comandă au fost recalculate.', true);
@@ -4104,6 +4363,7 @@
     var landedTotal = 0;
     o.lines.forEach(function(l){ landedTotal += toUSD(l.price, l.currency) * state.settings.exchangeRate * o.coef; });
     o.landedTotal = landedTotal;
+    touchOrder(o.id);
     save(); renderOrderDetailTable();
   };
 
@@ -4241,13 +4501,16 @@
     if(!o) return;
     if(!confirm('Ștergi comanda din ' + o.date + ' — ' + supplierName(o.supplierId) + ' (' + o.lines.length + ' produse)?\n\nAcțiunea nu poate fi anulată.')) return;
     if(openOrderId === id) openOrderId = null;
-    state.orders = state.orders.filter(function(x){ return x.id !== id; }); save(); renderOrderHistory(); renderCompare(); renderOrderRows();
+    state.orders = state.orders.filter(function(x){ return x.id !== id; });
+    untrackOrder(id);
+    save(); renderOrderHistory(); renderCompare(); renderOrderRows();
     ptToast('Comanda din ' + o.date + ' — ' + supplierName(o.supplierId) + ' a fost ștearsă.', true);
   };
   window.ptSetOrderStatus = function(id, status){
     var o = state.orders.find(function(x){ return x.id === id; });
     if(!o || ORDER_STATUSES.indexOf(status) === -1) return;
     o.status = status;
+    touchOrder(id);
     save(); renderOrderHistory(); renderCompare(); renderOrderRows();
   };
 
@@ -4453,6 +4716,7 @@
             if(p.pachet2Price != null) p.pachet2Pct = (1 - p.pachet2Price/p.sellPrice)*100;
             if(p.pachet3Price != null) p.pachet3Pct = (1 - p.pachet3Price/p.sellPrice)*100;
           }
+          touchProduct(k);
           imported++;
         } catch(e){ failed++; failedNames.push(p.displayName || k); }
       });
@@ -4875,6 +5139,7 @@
     if(!o.reviewedFields) o.reviewedFields = {};
     if(!o.reviewedFields[key]) o.reviewedFields[key] = {};
     o.reviewedFields[key][field] = true;
+    touchOrder(o.id);
   }
   function isFieldReviewed(o, key, field){
     return !!(o.reviewedFields && o.reviewedFields[key] && o.reviewedFields[key][field]);
@@ -4887,6 +5152,7 @@
     if(!o) return;
     if(!confirm('Sigur deblochezi toate cîmpurile marcate ca „verificate manual" (marginea verde) pentru această comandă? Data viitoare cînd imporți/sincronizezi din MoySklad, TOATE prețurile — inclusiv cele corectate manual pînă acum — vor fi suprascrise cu valorile din MoySklad.')) return;
     o.reviewedFields = {};
+    touchOrder(orderId);
     save();
     renderOrderDetailTable();
     ptToast('Cîmpurile au fost deblocate — poți importa din nou din MoySklad.', true);
@@ -4896,6 +5162,7 @@
     if(!p) return;
     var n = parseFloat(val);
     p.buyPriceOverrideUsd = isNaN(n) ? null : n;
+    touchProduct(key);
     markFieldReviewed(key, 'buy');
     save(); renderOrderDetailTable();
   };
@@ -4918,6 +5185,7 @@
       if(pct2 != null) p.pachet2Price = Math.round(p.sellPrice * (1 - pct2/100) * 100) / 100;
       if(pct3 != null) p.pachet3Price = Math.round(p.sellPrice * (1 - pct3/100) * 100) / 100;
     }
+    touchProduct(key);
     markFieldReviewed(key, 'sell');
     save(); renderOrderDetailTable();
   };
@@ -4931,6 +5199,7 @@
     if(p.secondaryPrice != null && p.sellPrice != null && p.sellPrice > 0){
       p.secondaryPct = (1 - p.secondaryPrice / p.sellPrice) * 100;
     }
+    touchProduct(key);
     markFieldReviewed(key, 'secondary');
     save(); renderOrderDetailTable();
   };
@@ -4940,6 +5209,7 @@
     var p = state.products[key];
     p.secondaryPct = pct;
     if(p.sellPrice != null) p.secondaryPrice = Math.round(p.sellPrice * (1 - pct/100));
+    touchProduct(key);
     markFieldReviewed(key, 'secondary');
     save(); renderOrderDetailTable();
   };
@@ -4952,6 +5222,7 @@
     if(!isNaN(n) && p.sellPrice != null && p.sellPrice > 0 && idx !== 1){
       p['pachet' + idx + 'Pct'] = (1 - n / p.sellPrice) * 100;
     }
+    touchProduct(key);
     markFieldReviewed(key, 'pachet' + idx);
     save(); renderOrderDetailTable();
   };
@@ -4960,6 +5231,7 @@
     if(isNaN(pct)) return;
     var p = state.products[key];
     p['pachet' + idx + 'Pct'] = pct;
+    touchProduct(key);
     markFieldReviewed(key, 'pachet' + idx);
     if(p.sellPrice != null) p['pachet' + idx + 'Price'] = Math.round(p.sellPrice * (1 - pct/100) * 100) / 100;
     save(); renderOrderDetailTable();
@@ -5225,7 +5497,12 @@
     var plCount = state.priceLists.filter(function(pl){ return pl.supplierId === id; }).length;
     if(!confirm('Ștergi furnizorul „' + s.name + '"?\n\nAsta va elimina ' + affected + ' produs(e) de la acest furnizor' + (lonelyProducts ? (', din care ' + lonelyProducts + ' vor fi șterse complet (nu au niciun alt furnizor)') : '') + (plCount ? (', și ' + plCount + ' price list(uri) asociate') : '') + '.\n\nAcțiunea nu poate fi anulată.')) return;
     state.suppliers = state.suppliers.filter(function(s){ return s.id !== id; });
-    Object.keys(state.products).forEach(function(k){ delete state.products[k].bySupplier[id]; if(Object.keys(state.products[k].bySupplier).length===0) delete state.products[k]; });
+    Object.keys(state.products).forEach(function(k){
+      delete state.products[k].bySupplier[id];
+      if(Object.keys(state.products[k].bySupplier).length===0){ delete state.products[k]; untrackProduct(k); }
+      else touchProduct(k);
+    });
+    state.priceLists.filter(function(pl){ return pl.supplierId === id; }).forEach(function(pl){ untrackPriceList(pl.id); });
     state.priceLists = state.priceLists.filter(function(pl){ return pl.supplierId !== id; });
     if(expandedSupplierId === id) expandedSupplierId = null;
     save(); renderSuppliers(); renderCompare();
@@ -5241,9 +5518,10 @@
     var removed = 0;
     pl.productKeys.forEach(function(k){
       var p = state.products[k];
-      if(p && p.bySupplier[pl.supplierId]){ delete p.bySupplier[pl.supplierId]; removed++; }
+      if(p && p.bySupplier[pl.supplierId]){ delete p.bySupplier[pl.supplierId]; touchProduct(k); removed++; }
     });
     state.priceLists = state.priceLists.filter(function(x){ return x.id !== id; });
+    untrackPriceList(id);
     if(editingPriceListId === id){ editingPriceListId = null; importState = null; importFiles = null; }
     delete justAppliedIds[id];
     save();
@@ -5258,9 +5536,11 @@
       if(state.products[k].bySupplier[id]){
         delete state.products[k].bySupplier[id];
         removed++;
-        if(Object.keys(state.products[k].bySupplier).length===0) delete state.products[k];
+        if(Object.keys(state.products[k].bySupplier).length===0){ delete state.products[k]; untrackProduct(k); }
+        else touchProduct(k);
       }
     });
+    state.priceLists.filter(function(pl){ return pl.supplierId === id; }).forEach(function(pl){ untrackPriceList(pl.id); });
     state.priceLists = state.priceLists.filter(function(pl){ return pl.supplierId !== id; });
     pendingWipeSupplierId = null;
     save(); renderCompare(); renderSuppliers();
@@ -5363,6 +5643,10 @@
       '<div class="hint">Pînă de curând, importul unei comenzi (facturi) suprascria greșit prețul de listă al furnizorului cu prețul de pe factură — chiar și peste un preț de listă real, deja corect. Bug-ul e reparat pentru comenzile viitoare — butonul de mai jos rejoacă efectiv toate price list-urile reale deja aplicate (în ordine cronologică), ca să restabilească prețul autentic al fiecărui produs pe care-l acoperă. Ce nu are niciun price list real rămâne „fără preț" (—), în loc să afișeze o valoare din altă comandă. E sigur de rulat oricând.</div>' +
       '<button class="btn-outline" id="pt-cleanup-order-prices">🧹 Repară prețurile de furnizor</button>' +
       '<div id="pt-cleanup-feedback"></div></div>';
+    html += '<div class="panel"><h2>Resincronizare completă cu baza de date</h2>' +
+      '<div class="hint">Produsele, comenzile și listele de preț stau fiecare în propriul tabel în Supabase (nu mai sînt salvate ca un singur document mare). Dacă bănuiești că ceva nu s-a sincronizat corect (ex: un tab a rămas deschis mult timp offline), butonul de mai jos rescrie în tabele exact ce ai acum pe ecran și șterge din tabele orice ar mai fi rămas în plus, nelegat de nimic din ce vezi acum. Nu modifică nimic vizibil în aplicație — doar aliniază baza de date cu ce ai local. Poate dura cîteva secunde la un catalog mare.</div>' +
+      '<button class="btn-outline" id="pt-full-resync">🔄 Resincronizare completă</button>' +
+      '<div id="pt-resync-feedback"></div></div>';
     html += '<div class="panel"><h2>Istoric versiuni</h2>' +
       '<div class="hint">Aplicația păstrează automat instantanee complete ale datelor (la cel mult 15 minute între ele) — dacă ștergi ceva din greșeală, poți reveni la un moment anterior. Nu e un „undo" pas cu pas, ci o listă de momente din timp la care te poți întoarce (iar de acolo poți reveni și înainte, dacă te răzgîndești).</div>' +
       '<button class="btn-outline" id="pt-history-open">🕐 Arată istoricul</button>' +
@@ -5430,16 +5714,24 @@
       var file = e.target.files[0];
       if(!file) return;
       var reader = new FileReader();
-      reader.onload = function(){
+      reader.onload = async function(){
         var fb = document.getElementById('pt-backup-feedback');
         try {
           var parsed = JSON.parse(reader.result);
           applyImportedState(parsed);
-          save();
+          // fullResyncToTables (nu doar save()) — la fel ca la restaurarea unui instantaneu: scrie
+          // tot ce e acum în memorie ȘI reconciliază (șterge din tabele orice rând care nu mai are
+          // corespondent în backup-ul importat), altfel produse/comenzi mai noi decât backup-ul ar
+          // rămâne agățate, "înviate" silențios, în loc să fie înlocuite de ce tocmai s-a încărcat.
+          fb.className = 'feedback'; fb.textContent = 'Se scrie backup-ul în baza de date…';
+          await fullResyncToTables(function(table, done, total){
+            fb.textContent = 'Se scrie backup-ul… ' + table + ': ' + done + '/' + total;
+          });
+          await doSaveNow(true);
           renderCompare(); renderSettings();
           fb.className = 'feedback ok'; fb.textContent = '✓ Backup încărcat și salvat.';
         } catch(err){
-          fb.className = 'feedback err'; fb.textContent = 'Fișier invalid: ' + (err && err.message ? err.message : err);
+          fb.className = 'feedback err'; fb.textContent = 'Fișier invalid sau eroare la salvare: ' + (err && err.message ? err.message : err);
         }
       };
       reader.readAsText(file);
@@ -5447,6 +5739,18 @@
     });
     document.getElementById('pt-history-open').addEventListener('click', function(){ ptOpenHistoryPanel(); });
     document.getElementById('pt-cleanup-order-prices').addEventListener('click', ptRepairSupplierPrices);
+    document.getElementById('pt-full-resync').addEventListener('click', async function(){
+      if(!confirm('Resincronizezi complet tabelele products/orders/price_lists din Supabase cu ce ai acum local? Rescrie tot ce ai local și șterge din tabele orice nu mai are corespondent local. Continui?')) return;
+      var fb = document.getElementById('pt-resync-feedback');
+      fb.className = 'feedback'; fb.textContent = 'Se resincronizează…';
+      try {
+        await fullResyncToTables(function(table, done, total){ fb.textContent = 'Se resincronizează… ' + table + ': ' + done + '/' + total; });
+        fb.className = 'feedback ok'; fb.textContent = '✓ Resincronizare completă.';
+        ptToast('Resincronizare completă — tabelele din Supabase reflectă acum exact ce ai local.', true);
+      } catch(err){
+        fb.className = 'feedback err'; fb.textContent = 'Resincronizarea a eșuat: ' + (err && err.message ? err.message : err);
+      }
+    });
     document.getElementById('pt-signout').addEventListener('click', async function(){
       await supabaseClient.auth.signOut();
       location.reload();
