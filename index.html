@@ -1017,13 +1017,16 @@
         var base = state.settings.moyskladProxyUrl;
         var url = base + (base.indexOf('?')===-1?'?':'&') + 'orderstatus=' + encodeURIComponent(o.moyskladOrderId);
         fetch(url).then(function(res){ return res.json(); }).then(function(data){
-          o.moyskladCheckedAt = Date.now();
           if(data && data.received && o.status === 'in-transit'){
             o.status = 'received';
             save();
             rerenderVisibleTabs();
           }
         }).catch(function(){}).then(function(){
+          // moyskladCheckedAt se pune AICI, mereu (succes sau eșec) — nu doar la succes. Altfel, un
+          // eșec (ex: limită de rată trecătoare) nu seta pragul de 5 min, iar randarea următoare
+          // reîncerca imediat aceeași comandă, fără nicio pauză — aceeași clasă de bug ca la attrs.
+          o.moyskladCheckedAt = Date.now();
           delete orderStatusChecking[o.id];
           orderStatusActive--;
           pumpOrderStatusQueue();
