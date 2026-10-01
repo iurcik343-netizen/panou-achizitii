@@ -607,8 +607,22 @@
   // backup local) — doSaveNow() refuză să salveze cât timp rămâne false, indiferent ce a declanșat
   // salvarea, ca protecție și pentru orice alt cod viitor care ar putea apela save() prea devreme.
   var dataLoadedOk = false;
+  // BUG GRAV reparat: flushPendingSave (mai jos) pornea salvarea la închidere/reîncărcare, dar
+  // fetch-ul către Supabase e asincron — browserul NU garantează că apucă să se termine înainte
+  // să distrugă pagina, mai ales la un reload "tare" (Ctrl+F5), care poate tăia conexiunile mult
+  // mai brutal decît o navigare normală. Pentru un payload mic poate reușea "de obicei", dar
+  // pentru ceva mai mare (ex: un import de listă de preț cu sute de rînduri) fereastra de timp nu
+  // mai e suficientă — exact raportat: "Importă" apăsat, apoi Ctrl+F5, iar price list-ul revine la
+  // "neimportat încă" la reîncărcare. sendBeacon (singura metodă CHIAR garantată să supraviețuiască
+  // unload) are o limită de ~64KB per cerere — prea mică pentru tot state-ul aplicației. Soluția
+  // realistă, folosită de orice aplicație serioasă (Google Docs, Notion etc.): dacă o salvare chiar
+  // nu s-a confirmat încă atunci cînd utilizatorul încearcă să plece, arătăm avertismentul NATIV al
+  // browserului ("sigur pleci? modificările s-ar putea să nu fie salvate") — dă-i ocazia să aștepte,
+  // în loc să piardă tăcut ce tocmai a făcut.
+  var saveInProgress = false;
   function save(){
     if(saveTimer) clearTimeout(saveTimer);
+    saveInProgress = true;
     saveTimer = setTimeout(doSaveNow, 200);
   }
   // Dacă pagina se închide/reîncarcă exact în fereastra de 200ms de debounce (ex: adaugi în coș
@@ -618,7 +632,14 @@
   function flushPendingSave(){
     if(saveTimer){ clearTimeout(saveTimer); saveTimer = null; doSaveNow(true); }
   }
-  window.addEventListener('beforeunload', flushPendingSave);
+  window.addEventListener('beforeunload', function(e){
+    flushPendingSave();
+    if(saveInProgress){
+      e.preventDefault();
+      e.returnValue = 'Modificările încă se salvează — dacă pleci acum, s-ar putea să se piardă.';
+      return e.returnValue;
+    }
+  });
   window.addEventListener('pagehide', flushPendingSave);
   // Folosit ca să deosebim un blip trecător de conexiune (merită reîncercat tăcut, ca la
   // doSaveNow) de o eroare "curată" a serverului (ex: parolă greșită, rînd inexistent) — aceea
@@ -632,11 +653,16 @@
   }
   async function doSaveNow(skipStaleCheck, retriesLeft){
     if(retriesLeft === undefined) retriesLeft = 2;
+    // Setat aici, nu doar în save() — mai multe locuri din cod apelează doSaveNow(true) direct,
+    // ocolind save()/debounce-ul; dacă am seta flag-ul doar în save(), acele salvări nu l-ar
+    // marca deloc, iar avertismentul de la beforeunload (mai jos) n-ar prinde exact cazul lor.
+    saveInProgress = true;
     // Nu s-a încărcat încă vreo dată reală (nici din server, nici din backup local) — a salva acum
     // ar suprascrie datele reale din Supabase (și copia locală bună) cu un state gol. Vezi comentariul
     // de la dataLoadedOk.
     if(!dataLoadedOk){
       ptToast('Datele nu s-au încărcat încă — salvarea e blocată, ca să nu se piardă ceva. Reîncarcă pagina (F5).', false);
+      saveInProgress = false;
       return;
     }
     // Copia locală se reîmprospătează la ÎNCEPUTUL fiecărei încercări de salvare, indiferent dacă
@@ -688,6 +714,7 @@
       // identice. O dată e suficient să anunțe problema; soluția cerută (F5) oricum repornește
       // sesiunea și flag-ul, ca să reapară dacă un conflict nou, real, apare mai târziu.
       else { lastKnownUpdatedAt = (result.data && result.data.updated_at) || nowIso; saveHistorySnapshotIfDue(); }
+      saveInProgress = false;
     } catch(e){
       if(retriesLeft > 0){
         await new Promise(function(r){ setTimeout(r, 1500); });
@@ -695,6 +722,7 @@
       }
       ptToast('Eroare la salvare: ' + (e && e.message ? e.message : 'necunoscută') + '. Modificarea rămâne salvată local pe acest calculator și se trimite automat de îndată ce revine conexiunea.', false);
       enterOfflineMode();
+      saveInProgress = false;
     }
   }
   // ================= ISTORIC VERSIUNI (plasă de siguranță în caz de ștergere din greșeală) =================
