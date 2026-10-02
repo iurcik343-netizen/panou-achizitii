@@ -82,6 +82,7 @@ export default {
       if (url.searchParams.has('efactura_wsdl')) return await handleEFacturaWsdl(corsHeaders, env);
       if (url.searchParams.has('efactura_test')) return await handleEFacturaTest(url, corsHeaders, env);
       if (url.searchParams.has('efactura_probe')) return await handleEFacturaProbe(url, corsHeaders, env);
+      if (url.searchParams.has('customerorders_probe')) return await handleCustomerOrdersProbe(url, baseHeaders, corsHeaders);
       return await handleStock(baseHeaders, corsHeaders);
     } catch (err) {
       return json({ error: 'Eroare neașteptată în proxy', detail: String(err) }, 500, corsHeaders);
@@ -396,6 +397,58 @@ async function handleHistory(productId, baseHeaders, corsHeaders) {
     });
   }
   return json({ history }, 200, corsHeaders);
+}
+
+// ================= DIAGNOSTIC: comenzi client (pentru mesajul automat de recenzie) =================
+// Doar citire. Verifică dacă comenzile clienților au telefon pe contraparte și ce statusuri există,
+// ca să știm dacă un mesaj WhatsApp după "Livrat" e fezabil cu datele actuale. Telefoanele ies mascate.
+function maskPhone(p) {
+  const digits = String(p || '').replace(/\D/g, '');
+  return digits ? '***' + digits.slice(-3) : '';
+}
+
+async function handleCustomerOrdersProbe(url, baseHeaders, corsHeaders) {
+  const stateFilter = (url.searchParams.get('state') || '').toLowerCase();
+  let metaRes, ordRes;
+  try {
+    [metaRes, ordRes] = await Promise.all([
+      msFetch(`${API}/entity/customerorder/metadata`, { headers: baseHeaders }),
+      msFetch(`${API}/entity/customerorder?limit=100&order=moment,desc&expand=agent,state`, { headers: baseHeaders }),
+    ]);
+  } catch (err) {
+    return json({ error: 'Eroare de conectare la MoySklad', detail: String(err) }, 502, corsHeaders);
+  }
+  if (!ordRes.ok) return json({ error: 'Eroare la citirea comenzilor client', status: ordRes.status, detail: (await ordRes.text()).slice(0, 300) }, 502, corsHeaders);
+  const meta = metaRes.ok ? await metaRes.json() : {};
+  const states = (meta.states || []).map(s => s.name);
+  const data = await ordRes.json();
+
+  const rows = (data.rows || []).map(o => ({
+    name: o.name,
+    moment: o.moment,
+    updated: o.updated,
+    state: o.state ? o.state.name : null,
+    agent: o.agent ? o.agent.name : null,
+    hasPhone: !!(o.agent && o.agent.phone),
+    phoneMasked: maskPhone(o.agent && o.agent.phone),
+    hasEmail: !!(o.agent && o.agent.email),
+  }));
+
+  const byState = {};
+  rows.forEach(r => { byState[r.state || '(fără status)'] = (byState[r.state || '(fără status)'] || 0) + 1; });
+  const withPhone = rows.filter(r => r.hasPhone).length;
+  const filtered = stateFilter ? rows.filter(r => (r.state || '').toLowerCase().indexOf(stateFilter) !== -1) : null;
+
+  return json({
+    states,
+    summary: {
+      totalChecked: rows.length,
+      withPhone,
+      byState,
+      filtered: filtered ? { state: stateFilter, total: filtered.length, withPhone: filtered.filter(r => r.hasPhone).length } : undefined,
+    },
+    sample: (filtered || rows).slice(0, 15),
+  }, 200, corsHeaders);
 }
 
 // ================= IMPORT COMANDĂ (Заказ поставщику, după număr) =================
