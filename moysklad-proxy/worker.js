@@ -428,7 +428,6 @@ async function handleCustomerOrdersProbe(url, baseHeaders, corsHeaders) {
     moment: o.moment,
     updated: o.updated,
     state: o.state ? o.state.name : null,
-    agent: o.agent ? o.agent.name : null,
     hasPhone: !!(o.agent && o.agent.phone),
     phoneMasked: maskPhone(o.agent && o.agent.phone),
     hasEmail: !!(o.agent && o.agent.email),
