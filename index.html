@@ -1602,22 +1602,33 @@
   // Tabelele foloseau o înălțime fixă (70vh) indiferent de cît spațiu era liber sub ele pe ecran —
   // dacă fereastra e mare sau bara de sus e scurtă, rămînea o zonă goală degeaba. În loc de asta,
   // calculăm exact cît spațiu mai e disponibil pînă la baza ferestrei și întindem tabelul pînă acolo.
+  // table-wrap-fixed (tabelul de prețuri din Comenzi) ceruse la un moment dat o excepție — înălțimea
+  // dinamică se calcula o SINGURĂ dată, la randare, din poziția de scroll a paginii din acel moment;
+  // dacă utilizatorul derula pagina după aceea, valoarea rămânea "înghețată" la poziția veche, deci
+  // "cînd prea mare, cînd prea mică". Cauza reală nu era calculul dinamic în sine, ci lipsa
+  // recalculării la scroll (mai jos aveam doar resize) — acum recalculăm la AMBELE, deci tabelul
+  // "crește" corect pe măsură ce pagina se derulează, nu doar la redimensionarea ferestrei. Clasa
+  // table-wrap-fixed nu se mai folosește nicăieri, dar las verificarea — inofensivă dacă apare.
   var tableWrapResizeBound = false;
   function fitTableWrapHeight(wrapEl){
-    // table-wrap-fixed (tabelul de prețuri din Comenzi) cere explicit o înălțime FIXĂ (70vh, setată
-    // direct în markup) — măsurarea dinamică de mai jos, în funcție de poziția de scroll a paginii
-    // în momentul randării, e exact ce făcea fereastra să pară "cînd prea mare, cînd prea mică".
     if(wrapEl.classList.contains('table-wrap-fixed')) return;
     var rect = wrapEl.getBoundingClientRect();
     var available = window.innerHeight - rect.top - 8;
     wrapEl.style.maxHeight = Math.max(240, available) + 'px';
   }
+  var tableWrapScrollTicking = false;
+  function refitAllTableWraps(){
+    Array.prototype.forEach.call(document.querySelectorAll('#pt-root .table-wrap'), fitTableWrapHeight);
+  }
   function ensureTableWrapResizeListener(){
     if(tableWrapResizeBound) return;
     tableWrapResizeBound = true;
-    window.addEventListener('resize', function(){
-      Array.prototype.forEach.call(document.querySelectorAll('#pt-root .table-wrap'), fitTableWrapHeight);
-    });
+    window.addEventListener('scroll', function(){
+      if(tableWrapScrollTicking) return;
+      tableWrapScrollTicking = true;
+      requestAnimationFrame(function(){ refitAllTableWraps(); tableWrapScrollTicking = false; });
+    }, { passive: true });
+    window.addEventListener('resize', refitAllTableWraps);
   }
   // position:sticky pe <th> are un bug de randare cunoscut in Chrome: textul antetului dispare
   // intermitent la scroll. Il evitam complet: antetul real ramine neschimbat (nesticky, dar tot
@@ -5134,7 +5145,7 @@
     if(keys.length === 0) return '<div class="panel empty">Niciun produs cunoscut din această comandă.</div>';
     return '<div id="pt-order-pricing-warn">' + orderCatalogStaleWarningHtml() + '</div>' +
       '<div id="pt-order-pricing-chips">' + orderPricingChipsHtml() + '</div>' +
-      '<div class="table-wrap table-wrap-fixed" style="overflow-y:auto;max-height:80vh">' + buildOrderPricingTableInnerHtml(o) + '</div>' +
+      '<div class="table-wrap" style="overflow-y:auto;max-height:80vh">' + buildOrderPricingTableInnerHtml(o) + '</div>' +
       '<div id="pt-order-pricing-footer">' + orderPricingFooterHtml(keys.length, o.id) + '</div>';
   }
   // Marchează UN CÎMP anume ca „trecut prin” (editat) în comanda curent deschisă — per cîmp, nu
