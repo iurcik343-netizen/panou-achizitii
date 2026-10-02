@@ -1609,12 +1609,22 @@
   // recalculării la scroll (mai jos aveam doar resize) — acum recalculăm la AMBELE, deci tabelul
   // "crește" corect pe măsură ce pagina se derulează, nu doar la redimensionarea ferestrei. Clasa
   // table-wrap-fixed nu se mai folosește nicăieri, dar las verificarea — inofensivă dacă apare.
+  // BUG reparat: recalcularea la fiecare cadru de scroll (mai jos) schimba style.maxHeight cu
+  // diferențe de 1-2px la fiecare tick — pentru tabelul din Comenzi, aflat mai jos pe pagină (deci
+  // cu rect.top variind mult la scroll, spre deosebire de Comparație produse, care stă aproape de
+  // vîrful paginii), asta declanșa un reflow la fiecare cadru, intrînd în conflict cu sincronizarea
+  // de poziție a antetului fix (mountStickyHeader, bazată pe scrollTop-ul PROPRIU al wrap-ului) —
+  // vizibil ca un salt puternic sus-jos și un rînd de produs care se vedea prin spatele antetului.
+  // Prag de 4px: ignorăm ajustările minuscule din timpul unui scroll lin, aplicăm doar schimbările
+  // reale (ex: cînd utilizatorul chiar s-a oprit sau a derulat o distanță semnificativă).
   var tableWrapResizeBound = false;
   function fitTableWrapHeight(wrapEl){
     if(wrapEl.classList.contains('table-wrap-fixed')) return;
     var rect = wrapEl.getBoundingClientRect();
-    var available = window.innerHeight - rect.top - 8;
-    wrapEl.style.maxHeight = Math.max(240, available) + 'px';
+    var available = Math.max(240, window.innerHeight - rect.top - 8);
+    var current = parseFloat(wrapEl.style.maxHeight);
+    if(!isNaN(current) && Math.abs(current - available) < 4) return;
+    wrapEl.style.maxHeight = available + 'px';
   }
   var tableWrapScrollTicking = false;
   function refitAllTableWraps(){
