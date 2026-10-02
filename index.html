@@ -56,6 +56,13 @@
   #pt-root .card :is(button, input, select, a.btn-primary, a.btn-outline, a.btn-quiet):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   * { box-sizing: border-box; }
   #pt-root { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; padding: 28px 20px 60px; }
+  /* BUG reparat: expandarea unui rând de produs (sau orice altă acțiune care rescrie tabelul) sărea
+     uneori înapoi sus, deși aplicația deja reține poziția de scroll și o restaurează explicit după
+     randare (prevPageScroll/window.scrollTo în renderCompare). Cauza: "scroll anchoring" din Chrome —
+     un comportament automat al browserului care încearcă SINGUR să ajusteze scroll-ul cînd conținutul
+     de deasupra se schimbă, intrînd în conflict exact cu restaurarea manuală de mai sus. Îl dezactivăm
+     explicit — aplicația își gestionează deja singură poziția, nu mai are nevoie de "ajutorul" automat. */
+  #pt-root { overflow-anchor: none; }
   /* Mărit de la 1600px — pe monitoare late, tabelul de prețuri din Comenzi (des 50-100+ produse)
      rămânea înghesuit pe centru, cu scroll orizontal permanent. Primul truc încercat (width:100vw
      cu margini negative, doar pe cardul comenzii deschise) a creat un artefact vizual lângă antetul
