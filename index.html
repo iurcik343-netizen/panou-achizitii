@@ -4569,7 +4569,7 @@
           (state.settings.moyskladProxyUrl ? (
             '<button class="btn-outline" id="pt-ms-import-btn" onclick="ptImportPricesFromMoySklad(\'' + o.id + '\')" title="Aduce prețurile deja setate pe produs în MoySklad, ca punct de plecare">📥 Importă prețuri din MoySklad</button>' +
             '<button class="btn-primary" id="pt-ms-push-btn" onclick="ptPushPricesToMoySklad(\'' + o.id + '\')" title="Trimite prețurile de mai jos în cîmpurile personalizate ale produsului din MoySklad">📤 Trimite prețurile în MoySklad</button>' +
-            (o.reviewedFields && Object.keys(o.reviewedFields).length ? '<button class="btn-outline" onclick="ptResetReviewedFields(\'' + o.id + '\')" title="Cîmpurile editate manual (marginea verde) nu se mai actualizează din MoySklad — folosește asta ca să le deblochezi din nou pe toate, dacă vrei un import curat">🔓 Deblochează câmpurile verificate manual</button>' : '')
+            (o.reviewedFields && Object.keys(o.reviewedFields).length ? '<button class="btn-outline" onclick="ptResetReviewedFields(\'' + o.id + '\')" title="Scoate marcajele verzi ale cîmpurilor editate manual — prețurile nu se schimbă. Nu e nevoie de asta ca să trimiți prețurile în MoySklad.">🔓 Deblochează câmpurile verificate manual</button>' : '')
           ) : '') +
           '<div style="flex:1"></div>' +
           '<button class="btn-quiet" onclick="ptToggleRealFreight(\'' + o.id + '\')">⚙ Cost transport real…</button>' +
@@ -5111,7 +5111,7 @@
     var html = '<div style="display:flex;align-items:center;gap:14px;padding:10px 2px 0">' +
       '<span style="font-size:12px;color:var(--text-soft)">' + count + ' produs' + (count===1?'':'e') + '</span>' +
       '<div style="flex:1"></div>' +
-      '<span style="font-size:11.5px;color:var(--text-dim);display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;border:1px solid var(--rank1);display:inline-block"></span>câmp corectat manual — nu se mai suprascrie la import</span>' +
+      '<span style="font-size:11.5px;color:var(--text-dim);display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:3px;border:1px solid var(--rank1);display:inline-block"></span>câmp editat manual de tine în această comandă</span>' +
       '</div>';
     // Lista pe nume a produselor cu probleme la ultima sincronizare MoySklad (import sau trimitere)
     // — rămâne vizibilă cît timp comanda stă deschisă, nu doar cît ține toast-ul de rezumat, ca să
@@ -5196,23 +5196,28 @@
       p.pachet1Price = clearIfUnreviewedZero(p.pachet1Price, 'pachet1');
       p.pachet2Price = clearIfUnreviewedZero(p.pachet2Price, 'pachet2');
       p.pachet3Price = clearIfUnreviewedZero(p.pachet3Price, 'pachet3');
-      // Preț de vânzare / secundar / Pachet 1-2-3: la fel ca sinecostul, urmăresc LIVE valoarea din
-      // MoySklad (dacă produsul e legat și cîmpul respectiv are ceva acolo) — dar NUMAI cît timp
-      // cîmpul n-a fost atins manual în ACEASTĂ comandă (marginea verde/reviewedFields). O dată ce
-      // editezi un cîmp, MoySklad nu-l mai suprascrie — altfel orice re-randare (frecventă: la
-      // fiecare editare, la fiecare poză încărcată) ți-ar șterge din greșeală ce tocmai ai tastat.
+      // msLive citește instantaneul per-sesiune din msAttrsCache — NU o valoare proaspătă. Singura lui
+      // folosință rămasă aici: să COMPLETEZE un Preț de vânzare lipsit (vezi mai jos); nicio valoare
+      // existentă nu mai e suprascrisă din el (nici Prețul de vânzare, nici Secundar/Pachetele).
       function msLive(attrId){
         if(!msProd) return null;
         ensureMsAttrsLoaded(msProd.id);
         var cached = msAttrsCache[msProd.id];
         return (cached && cached.attrs && cached.attrs[attrId] != null) ? cached.attrs[attrId] : null;
       }
-      // Un 0 din MoySklad înseamnă "tipul de preț ăsta nu e completat acolo", nu "chiar 0" — la fel
-      // ca peste tot mai sus. Fără asta, un 0 real din MoySklad suprascria imediat, pe randarea
-      // următoare, o valoare tocmai calculată corect de cascada de la editarea Prețului de vânzare
-      // (care nu marca Pachet 2/3 ca "verificate" — de-aia păreau că "nu se schimbă niciodată",
-      // deși de fapt SE schimbau, doar ca să fie suprascrise la fracțiune de secundă).
-      if(!isFieldReviewed(o, k, 'sell')){
+      // Un 0 din MoySklad înseamnă "tipul de preț ăsta nu e completat acolo", nu "chiar 0" — de-aia
+      // `if(msSell)` de mai jos ignoră și 0, nu doar lipsa.
+      // BUG GRAV reparat: aici Prețul de vânzare era SUPRASCRIS la fiecare randare cu valoarea "live" din
+      // msAttrsCache — care nu e live, ci un instantaneu luat o singură dată per produs per sesiune
+      // (vezi ensureMsAttrsLoaded) — oricînd cîmpul nu era marcat "verificat manual". Cît timp
+      // cîmpul rămînea marcat (marginea verde) nu se vedea nimic; dar "Deblochează cîmpurile" scotea
+      // toate marcajele, iar la randarea următoare TOATE prețurile de vînzare reveneau la valoarea
+      // veche din instantaneu (ex: ai trimis 520 în MoySklad, deblochezi, revine local 495 — iar o
+      // trimitere următoare ar fi scris 495 peste prețul corect). Același defect fusese deja
+      // reparat la Secundar/Pachet 2/3 (vezi mai jos). Acum MoySklad poate doar COMPLETA un preț lipsă,
+      // niciodată suprascrie unul existent; ca să aduci valorile curente din MoySklad există
+      // butonul explicit "Importă prețuri din MoySklad".
+      if(p.sellPrice == null && !isFieldReviewed(o, k, 'sell')){
         var msSell = msLive(MS_PRICE_ATTRS.sellPrice);
         if(msSell) p.sellPrice = Math.round(msSell);
       }
@@ -5334,12 +5339,12 @@
   window.ptResetReviewedFields = function(orderId){
     var o = state.orders.find(function(x){ return x.id === orderId; });
     if(!o) return;
-    if(!confirm('Sigur deblochezi toate cîmpurile marcate ca „verificate manual" (marginea verde) pentru această comandă? Data viitoare cînd imporți/sincronizezi din MoySklad, TOATE prețurile — inclusiv cele corectate manual pînă acum — vor fi suprascrise cu valorile din MoySklad.')) return;
+    if(!confirm('Deblochezi toate cîmpurile marcate „verificate manual" (marginea verde) din această comandă?\n\nPrețurile NU se schimbă prin asta — dispar doar marcajele verzi, iar Secundarul și Pachetele încep să urmărească din nou Prețul de vînzare (Pachet 1 e oricum mereu 70% din el).\n\nNu e nevoie să deblochezi ca să trimiți prețurile în MoySklad. Atenție: „Importă prețuri din MoySklad" înlocuiește prețurile de aici cu cele din MoySklad, deblocate sau nu.')) return;
     o.reviewedFields = {};
     touchOrder(orderId);
     save();
     renderOrderDetailTable();
-    ptToast('Cîmpurile au fost deblocate — poți importa din nou din MoySklad.', true);
+    ptToast('Cîmpurile au fost deblocate — prețurile au rămas neschimbate.', true);
   };
   window.ptSetBuyPriceOverride = function(key, val){
     var p = state.products[key];
