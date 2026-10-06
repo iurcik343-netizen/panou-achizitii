@@ -1521,12 +1521,58 @@
 
   // ================= MOYSKLAD PARTAJAT (folosit de Comparație produse și Produse MoySklad) =================
   var moyskladByBarcode = {};
+  // Toate produsele MoySklad pentru fiecare barcode (nu doar ultimul) — moyskladByBarcode ține un
+  // singur produs per barcode (ultimul întîlnit), deci cînd același barcode există la 2 produse
+  // (duplicat în MoySklad) aplicația alegea tăcut unul dintre ele, iar prețurile trimise/importate
+  // puteau ajunge la produsul greșit fără niciun semnal. Cu lista completă putem detecta și
+  // raporta cazul, în loc să ghicim.
+  var moyskladAllByBarcode = {};
+  var catalogDuplicateGroups = [];
   var expandedHistoryFull = {};
   function rebuildMoyskladIndex(){
     moyskladByBarcode = {};
+    moyskladAllByBarcode = {};
     catalogProducts.forEach(function(mp){
-      (mp.barcodes||[]).forEach(function(bc){ moyskladByBarcode[bc] = mp; });
+      (mp.barcodes||[]).forEach(function(bc){
+        moyskladByBarcode[bc] = mp;
+        var list = moyskladAllByBarcode[bc] || (moyskladAllByBarcode[bc] = []);
+        if(list.indexOf(mp) === -1) list.push(mp);
+      });
     });
+    catalogDuplicateGroups = findCatalogDuplicates();
+  }
+  // Grupuri de produse MoySklad care par să fie același produs dublat: același barcode SAU același
+  // cod. Un grup care se potrivește pe ambele (cazul tipic al unui duplicat real) apare o singură
+  // dată, cu ambele motive, nu de două ori.
+  function findCatalogDuplicates(){
+    var byBarcode = {}, byCode = {};
+    catalogProducts.forEach(function(mp){
+      (mp.barcodes||[]).forEach(function(bc){ var l = byBarcode[bc] || (byBarcode[bc] = []); if(l.indexOf(mp) === -1) l.push(mp); });
+      var code = String(mp.code || '').trim();
+      if(code){ var lc = byCode[code] || (byCode[code] = []); if(lc.indexOf(mp) === -1) lc.push(mp); }
+    });
+    var merged = {};
+    function addGroup(reason, list){
+      if(list.length < 2) return;
+      var sig = list.map(function(mp){ return mp.id; }).sort().join('|');
+      if(!merged[sig]) merged[sig] = { products: list, reasons: [] };
+      merged[sig].reasons.push(reason);
+    }
+    Object.keys(byBarcode).forEach(function(bc){ addGroup('barcode ' + bc, byBarcode[bc]); });
+    Object.keys(byCode).forEach(function(c){ addGroup('cod ' + c, byCode[c]); });
+    return Object.keys(merged).map(function(sig){ return merged[sig]; }).sort(function(a,b){
+      return String(a.products[0].name||'').localeCompare(String(b.products[0].name||''), undefined, {sensitivity:'base'});
+    });
+  }
+  // Toate produsele MoySklad cu barcode-ul pe care îl folosește moyskladLookup pentru produsul
+  // local (barcode-ul principal, apoi cele alternative) — mai mult de unul = potrivire ambiguă.
+  function moyskladMatches(p){
+    var codes = [p.barcode].concat(p.altBarcodes || []);
+    for(var i=0;i<codes.length;i++){
+      var list = codes[i] ? moyskladAllByBarcode[codes[i]] : null;
+      if(list && list.length) return list;
+    }
+    return [];
   }
   function moyskladLookup(p){
     if(moyskladByBarcode[p.barcode]) return moyskladByBarcode[p.barcode];
@@ -1930,6 +1976,7 @@
   var bulkBusy = false;
   var NO_BRAND = '__no_brand__';
   var catalogShowHiddenBrands = false;
+  var catalogShowDuplicates = false;
   var catalogShowHiddenProducts = false;
   function hiddenBrandIds(){ return state.settings.hiddenMoyskladBrandIds || (state.settings.hiddenMoyskladBrandIds = []); }
   function hiddenProductIds(){ return state.settings.hiddenMoyskladProductIds || (state.settings.hiddenMoyskladProductIds = []); }
@@ -1960,31 +2007,41 @@
     var data = await res.json().catch(function(){ return {}; });
     return { ok: res.ok && !data.error, data: data };
   }
-  window.ptSyncCatalog = async function(){
+  // Întoarce o promisiune cu true/false (reușit sau nu) și, dacă o sincronizare e deja în curs
+  // (ex: cea automată de la pornire), întoarce ACEEAȘI promisiune — cine o cheamă o poate aștepta
+  // (import/trimitere prețuri pornesc o sincronizare automată înainte), fără să lanseze o a doua.
+  var catalogSyncPromise = null;
+  window.ptSyncCatalog = function(){
     var base = state.settings.moyskladProxyUrl;
-    if(!base){ ptToast('Configurează întâi URL-ul serverului MoySklad, în tab-ul Setări.', false); return; }
-    if(catalogSyncing) return;
-    catalogSyncing = true;
-    rerenderVisibleTabs();
-    try {
-      var res = await fetch(catalogProxyUrl('catalog=1'));
-      var data = await res.json();
-      if(!res.ok || data.error){
-        ptToast('Nu am putut sincroniza catalogul MoySklad: ' + (data.detail || data.error || res.status), false);
-      } else {
-        catalogProducts = data.products || [];
-        catalogFolders = data.folders || [];
-        catalogUpdatedAt = data.updatedAt || new Date().toISOString();
-        selectedProductIds = {};
-        rebuildMoyskladIndex();
-        saveCatalogCache();
-        ptToast('Catalog sincronizat: ' + catalogProducts.length + ' produse, ' + catalogFolders.length + ' branduri.', true);
+    if(!base){ ptToast('Configurează întâi URL-ul serverului MoySklad, în tab-ul Setări.', false); return Promise.resolve(false); }
+    if(catalogSyncPromise) return catalogSyncPromise;
+    catalogSyncPromise = (async function(){
+      var ok = false;
+      catalogSyncing = true;
+      rerenderVisibleTabs();
+      try {
+        var res = await fetch(catalogProxyUrl('catalog=1'));
+        var data = await res.json();
+        if(!res.ok || data.error){
+          ptToast('Nu am putut sincroniza catalogul MoySklad: ' + (data.detail || data.error || res.status), false);
+        } else {
+          catalogProducts = data.products || [];
+          catalogFolders = data.folders || [];
+          catalogUpdatedAt = data.updatedAt || new Date().toISOString();
+          selectedProductIds = {};
+          rebuildMoyskladIndex();
+          saveCatalogCache();
+          ok = true;
+          ptToast('Catalog sincronizat: ' + catalogProducts.length + ' produse, ' + catalogFolders.length + ' branduri.' + (catalogDuplicateGroups.length ? (' ⚠ ' + catalogDuplicateGroups.length + ' grupuri de produse duplicate în MoySklad (vezi tab-ul Produse MoySklad → Verifică duplicate).') : ''), !catalogDuplicateGroups.length);
+        }
+      } catch(err){
+        ptToast('Eroare la conectarea cu serverul MoySklad: ' + (err && err.message ? err.message : err), false);
       }
-    } catch(err){
-      ptToast('Eroare la conectarea cu serverul MoySklad: ' + (err && err.message ? err.message : err), false);
-    }
-    catalogSyncing = false;
-    rerenderVisibleTabs();
+      catalogSyncing = false;
+      rerenderVisibleTabs();
+      return ok;
+    })().then(function(ok){ catalogSyncPromise = null; return ok; }, function(){ catalogSyncPromise = null; return false; });
+    return catalogSyncPromise;
   };
   window.ptToggleCatalogExpand = function(id){
     expandedCatalogId = (expandedCatalogId === id) ? null : id;
@@ -1998,10 +2055,21 @@
     catalogShowHiddenProducts = false;
     renderCatalog();
   };
+  // Vizualizările secundare din tab-ul Produse MoySklad (arhivate, duplicate). Înainte erau
+  // comutate cu onclick="catalogShowHiddenBrands=true;renderCatalog()" direct în HTML — dar acele
+  // variabile/funcții sînt în interiorul închiderii aplicației, nu globale, deci click-ul dădea
+  // ReferenceError tăcut și butoanele nu făceau nimic. Funcția asta e expusă pe window, ca restul.
+  window.ptSetCatalogView = function(view){
+    catalogShowHiddenBrands = (view === 'hidden');
+    catalogShowDuplicates = (view === 'duplicates');
+    if(view){ selectedBrandId = null; selectedProductIds = {}; }
+    renderCatalog();
+  };
   window.ptBackToBrands = function(){
     selectedBrandId = null;
     selectedProductIds = {};
     catalogShowHiddenBrands = false;
+    catalogShowDuplicates = false;
     renderCatalog();
   };
   window.ptAddBrand = async function(){
@@ -2083,12 +2151,42 @@
       el.innerHTML = '<div class="panel empty">Configurează întâi URL-ul serverului MoySklad, în tab-ul Setări.</div>';
       return;
     }
+    var dupCount = catalogDuplicateGroups.length;
     var html = '<div class="panel" style="padding:10px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">' +
       '<button class="btn-outline" onclick="ptSyncCatalog()" ' + (catalogSyncing ? 'disabled' : '') + '>' + (catalogSyncing ? 'Se sincronizează…' : (ICON_SYNC + ' Sincronizează catalogul MoySklad')) + '</button>' +
       '<span style="font-size:11.5px;color:var(--text-soft)">' + (catalogUpdatedAt ? ('Ultima sincronizare: ' + new Date(catalogUpdatedAt).toLocaleString('ro-RO') + ' · ' + catalogProducts.length + ' produse') : 'Nesincronizat încă') + '</span>' +
+      (catalogProducts.length ? ('<span style="flex:1"></span><button class="btn-outline" onclick="ptSetCatalogView(\'duplicates\')" title="Caută produse MoySklad cu același barcode sau același cod — duplicatele fac ca prețurile să ajungă la produsul greșit">' + (dupCount ? ('<span style="color:var(--bad)">⚠ ' + dupCount + ' grupuri duplicate</span>') : '✓ Fără duplicate') + ' · Verifică duplicate</button>') : '') +
       '</div>';
     if(!catalogProducts.length){
       html += '<div class="panel empty">Niciun produs sincronizat încă. Apasă butonul de mai sus.</div>';
+      el.innerHTML = html;
+      return;
+    }
+
+    if(catalogShowDuplicates){
+      // ---- RAPORT DUPLICATE (același barcode sau același cod la 2+ produse din MoySklad) ----
+      html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
+        '<h2 style="margin:0">Produse duplicate în MoySklad (' + dupCount + ' ' + (dupCount === 1 ? 'grup' : 'grupuri') + ')</h2>' +
+        '<button class="btn-outline" onclick="ptBackToBrands()">◀ Înapoi la branduri</button></div>';
+      html += '<div class="hint" style="margin-bottom:12px">Fiecare grup de mai jos conține produse din MoySklad care au <b>același barcode sau același cod</b> — de obicei același produs introdus de două ori. Aplicația leagă un produs local de unul singur dintre ele (cel marcat „ales acum"), deci prețurile pot ajunge la cel greșit. Importul și trimiterea de prețuri sar peste produsele cu potrivire ambiguă, ca să nu scrie pe ghicite. <b>Soluție:</b> în MoySklad, șterge sau arhivează duplicatul în plus, apoi sincronizează catalogul din nou.</div>';
+      if(!dupCount){
+        html += '<div class="panel empty">✓ Nu am găsit niciun produs cu barcode sau cod duplicat în catalogul sincronizat.</div>';
+      } else {
+        catalogDuplicateGroups.forEach(function(g){
+          html += '<div class="panel" style="padding:0;margin-bottom:12px;overflow:hidden">' +
+            '<div style="padding:8px 14px;background:var(--bad-bg);color:var(--bad);font-size:12px;font-weight:600;border-bottom:1px solid var(--border)">⚠ ' + g.products.length + ' produse cu același ' + g.reasons.map(escAttr).join(' și același ') + '</div>';
+          g.products.forEach(function(mp){
+            var chosen = (mp.barcodes||[]).some(function(bc){ return moyskladByBarcode[bc] === mp; });
+            html += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-soft);display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">' +
+              '<div style="flex:1;min-width:260px"><div style="font-weight:700">' + escAttr(mp.name) + (chosen ? ' <span class="pt-badge-neutral" title="Produsul MoySklad la care aplicația trimite/importă acum prețuri pentru acest barcode">ales acum</span>' : '') + '</div>' +
+              '<div style="font-size:11.5px;color:var(--text-soft);margin-top:2px">Brand: ' + escAttr(mp.brand || '—') + ' · Cod: <span class="num">' + escAttr(mp.code || '—') + '</span>' + (mp.article ? (' · Articol: <span class="num">' + escAttr(mp.article) + '</span>') : '') + '</div>' +
+              '<div style="font-size:11.5px;color:var(--text-soft);margin-top:2px">Barcode: <span class="num">' + escAttr((mp.barcodes||[]).join(', ') || '—') + '</span></div></div>' +
+              '<div style="font-size:12px;text-align:right;white-space:nowrap">Stoc: <b class="num">' + (mp.stock != null ? mp.stock : 0) + '</b> buc' + (mp.buyPrice != null ? ('<br>Achiziție: <span class="num">' + fmt(mp.buyPrice) + ' ' + escAttr(mp.buyPriceCurrency || '') + '</span>') : '') + '</div>' +
+              '</div>';
+          });
+          html += '</div>';
+        });
+      }
       el.innerHTML = html;
       return;
     }
@@ -2105,7 +2203,7 @@
       if(catalogShowHiddenBrands){
         html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
           '<h2 style="margin:0">Branduri arhivate (' + hBrands.length + ')</h2>' +
-          '<button class="btn-outline" onclick="catalogShowHiddenBrands=false;renderCatalog()">◀ Înapoi la branduri</button></div>';
+          '<button class="btn-outline" onclick="ptBackToBrands()">◀ Înapoi la branduri</button></div>';
         html += '<div class="panel" style="padding:0">';
         hBrands.forEach(function(bid){
           var fo = catalogFolders.find(function(f){ return f.id === bid; });
@@ -2124,7 +2222,7 @@
       html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
         '<h2 style="margin:0">Branduri (' + (catalogFolders.length - hBrands.length) + ')</h2>' +
         '<span><button class="btn-primary" onclick="ptAddBrand()">+ Adaugă brand</button> ' +
-        (hBrands.length ? '<button class="btn-outline" onclick="catalogShowHiddenBrands=true;renderCatalog()">🗄 Arhivate (' + hBrands.length + ')</button>' : '') + '</span></div>';
+        (hBrands.length ? '<button class="btn-outline" onclick="ptSetCatalogView(\'hidden\')">🗄 Arhivate (' + hBrands.length + ')</button>' : '') + '</span></div>';
       html += '<div class="panel" style="padding:0">';
       var sortedFolders = catalogFolders.filter(function(f){ return hBrands.indexOf(f.id) === -1; }).sort(function(a,b){ return a.name.localeCompare(b.name, undefined, {sensitivity:'base'}); });
       sortedFolders.forEach(function(f){
@@ -4676,23 +4774,63 @@
     b.disabled = busy;
     b.textContent = busy ? busyLabel : idleLabel;
   }
+  // Ținut separat de msPriceSyncBusy: acoperă faza de PREGĂTIRE (sincronizarea automată a catalogului,
+  // care poate dura cîteva secunde), ca un al doilea clic în acest interval să nu pornească un al doilea
+  // ciclu — msPriceSyncBusy se setează abia după confirmare, cînd începe efectiv scrierea/citirea.
+  var msPrepareBusy = false;
+  var MS_PREP_MAX_CATALOG_AGE_MS = 60 * 60 * 1000;   // catalog mai vechi de 1h → resincronizăm înainte
+  var MS_PREP_RECHECK_UNLINKED_MS = 2 * 60 * 1000;   // produse nelegate: re-verificăm doar dacă ultima sincronizare e mai veche de 2 min
+  // Pregătește o comandă pentru import/trimitere de prețuri în MoySklad: (1) sincronizează catalogul
+  // AUTOMAT dacă lipsește, e vechi sau unele produse din comandă nu sînt încă legate (înainte,
+  // utilizatorul primea doar "sincronizează catalogul și încearcă din nou" și trebuia s-o facă manual);
+  // (2) împarte produsele în legate clar / nelegate / ambigue (același barcode la 2+ produse din
+  // MoySklad — un duplicat; scriem NUMAI la cele fără ambiguitate, nu ghicim care din ele e cel corect).
+  // Întoarce null dacă operația trebuie oprită (eroare deja afișată / refuzul utilizatorului).
+  async function prepareOrderForMoySklad(o){
+    var staleMs = catalogUpdatedAt ? (Date.now() - new Date(catalogUpdatedAt).getTime()) : Infinity;
+    var hasUnlinked = orderProductKeys(o).some(function(k){ var p = state.products[k]; return p && !moyskladLookup(p); });
+    var needSync = !catalogProducts.length || staleMs > MS_PREP_MAX_CATALOG_AGE_MS || (hasUnlinked && staleMs > MS_PREP_RECHECK_UNLINKED_MS);
+    if(needSync){
+      ptToast('Sincronizez catalogul MoySklad înainte de a continua…', true);
+      var synced = await window.ptSyncCatalog();
+      if(!synced){
+        // ptSyncCatalog a afișat deja motivul. Fără niciun catalog local nu avem cu ce lucra; cu unul
+        // vechi, lăsăm utilizatorul să decidă (poate e doar o cădere scurtă de conexiune).
+        if(!catalogProducts.length) return null;
+        if(!confirm('Nu am putut sincroniza catalogul MoySklad acum. Continui cu cel salvat anterior (' + fmtDateDMY(catalogUpdatedAt) + ')? Produsele create sau schimbate în MoySklad de atunci ar putea să nu fie recunoscute corect.')) return null;
+      }
+    }
+    var prep = { keys: [], skippedNames: [], ambiguousNames: [] };
+    orderProductKeys(o).forEach(function(k){
+      var p = state.products[k];
+      var name = (p && p.displayName) || k;
+      var matches = p ? moyskladMatches(p) : [];
+      if(!matches.length) prep.skippedNames.push(name);
+      else if(matches.length > 1) prep.ambiguousNames.push(name + ' (' + matches.length + ' în MoySklad, cod: ' + matches.map(function(mp){ return mp.code || '—'; }).join(' / ') + ')');
+      else prep.keys.push(k);
+    });
+    return prep;
+  }
   window.ptImportPricesFromMoySklad = async function(orderId){
-    if(msPriceSyncBusy) return;
+    if(msPriceSyncBusy || msPrepareBusy) return;
     var o = state.orders.find(function(x){ return x.id === orderId; });
     if(!o) return;
     var base = state.settings.moyskladProxyUrl;
     if(!base){ ptToast('MoySklad nu e configurat în Setări.', false); return; }
-    var allProductKeys = orderProductKeys(o);
-    var keys = allProductKeys.filter(function(k){ return moyskladLookup(state.products[k]); });
+    msPrepareBusy = true;
+    var prep;
+    try { prep = await prepareOrderForMoySklad(o); } finally { msPrepareBusy = false; }
+    if(!prep) return;
+    var keys = prep.keys;
     // Produsele nelegate erau sărite silențios — utilizatorul vedea doar "N importate" și presupunea
     // greșit că restul chiar AU fost aduse din MoySklad, cînd de fapt rămăseseră cu formula generică
-    // (adaos implicit), niciodată atinse. De obicei cauza e un catalog MoySklad local învechit —
-    // spunem clar cîte au fost sărite, ca să știe să sincronizeze catalogul din nou — ȘI le arătăm
-    // pe nume în footer-ul tabelului (lastMsSyncFailed), nu doar ca un număr ușor de trecut cu vederea.
-    var skippedKeys = allProductKeys.filter(function(k){ return !moyskladLookup(state.products[k]); });
-    var skipped = skippedKeys.length;
-    var skippedNames = skippedKeys.map(function(k){ return (state.products[k] && state.products[k].displayName) || k; });
-    if(!keys.length){ ptToast('Niciun produs din comandă nu e legat de MoySklad — sincronizează catalogul MoySklad (tab Comparație produse) și încearcă din nou.', false); return; }
+    // (adaos implicit), niciodată atinse. Acum catalogul se resincronizează automat înainte (vezi
+    // prepareOrderForMoySklad), deci ce rămîne nelegat chiar nu există în MoySklad — spunem clar cîte
+    // au fost sărite ȘI le arătăm pe nume în footer-ul tabelului (lastMsSyncFailed).
+    var skipped = prep.skippedNames.length;
+    var skippedNames = prep.skippedNames;
+    var ambiguousNames = prep.ambiguousNames;
+    if(!keys.length){ ptToast(ambiguousNames.length ? ('Niciun produs din comandă nu poate fi importat: ' + ambiguousNames.length + ' au barcode duplicat în MoySklad, restul nu sînt legate de MoySklad (vezi lista de sub tabel).') : 'Niciun produs din comandă nu e legat de MoySklad — verifică barcode-urile produselor.', false); lastMsSyncFailed = (skippedNames.length || ambiguousNames.length) ? { orderId: orderId, type: 'import', failedNames: [], skippedNames: skippedNames, ambiguousNames: ambiguousNames } : null; renderOrderDetailTable(); return; }
     msPriceSyncBusy = true;
     setMsSyncBtn('pt-ms-import-btn', true, '⏳ Se importă…', '📥 Importă prețuri din MoySklad');
     setMsSyncBtn('pt-ms-push-btn', true, '', '📤 Trimite prețurile în MoySklad');
@@ -4753,7 +4891,7 @@
           imported++;
         } catch(e){ failed++; failedNames.push(p.displayName || k); }
       });
-      lastMsSyncFailed = (failedNames.length || skippedNames.length) ? { orderId: orderId, type: 'import', failedNames: failedNames, skippedNames: skippedNames } : null;
+      lastMsSyncFailed = (failedNames.length || skippedNames.length || ambiguousNames.length) ? { orderId: orderId, type: 'import', failedNames: failedNames, skippedNames: skippedNames, ambiguousNames: ambiguousNames } : null;
       save(); renderOrderDetailTable();
       // O actualizare masivă (zeci de produse deodată) poate lăsa fitTableWrapHeight să măsoare
       // înălțimea disponibilă într-un moment nepotrivit — la fel ca la prima deschidere a unei
@@ -4765,7 +4903,7 @@
           if(wrap) fitTableWrapHeight(wrap);
         });
       });
-      ptToast('Prețuri importate din MoySklad: ' + imported + ' produse' + (failed?(', ' + failed + ' eșuate'):'') + (skipped?(', ' + skipped + ' nelegate de MoySklad (sincronizează catalogul)'):'') + '. Verifică și corectează mai jos.', true);
+      ptToast('Prețuri importate din MoySklad: ' + imported + ' produse' + (failed?(', ' + failed + ' eșuate'):'') + (skipped?(', ' + skipped + ' nelegate de MoySklad'):'') + (ambiguousNames.length?(', ' + ambiguousNames.length + ' sărite — barcode duplicat în MoySklad'):'') + '. Verifică și corectează mai jos.', true);
     } finally {
       msPriceSyncBusy = false;
       setMsSyncBtn('pt-ms-import-btn', false, '', '📥 Importă prețuri din MoySklad');
@@ -4773,19 +4911,23 @@
     }
   };
   window.ptPushPricesToMoySklad = async function(orderId){
-    if(msPriceSyncBusy) return;
+    if(msPriceSyncBusy || msPrepareBusy) return;
     var o = state.orders.find(function(x){ return x.id === orderId; });
     if(!o) return;
     var base = state.settings.moyskladProxyUrl;
     if(!base){ ptToast('MoySklad nu e configurat în Setări.', false); return; }
-    var allProductKeys2 = orderProductKeys(o);
-    var keys = allProductKeys2.filter(function(k){ return moyskladLookup(state.products[k]); });
-    var skippedKeysPush = allProductKeys2.filter(function(k){ return !moyskladLookup(state.products[k]); });
-    var skippedPush = skippedKeysPush.length;
-    var skippedNamesPush = skippedKeysPush.map(function(k){ return (state.products[k] && state.products[k].displayName) || k; });
-    if(!keys.length){ ptToast('Niciun produs din comandă nu e legat de MoySklad — sincronizează catalogul MoySklad (tab Comparație produse) și încearcă din nou.', false); return; }
+    msPrepareBusy = true;
+    var prep;
+    try { prep = await prepareOrderForMoySklad(o); } finally { msPrepareBusy = false; }
+    if(!prep) return;
+    var keys = prep.keys;
+    var skippedPush = prep.skippedNames.length;
+    var skippedNamesPush = prep.skippedNames;
+    var ambiguousNamesPush = prep.ambiguousNames;
+    if(!keys.length){ ptToast(ambiguousNamesPush.length ? ('Niciun produs din comandă nu poate fi trimis: ' + ambiguousNamesPush.length + ' au barcode duplicat în MoySklad, restul nu sînt legate de MoySklad (vezi lista de sub tabel).') : 'Niciun produs din comandă nu e legat de MoySklad — verifică barcode-urile produselor.', false); lastMsSyncFailed = (skippedNamesPush.length || ambiguousNamesPush.length) ? { orderId: orderId, type: 'push', failedNames: [], skippedNames: skippedNamesPush, ambiguousNames: ambiguousNamesPush } : null; renderOrderDetailTable(); return; }
     var testNote = PUSH_ONLY_PACHET3_TEST ? ' TEST DE SIGURANȚĂ: se trimite doar cîmpul Pachet 3, restul rămîn neatinse.' : '';
-    if(!confirm('Trimiți prețurile curente pentru ' + keys.length + ' produse direct în MoySklad?' + testNote + ' Suprascrie cîmpurile de preț existente acolo pentru aceste produse.')) return;
+    var ambiguousNote = ambiguousNamesPush.length ? ('\n\n⚠ ' + ambiguousNamesPush.length + ' produse NU se trimit — au barcode duplicat în MoySklad (nu se știe la care din ele să scrie): ' + ambiguousNamesPush.slice(0, 5).join('; ') + (ambiguousNamesPush.length > 5 ? '…' : '') + '\nCorectează duplicatul în MoySklad (tab Produse MoySklad → Verifică duplicate).') : '';
+    if(!confirm('Trimiți prețurile curente pentru ' + keys.length + ' produse direct în MoySklad?' + testNote + ' Suprascrie cîmpurile de preț existente acolo pentru aceste produse.' + ambiguousNote)) return;
     msPriceSyncBusy = true;
     setMsSyncBtn('pt-ms-push-btn', true, '⏳ Se trimit…', '📤 Trimite prețurile în MoySklad');
     setMsSyncBtn('pt-ms-import-btn', true, '', '📥 Importă prețuri din MoySklad');
@@ -4845,9 +4987,9 @@
           sent++;
         } catch(e){ failed++; failedNamesPush.push(p.displayName || k); if(!firstErr) firstErr = String(e); }
       });
-      lastMsSyncFailed = (failedNamesPush.length || skippedNamesPush.length) ? { orderId: orderId, type: 'push', failedNames: failedNamesPush, skippedNames: skippedNamesPush } : null;
+      lastMsSyncFailed = (failedNamesPush.length || skippedNamesPush.length || ambiguousNamesPush.length) ? { orderId: orderId, type: 'push', failedNames: failedNamesPush, skippedNames: skippedNamesPush, ambiguousNames: ambiguousNamesPush } : null;
       renderOrderDetailTable();
-      ptToast('Prețuri trimise în MoySklad: ' + sent + ' produse' + (failed?(', ' + failed + ' eșuate — ' + firstErr):'') + (skippedPush?(', ' + skippedPush + ' nelegate de MoySklad (sincronizează catalogul)'):'') + '.', true);
+      ptToast('Prețuri trimise în MoySklad: ' + sent + ' produse' + (failed?(', ' + failed + ' eșuate — ' + firstErr):'') + (skippedPush?(', ' + skippedPush + ' nelegate de MoySklad'):'') + (ambiguousNamesPush.length?(', ' + ambiguousNamesPush.length + ' sărite — barcode duplicat în MoySklad'):'') + '.', true);
     } finally {
       msPriceSyncBusy = false;
       setMsSyncBtn('pt-ms-import-btn', false, '', '📥 Importă prețuri din MoySklad');
@@ -4977,7 +5119,10 @@
         parts.push('<div><b>⚠ Eroare la ' + lastMsSyncFailed.failedNames.length + ' produs' + (lastMsSyncFailed.failedNames.length===1?'':'e') + ' (nu s-au ' + verb + ' MoySklad):</b> ' + lastMsSyncFailed.failedNames.map(escAttr).join(', ') + '</div>');
       }
       if(lastMsSyncFailed.skippedNames.length){
-        parts.push('<div' + (lastMsSyncFailed.failedNames.length?' style="margin-top:6px"':'') + '><b>⚠ Nelegate de MoySklad (' + lastMsSyncFailed.skippedNames.length + ') — sincronizează catalogul din Comparație produse:</b> ' + lastMsSyncFailed.skippedNames.map(escAttr).join(', ') + '</div>');
+        parts.push('<div' + (lastMsSyncFailed.failedNames.length?' style="margin-top:6px"':'') + '><b>⚠ Nelegate de MoySklad (' + lastMsSyncFailed.skippedNames.length + ') — nu există în MoySklad un produs cu barcode-ul lor (catalogul a fost sincronizat automat chiar înainte):</b> ' + lastMsSyncFailed.skippedNames.map(escAttr).join(', ') + '</div>');
+      }
+      if(lastMsSyncFailed.ambiguousNames && lastMsSyncFailed.ambiguousNames.length){
+        parts.push('<div' + ((lastMsSyncFailed.failedNames.length || lastMsSyncFailed.skippedNames.length)?' style="margin-top:6px"':'') + '><b>⚠ Sărite — barcode duplicat în MoySklad (' + lastMsSyncFailed.ambiguousNames.length + '), nu se știe la care din produse să scrie. Șterge/arhivează duplicatul în MoySklad (tab Produse MoySklad → Verifică duplicate), apoi reîncearcă:</b> ' + lastMsSyncFailed.ambiguousNames.map(escAttr).join('; ') + '</div>');
       }
       if(parts.length){
         html += '<div style="margin-top:8px;padding:9px 13px;background:var(--bad-bg);border:1px solid var(--bad);border-radius:var(--radius-md);color:var(--bad);font-size:11.5px;line-height:1.6">' + parts.join('') + '</div>';
@@ -5141,7 +5286,8 @@
         ' <button class="icon-svg-btn" style="padding:0 3px;flex-shrink:0" title="Caută denumirea pe Google" onclick="ptSearchGoogle(\'' + jsAttrEscape(p.displayName) + '\')">' + ICON_SEARCH + '</button></div>' +
         barcodeRow +
         (sc.source ? '' : '<br><span style="font-size:10px;color:var(--bad)">fără cost cunoscut</span>') +
-        (msProd ? '<br><span style="font-size:13px;color:var(--text-soft)">stoc MoySklad: <b class="num" style="color:var(--text)">' + (msProd.stock !== null && msProd.stock !== undefined ? msProd.stock : 0) + '</b> buc</span>' : '') + '</td>' +
+        (msProd ? '<br><span style="font-size:13px;color:var(--text-soft)">stoc MoySklad: <b class="num" style="color:var(--text)">' + (msProd.stock !== null && msProd.stock !== undefined ? msProd.stock : 0) + '</b> buc</span>' : '') +
+        (msProd && moyskladMatches(p).length > 1 ? '<br><span style="font-size:11.5px;color:var(--bad);font-weight:600" title="În MoySklad există ' + moyskladMatches(p).length + ' produse cu acest barcode — stocul de mai sus poate fi al celui greșit, iar importul/trimiterea de prețuri îl sar peste. Vezi Produse MoySklad → Verifică duplicate.">⚠ barcode duplicat în MoySklad (' + moyskladMatches(p).length + ' produse) — nu se importă/trimite</span>' : '') + '</td>' +
         (msOnInv && !isColHidden('inv','hist') ? '<td>' + colwDivHtml('inv','hist',220, msProd ? (historyPreviewHtml(msProd.id) || '<span class="dim" style="font-size:11px">—</span>') : '<span class="dim" style="font-size:11px">—</span>') + '</td>' : '') +
         (isColHidden('inv','qty') ? '' : '<td style="text-align:center"><input class="qty-input" style="width:100%;text-align:center;font-weight:700" type="number" step="1" value="' + (qtyMap[k] != null ? qtyMap[k] : '') + '" onchange="ptSetOrderLineQty(\'' + kEsc + '\',this.value)"></td>') +
         (isColHidden('inv','buy') ? '' : '<td><input class="qty-input pt-price-input" style="width:100%;' + reviewedBorder(o,k,'buy') + '" type="number" step="0.01" value="' + (sc.usdPrice!=null?fmt(sc.usdPrice):'') + '" onchange="ptSetBuyPriceOverride(\'' + kEsc + '\',this.value)" title="Corectează dacă prețul de achiziție e greșit sau nesincronizat"></td>') +
