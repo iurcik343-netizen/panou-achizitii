@@ -5055,6 +5055,8 @@
     var p3Calc = pkgTierCalc(pachet3, p.pachet3Price, disc3, sc.cost, sellPrice, p.pachet3Pct);
     var anyAlert = p1Calc.isAlert || p2Calc.isAlert || p3Calc.isAlert;
     var tdStyle = anyAlert ? ' style="background:var(--bad-bg)"' : '';
+    // Comparăm la leu întreg: Secundar se afișează rotunjit, iar Prețul de vînzare e mereu întreg.
+    var secDiffers = secCalc.effVal != null && sellPrice != null && Math.round(secCalc.effVal) !== Math.round(sellPrice);
     if(expandedPackagesKey !== k){
       var entries = [
         { c: secCalc, pct: secCalc.effPct, whole: true },
@@ -5062,8 +5064,17 @@
         { c: p2Calc, pct: p2Calc.effPct },
         { c: p3Calc, pct: p3Calc.effPct }
       ];
-      var vals = entries.map(function(e){ return e.c.effVal != null ? (e.whole ? Math.round(e.c.effVal) : fmt(e.c.effVal)) : '—'; }).join(' · ');
-      var pcts = entries.map(function(e){ return e.pct != null ? Math.round(e.pct) : '—'; }).join(' · ');
+      var vals = entries.map(function(e){ return e.c.effVal != null ? (e.whole ? Math.round(e.c.effVal) : fmt(e.c.effVal)) : '—'; });
+      var pcts = entries.map(function(e){ return e.pct != null ? Math.round(e.pct) : '—'; });
+      // Secundar diferit de Prețul de vînzare = o reducere activă pe care e ușor s-o uiți (implicit
+      // -15%) — îl scoatem în roșu, atît prețul cît și procentul lui, ca să sară în ochi la o privire.
+      if(secDiffers){
+        var secTitle = 'Secundarul diferă de Prețul de vânzare (' + sellPrice + ') — reducere activă';
+        vals[0] = '<span style="color:var(--bad);font-weight:600" title="' + secTitle + '">' + vals[0] + '</span>';
+        pcts[0] = '<span style="color:var(--bad);font-weight:600" title="' + secTitle + '">' + pcts[0] + '</span>';
+      }
+      vals = vals.join(' · ');
+      pcts = pcts.join(' · ');
       return '<td' + tdStyle + '><button class="pt-pkgs-pill" onclick="ptTogglePackagesRow(\'' + kEsc + '\')" title="Secundar și Pachetele 1/2/3 — click pentru a le vedea și edita pe toate">' +
         '<span class="pt-pkgs-pill-vals">' + vals + ' <span style="color:var(--text-dim);font-size:11px">▾</span></span>' +
         '<span class="pt-pkgs-pill-pcts">' + pcts + ' %</span>' +
@@ -5071,7 +5082,7 @@
       '</button></td>';
     }
     return '<td' + tdStyle + '><div style="display:flex;flex-direction:column;gap:6px;align-items:stretch;min-width:190px">' +
-      pkgRowLineHtml('Secundar', secCalc, 'ptSetSecondaryPrice(\'' + kEsc + '\',this.value)', 'ptSetSecondaryPct(\'' + kEsc + '\',this.value)', reviewedBorder(o,k,'secondary'), true) +
+      pkgRowLineHtml('Secundar', secCalc, 'ptSetSecondaryPrice(\'' + kEsc + '\',this.value)', 'ptSetSecondaryPct(\'' + kEsc + '\',this.value)', reviewedBorder(o,k,'secondary') + (secDiffers ? 'color:var(--bad);font-weight:600;' : ''), true) +
       pkgRowLineHtml('Pachet 1', p1Calc, 'ptSetPachetPrice(\'' + kEsc + '\',1,this.value)', null, reviewedBorder(o,k,'pachet1')) +
       pkgRowLineHtml('Pachet 2', p2Calc, 'ptSetPachetPrice(\'' + kEsc + '\',2,this.value)', 'ptSetPachetPct(\'' + kEsc + '\',2,this.value)', reviewedBorder(o,k,'pachet2')) +
       pkgRowLineHtml('Pachet 3', p3Calc, 'ptSetPachetPrice(\'' + kEsc + '\',3,this.value)', 'ptSetPachetPct(\'' + kEsc + '\',3,this.value)', reviewedBorder(o,k,'pachet3')) +
