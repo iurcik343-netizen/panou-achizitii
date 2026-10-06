@@ -2065,6 +2065,10 @@
     if(view){ selectedBrandId = null; selectedProductIds = {}; }
     renderCatalog();
   };
+  window.ptToggleHiddenProductsView = function(){
+    catalogShowHiddenProducts = !catalogShowHiddenProducts;
+    renderCatalog();
+  };
   window.ptBackToBrands = function(){
     selectedBrandId = null;
     selectedProductIds = {};
@@ -2255,7 +2259,7 @@
 
     html += '<div class="search-row" style="display:flex;gap:8px;align-items:center"><input type="text" id="pt-catalog-search" placeholder="Caută după nume sau barcode…" value="' + catalogSearchTerm.replace(/"/g,'') + '" style="flex:1"></div>';
     if(hiddenInBrandCount > 0 || catalogShowHiddenProducts){
-      html += '<div style="margin-bottom:8px"><button class="btn-outline" onclick="catalogShowHiddenProducts=' + (!catalogShowHiddenProducts) + ';renderCatalog()">' + (catalogShowHiddenProducts ? '◀ Înapoi la produsele active' : '🗄 Arhivate în acest brand (' + hiddenInBrandCount + ')') + '</button></div>';
+      html += '<div style="margin-bottom:8px"><button class="btn-outline" onclick="ptToggleHiddenProductsView()">' + (catalogShowHiddenProducts ? '◀ Înapoi la produsele active' : '🗄 Arhivate în acest brand (' + hiddenInBrandCount + ')') + '</button></div>';
     }
     var q = normName(catalogSearchTerm);
     var filtered = catalogProducts.filter(function(p){
@@ -5097,7 +5101,7 @@
     var msOnInv = !!state.settings.moyskladProxyUrl;
     var catalogStaleMs = catalogUpdatedAt ? (Date.now() - new Date(catalogUpdatedAt).getTime()) : null;
     if(!msOnInv || (catalogProducts.length && !(catalogStaleMs != null && catalogStaleMs > 24*3600*1000))) return '';
-    return '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:6px 12px;font-size:12px;margin-bottom:8px">⚠ Catalogul MoySklad ținut local ' + (catalogProducts.length ? ('e sincronizat de la ' + fmtDateDMY(catalogUpdatedAt)) : 'nu a fost sincronizat încă') + ' — produsele noi/schimbate în MoySklad de atunci nu vor fi recunoscute (prețurile lor rămân pe formula de rezervă, nu pe cea din MoySklad). Sincronizează din tab-ul Comparație produse (Actualizează MoySklad) înainte să imporți/trimiți prețuri.</div>';
+    return '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:6px 12px;font-size:12px;margin-bottom:8px">⚠ Catalogul MoySklad ținut local ' + (catalogProducts.length ? ('e sincronizat de la ' + fmtDateDMY(catalogUpdatedAt)) : 'nu a fost sincronizat încă') + ' — produsele noi/schimbate în MoySklad de atunci nu vor fi recunoscute în tabelul de mai jos (prețurile lor rămân pe formula de rezervă, nu pe cea din MoySklad). Catalogul se resincronizează automat la „Importă prețuri" / „Trimite prețurile"; dacă vrei să-l reîmprospătezi acum, apasă „Actualizează MoySklad" din tab-ul Comparație produse.</div>';
   }
   function orderPricingChipsHtml(){
     var msOnInv = !!state.settings.moyskladProxyUrl;
