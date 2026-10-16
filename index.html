@@ -1861,21 +1861,72 @@
       } catch(e){ /* localStorage indisponibil sau plin — istoricul rămâne doar în memorie */ }
     }, 800);
   }
+  // BUG reparat: istoricul de achiziții, odată adus pentru un produs, rămînea în cache (și în
+  // localStorage, peste sesiuni) PE NEDEFINIT — ensureHistoryLoaded ieșea imediat la orice intrare
+  // existentă. Rezultat: ultima recepție (приемка) apărută în MoySklad după prima aducere a
+  // istoricului nu se vedea NICIODATĂ în aplicație (raportat: recepția din 22.09.2026, 200 buc, lipsea
+  // — se vedeau doar cele din aprilie/februarie; Worker-ul o returna corect). Acum intrarea are
+  // fetchedAt și e considerată veche după HISTORY_MAX_AGE_MS; atunci se reîmprospătează în fundal,
+  // iar istoricul vechi rămîne afișat pînă sosește cel nou (și rămîne dacă reîmprospătarea eșuează).
+  // Intrările vechi din localStorage, fără fetchedAt, se reîmprospătează o dată la prima vizualizare.
+  var HISTORY_MAX_AGE_MS = 30 * 60 * 1000;
+  var HISTORY_RETRY_AFTER_FAIL_MS = 10 * 60 * 1000;
+  var HISTORY_MAX_RETRIES = 3;
+  var HISTORY_RATE_LIMIT_PAUSE_MS = 20000;
+  var historyPausedUntil = 0;
+  var historyPauseTimer = null;
+  var historyRetries = {};
+  var historyInFlight = {};
+  function historyEntryFresh(c){
+    if(!c || !c.rows) return false;
+    if(c.retryAt && Date.now() < c.retryAt) return true; // reîmprospătare eșuată recent — nu mai bombardăm
+    return !!(c.fetchedAt && (Date.now() - c.fetchedAt) < HISTORY_MAX_AGE_MS);
+  }
   function ensureHistoryLoaded(msId){
-    if(catalogHistoryCache[msId]) return;
-    catalogHistoryCache[msId] = 'loading';
+    var c = catalogHistoryCache[msId];
+    if(c === 'loading' || historyInFlight[msId]) return;
+    if(c && c.error) return; // prima încărcare a eșuat în sesiunea asta — nu reîncercăm la fiecare randare
+    if(historyEntryFresh(c)) return;
+    if(!c) catalogHistoryCache[msId] = 'loading';
+    historyInFlight[msId] = true;
     historyQueue.push(msId);
     pumpHistoryQueue();
   }
+  function historyFetchFailed(msId, message){
+    var prev = catalogHistoryCache[msId];
+    if(prev && prev !== 'loading' && prev.rows) prev.retryAt = Date.now() + HISTORY_RETRY_AFTER_FAIL_MS; // păstrăm istoricul vechi
+    else catalogHistoryCache[msId] = { error: message };
+    delete historyInFlight[msId];
+  }
   function pumpHistoryQueue(){
+    // La un răspuns 429 (limită de rată MoySklad) oprim ÎNTREAGA coadă un timp, nu doar produsul —
+    // aceeași lecție ca la atributele de preț (vezi attrsGlobalPausedUntil).
+    if(Date.now() < historyPausedUntil){
+      if(!historyPauseTimer){
+        historyPauseTimer = setTimeout(function(){ historyPauseTimer = null; pumpHistoryQueue(); }, historyPausedUntil - Date.now() + 50);
+      }
+      return;
+    }
     while(historyActive < HISTORY_CONCURRENCY && historyQueue.length){
       (function(msId){
         historyActive++;
         fetch(catalogProxyUrl('history=' + encodeURIComponent(msId))).then(function(r){ return r.json(); }).then(function(data){
-          catalogHistoryCache[msId] = (data && data.error) ? { error: data.detail || data.error } : { rows: (data && data.history) || [] };
-          saveHistoryCacheDebounced();
+          if(data && data.error){
+            if(data.status === 429 && (historyRetries[msId]||0) < HISTORY_MAX_RETRIES){
+              historyRetries[msId] = (historyRetries[msId]||0) + 1;
+              historyPausedUntil = Date.now() + HISTORY_RATE_LIMIT_PAUSE_MS;
+              historyQueue.push(msId); // rămîne „în lucru" — reluat după pauză
+              return;
+            }
+            historyFetchFailed(msId, data.detail || data.error);
+          } else {
+            catalogHistoryCache[msId] = { rows: (data && data.history) || [], fetchedAt: Date.now() };
+            delete historyRetries[msId];
+            delete historyInFlight[msId];
+            saveHistoryCacheDebounced();
+          }
         }).catch(function(err){
-          catalogHistoryCache[msId] = { error: err && err.message ? err.message : String(err) };
+          historyFetchFailed(msId, err && err.message ? err.message : String(err));
         }).then(function(){
           historyActive--;
           pumpHistoryQueue();

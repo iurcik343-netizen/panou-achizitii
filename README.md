@@ -181,7 +181,7 @@ Răspuns așteptat: `{"access_token":"...."}`. Copiezi acea valoare, o pui pe Cl
 - Tab **Setări → MoySklad — stocuri**: se completează URL-ul Worker-ului (`https://moysklad-proxy.iurcik343.workers.dev`), se apasă **Testează și salvează**.
 - Tab **Comparație produse**: apare un buton **„🔄 Actualizează stocuri MoySklad"** — sincronizarea e **manuală**, nu automată. Fiecare click ia cantitățile curente din MoySklad și le afișează în coloana **„Stoc MS"**, pentru orice produs al cărui barcode se potrivește.
 - Tab **„Produse MoySklad"** (catalog separat, complet independent de fluxul de comparare furnizori) — vezi secțiunea 7 de mai jos.
-- Datele MoySklad (stoc, catalog, istoric) **nu se salvează** în Supabase — sunt doar în memoria browserului, cât timp pagina e deschisă. La reîncărcarea paginii, trebuie apăsat din nou „Actualizează"/„Sincronizează".
+- Datele MoySklad (stoc, catalog, istoric) **nu se salvează** în Supabase — sunt doar în browser. Istoricul de achiziții se ține și în `localStorage` (cheia `pt_history_cache_v1`), dar are dată de aducere (`fetchedAt`) și se **reîmprospătează automat în fundal după 30 de minute** (vezi mai jos, secțiunea 7); stocul și catalogul cer apăsarea manuală a „Actualizează"/„Sincronizează".
 
 ## 7. Tab-ul „Produse MoySklad" — catalogul complet
 
@@ -191,6 +191,7 @@ Un tab separat, gândit ca listă de referință a **întregului** catalog MoySk
 - **Căutare** după nume sau barcode, cu o limită de afișare la 200 de rânduri (catalogul poate avea mii de produse) — se îngustează prin căutare.
 - **Săgeata (▸) de lângă fiecare produs** — expandează un panou cu **istoricul de achiziții**: dată, furnizor, cantitate, preț plătit. Se încarcă **la cerere** (doar când expandezi acel produs), nu în masă la sincronizare, ca să nu încetinească totul — fiecare produs cu istoric propriu înseamnă un apel separat către MoySklad.
 - Ultimele 20 de recepții per produs (limită fixă în cod, `limit=20` în worker.js, la ruta `?history=`).
+- **Istoricul din cache nu mai rămîne vechi la nesfîrșit.** Înainte, odată adus pentru un produs, istoricul rămînea în `localStorage` pe nedefinit și o recepție nouă din MoySklad (ex: o приемка din septembrie) nu apărea NICIODATĂ în aplicație, deși Worker-ul o returna corect. Acum fiecare intrare are `fetchedAt` și, după 30 de minute (`HISTORY_MAX_AGE_MS` în `index.html`), se reîmprospătează în fundal la următoarea afișare a produsului — istoricul vechi rămîne vizibil pînă sosește cel nou, și rămîne și dacă reîmprospătarea eșuează (reîncercare după 10 minute). Intrările vechi, fără `fetchedAt`, se reîmprospătează o dată. Un răspuns 429 de la MoySklad oprește 20 de secunde toată coada de istoric (maxim 3 reluări per produs).
 
 ## 8. Design
 
