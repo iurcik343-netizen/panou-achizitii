@@ -1885,17 +1885,21 @@
   function ensureHistoryLoaded(msId){
     var c = catalogHistoryCache[msId];
     if(c === 'loading' || historyInFlight[msId]) return;
-    if(c && c.error) return; // prima încărcare a eșuat în sesiunea asta — nu reîncercăm la fiecare randare
+    // Prima încărcare a eșuat: nu reîncercăm la fiecare randare. O eroare trecătoare (mentenanță
+    // MoySklad, limită de rată, conexiune) are retryAt și se reia după HISTORY_RETRY_AFTER_FAIL_MS —
+    // altfel istoricul rămînea „Eroare" pînă la reîncărcarea paginii, chiar și după ce MoySklad revenea.
+    if(c && c.error && Date.now() < (c.retryAt || Infinity)) return;
     if(historyEntryFresh(c)) return;
     if(!c) catalogHistoryCache[msId] = 'loading';
     historyInFlight[msId] = true;
     historyQueue.push(msId);
     pumpHistoryQueue();
   }
-  function historyFetchFailed(msId, message){
+  function historyFetchFailed(msId, raw, status){
+    var info = humanMsErrorInfo(raw, status);
     var prev = catalogHistoryCache[msId];
     if(prev && prev !== 'loading' && prev.rows) prev.retryAt = Date.now() + HISTORY_RETRY_AFTER_FAIL_MS; // păstrăm istoricul vechi
-    else catalogHistoryCache[msId] = { error: message };
+    else catalogHistoryCache[msId] = info.transient ? { error: info.text, retryAt: Date.now() + HISTORY_RETRY_AFTER_FAIL_MS } : { error: info.text };
     delete historyInFlight[msId];
   }
   function pumpHistoryQueue(){
@@ -1918,7 +1922,7 @@
               historyQueue.push(msId); // rămîne „în lucru" — reluat după pauză
               return;
             }
-            historyFetchFailed(msId, data.detail || data.error);
+            historyFetchFailed(msId, data.detail || data.error, data.status);
           } else {
             catalogHistoryCache[msId] = { rows: (data && data.history) || [], fetchedAt: Date.now() };
             delete historyRetries[msId];
@@ -2051,6 +2055,34 @@
     if(!base) return null;
     return base + (base.indexOf('?')===-1?'?':'&') + extra;
   }
+  // Mesaj uman pentru o eroare venită de la MoySklad (prin Worker). Textul brut poate fi o pagină HTML
+  // ÎNTREAGĂ — de ex. în mentenanța MoySklad ("Технические работы", cod 503), toast-ul afișa tot codul
+  // paginii. Întoarce { text, transient }: transient=true cînd are rost să încerci din nou mai tîrziu
+  // (mentenanță, limită de rată, conexiune), false cînd problema e de configurare/date.
+  function humanMsErrorInfo(raw, status){
+    var s = (raw == null) ? '' : String(raw).trim();
+    var head = s.slice(0, 60);
+    var m = /^(?:Error:\s*)?(\d{3})\b/.exec(head);
+    // Preferăm codul din textul brut (statusul real MoySklad) celui primit — Worker-ul învelește
+    // orice eroare MoySklad într-un 502 propriu.
+    var code = m ? parseInt(m[1], 10) : (status || null);
+    if(code === 503 || /Технические работы|status\.moysklad|maintenance/i.test(s.slice(0, 4000))){
+      return { transient: true, text: 'MoySklad este în mentenanță (lucrări tehnice) și nu răspunde acum — nu e o problemă a aplicației. Încearcă din nou peste câteva minute.' };
+    }
+    if(code === 429 || /\b1061\b/.test(head) || /too many requests/i.test(head)){
+      return { transient: true, text: 'MoySklad a limitat temporar accesul (prea multe cereri). Așteaptă câteva minute și încearcă din nou.' };
+    }
+    if(/failed to fetch|networkerror|load failed|network request failed/i.test(head)){
+      return { transient: true, text: 'Nu mă pot conecta la serverul MoySklad — verifică conexiunea la internet și încearcă din nou.' };
+    }
+    if(/<\s*(!doctype|html|body|head)\b/i.test(s)){
+      return { transient: code == null || code >= 500, text: 'MoySklad a răspuns cu o pagină de eroare neașteptată' + (code ? ' (cod ' + code + ')' : '') + '. Încearcă din nou peste câteva minute.' };
+    }
+    s = s.replace(/^Error:\s*/, '');
+    if(!s) s = code ? ('eroare ' + code) : 'eroare necunoscută';
+    return { transient: code != null && code >= 500, text: s.length > 200 ? s.slice(0, 200) + '…' : s };
+  }
+  function humanMsError(raw, status){ return humanMsErrorInfo(raw, status).text; }
   async function moyskladPost(action, body){
     var base = state.settings.moyskladProxyUrl;
     var url = base + (base.indexOf('?')===-1?'?':'&') + 'action=' + action;
@@ -2074,7 +2106,7 @@
         var res = await fetch(catalogProxyUrl('catalog=1'));
         var data = await res.json();
         if(!res.ok || data.error){
-          ptToast('Nu am putut sincroniza catalogul MoySklad: ' + (data.detail || data.error || res.status), false);
+          ptToast('Nu am putut sincroniza catalogul MoySklad: ' + humanMsError(data.detail || data.error, res.status) + (catalogProducts.length ? (' Lucrezi în continuare cu ultimul catalog salvat' + (catalogUpdatedAt ? ' (' + fmtDateDMY(catalogUpdatedAt) + ')' : '') + '.') : ''), false);
         } else {
           catalogProducts = data.products || [];
           catalogFolders = data.folders || [];
@@ -2086,7 +2118,7 @@
           ptToast('Catalog sincronizat: ' + catalogProducts.length + ' produse, ' + catalogFolders.length + ' branduri.' + (catalogDuplicateGroups.length ? (' ⚠ ' + catalogDuplicateGroups.length + ' grupuri de produse duplicate în MoySklad (vezi tab-ul Produse MoySklad → Verifică duplicate).') : ''), !catalogDuplicateGroups.length);
         }
       } catch(err){
-        ptToast('Eroare la conectarea cu serverul MoySklad: ' + (err && err.message ? err.message : err), false);
+        ptToast('Nu am putut sincroniza catalogul MoySklad: ' + humanMsError(err && err.message ? err.message : err) + (catalogProducts.length ? ' Lucrezi în continuare cu ultimul catalog salvat.' : ''), false);
       }
       catalogSyncing = false;
       rerenderVisibleTabs();
@@ -5019,7 +5051,7 @@
           if(!r.ok){
             failed++;
             failedNamesPush.push(p.displayName || k);
-            if(!firstErr) firstErr = (r.data && r.data.error) || ('eroare necunoscută la ' + (p.name||k));
+            if(!firstErr) firstErr = (r.data && r.data.error) ? humanMsError(r.data.error) : ('eroare necunoscută la ' + (p.name||k));
             console.error('ptPushPricesToMoySklad eșuat pentru', p.name, k, r.data);
             return;
           }
@@ -5040,7 +5072,7 @@
             return;
           }
           sent++;
-        } catch(e){ failed++; failedNamesPush.push(p.displayName || k); if(!firstErr) firstErr = String(e); }
+        } catch(e){ failed++; failedNamesPush.push(p.displayName || k); if(!firstErr) firstErr = humanMsError(String(e)); }
       });
       lastMsSyncFailed = (failedNamesPush.length || skippedNamesPush.length || ambiguousNamesPush.length) ? { orderId: orderId, type: 'push', failedNames: failedNamesPush, skippedNames: skippedNamesPush, ambiguousNames: ambiguousNamesPush } : null;
       renderOrderDetailTable();
@@ -5615,7 +5647,8 @@
     t.textContent = msg;
     t.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;padding:10px 18px;border-radius:10px;font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.16);max-width:80vw;text-align:center;' + (ok ? 'background:#E1F5EE;color:#0F6E56;border:1px solid #0F6E56;' : 'background:#FBEAEA;color:#C23B3B;border:1px solid #C23B3B;');
     document.body.appendChild(t);
-    setTimeout(function(){ if(t.parentNode) t.remove(); }, 3800);
+    // Erorile au mesaje mai lungi (motiv + ce să faci) — le lăsăm mai mult, proporțional cu lungimea.
+    setTimeout(function(){ if(t.parentNode) t.remove(); }, ok ? 3800 : Math.min(12000, Math.max(3800, String(msg).length * 60)));
   }
   function ptToastUndo(msg, undoFn){
     var existing = document.getElementById('pt-toast');
@@ -5938,7 +5971,8 @@
         var res = await fetch(proxyUrl);
         var data = await res.json();
         if(!res.ok || data.error){
-          fb.className = 'feedback err'; fb.textContent = 'Serverul a răspuns cu eroare: ' + (data.detail || data.error || res.status) + '. Verifică URL-ul și secretele configurate pe Worker.';
+          var testErr = humanMsErrorInfo(data.detail || data.error, res.status);
+          fb.className = 'feedback err'; fb.textContent = 'Serverul a răspuns cu eroare: ' + testErr.text + (testErr.transient ? '' : ' Verifică URL-ul și secretele configurate pe Worker.');
           return;
         }
         state.settings.moyskladProxyUrl = proxyUrl;
