@@ -236,8 +236,6 @@
   #pt-root .pt-orders-table tr.row-received:not(.row-open):hover td { opacity: 1; }
   #pt-root .pt-orders-table tr.pt-orders-divider td { background: var(--panel-2); padding: 5px 10px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-soft); }
   /* Editor de prețuri (Produse MoySklad → brand → «💲 Prețuri») */
-  #pt-root .pt-pe-table { min-width: 1180px; }
-  #pt-root .pt-pe-table td { padding: 7px 8px; }
   #pt-root .pt-pe-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
   #pt-root .pt-pe-cell input.pt-pe-in { width: 84px; margin: 0; padding: 5px 6px; text-align: right; font-family: var(--mono); font-size: 12.5px; }
   #pt-root .pt-pe-cell input.pt-pe-pct { width: 54px; margin: 0; padding: 3px 4px; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--text-soft); }
@@ -246,6 +244,9 @@
   #pt-root tr.pt-pe-row-changed td:first-child { box-shadow: inset 3px 0 0 var(--accent), 2px 0 4px rgba(0,0,0,.05); }
   #pt-root .pt-pe-overlay { position: fixed; inset: 0; z-index: 9000; background: rgba(20,22,32,.45); display: flex; align-items: flex-start; justify-content: center; padding: 5vh 12px; overflow: auto; }
   #pt-root .pt-pe-modal { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); width: min(920px, 100%); padding: 18px 20px; }
+  #pt-root .pt-pe-grid { display: flex; flex-wrap: wrap; gap: 12px 20px; }
+  #pt-root .pt-pe-gitem { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .02em; color: var(--text-soft); }
+  #pt-root .pt-pe-gitem .pt-pe-cell { text-transform: none; font-weight: 400; letter-spacing: 0; }
   #pt-root .pt-pe-modal h2 { margin: 0 0 6px; }
   #pt-root .pt-pe-hint { color: var(--text-soft); font-size: 12.5px; line-height: 1.5; margin-bottom: 8px; }
   #pt-root .pt-pe-chg { padding: 7px 0; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
@@ -1654,7 +1655,7 @@
       // reclamată ("sare sus" la editare). Amânăm din nou; se reia singură imediat ce dă click
       // alături (editarea lui declanșează oricum propria randare, imediată, separat de asta).
       var active = document.activeElement;
-      if(active && active.tagName === 'INPUT' && active.closest && (active.closest('#pt-order-detail-table') || (catalogPriceMode && active.closest('#tab-catalog')))){
+      if(active && active.tagName === 'INPUT' && active.closest && (active.closest('#pt-order-detail-table') || (active.type !== 'checkbox' && active.closest('#tab-catalog')))){
         rerenderVisibleTabsDebounced();
         return;
       }
@@ -2085,7 +2086,6 @@
   var NO_BRAND = '__no_brand__';
   var catalogShowHiddenBrands = false;
   var catalogShowDuplicates = false;
-  var catalogPriceMode = false; // editorul de prețuri pentru brandul deschis (vezi ptPeEnter)
   var catalogShowHiddenProducts = false;
   function hiddenBrandIds(){ return state.settings.hiddenMoyskladBrandIds || (state.settings.hiddenMoyskladBrandIds = []); }
   function hiddenProductIds(){ return state.settings.hiddenMoyskladProductIds || (state.settings.hiddenMoyskladProductIds = []); }
@@ -2190,7 +2190,7 @@
     selectedProductIds = {};
     catalogSearchTerm = '';
     catalogShowHiddenProducts = false;
-    catalogPriceMode = false;
+    peLoadedThisEntry = {}; // la intrarea într-un brand, prețurile mai vechi de 5 minute se citesc din nou
     renderCatalog();
   };
   // Vizualizările secundare din tab-ul Produse MoySklad (arhivate, duplicate). Înainte erau
@@ -2209,7 +2209,6 @@
   };
   window.ptBackToBrands = function(){
     selectedBrandId = null;
-    catalogPriceMode = false;
     selectedProductIds = {};
     catalogShowHiddenBrands = false;
     catalogShowDuplicates = false;
@@ -2392,7 +2391,7 @@
     var hiddenInBrandCount = brandProductIds.filter(function(id){ return hProducts.indexOf(id) !== -1; }).length;
     html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
       '<div><button class="icon-link" onclick="ptBackToBrands()">◀ Toate brandurile</button> <h2 style="display:inline;margin-left:8px">' + escAttr(brandName) + '</h2></div>' +
-      '<span>' + (catalogPriceMode ? '<button class="btn-outline" onclick="ptPeExit()">◀ Înapoi la produse</button> ' : '<button class="btn-primary" onclick="ptPeEnter()" title="Vezi și modifică toate prețurile produselor din acest brand, cu procente">💲 Prețuri</button> ') + '<button class="btn-outline" onclick="ptArchiveBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">' + ICON_ARCHIVE + ' Arhivează tot brandul (' + brandProductIds.length + ')</button> ' +
+      '<span><button class="btn-outline" onclick="ptArchiveBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">' + ICON_ARCHIVE + ' Arhivează tot brandul (' + brandProductIds.length + ')</button> ' +
       (selectedBrandId !== NO_BRAND ? '<button class="icon-link" onclick="ptRenameBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">' + ICON_EDIT + ' redenumește</button>' : '') + '</span>' +
       '</div>';
 
@@ -2410,27 +2409,10 @@
       var hay = normName(p.name) + ' ' + (p.barcodes||[]).join(' ') + ' ' + (p.article||'') + ' ' + (p.code||'');
       return hay.indexOf(q) !== -1;
     });
-    var RENDER_LIMIT = catalogPriceMode ? 100 : 200; // în editorul de prețuri fiecare rînd cere o citire din MoySklad — afișăm mai puține
+    var RENDER_LIMIT = 100; // fiecare rînd își citește prețurile din MoySklad (doar cînd ajunge pe ecran) — afișăm mai puține
     var truncated = filtered.length > RENDER_LIMIT;
     var visible = truncated ? filtered.slice(0, RENDER_LIMIT) : filtered;
     if(truncated) html += '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:4px 10px;font-size:10.5px;margin-bottom:8px;display:inline-block">' + filtered.length + ' produse — afișez primele ' + RENDER_LIMIT + '. Caută pentru restul.</div><div style="flex-basis:100%"></div>';
-
-    if(catalogPriceMode){
-      // ---- EDITOR DE PREȚURI ----
-      peLoadVisible(visible);
-      html += peToolbarHtml() + peTableHtml(visible);
-      setInnerHtmlKeepingFocus(el, html);
-      var peSearch = document.getElementById('pt-catalog-search');
-      if(peSearch){
-        peSearch.addEventListener('input', function(e){
-          catalogSearchTerm = e.target.value;
-          renderCatalog();
-          var i2 = document.getElementById('pt-catalog-search');
-          i2.focus(); i2.setSelectionRange(i2.value.length, i2.value.length);
-        });
-      }
-      return;
-    }
 
     var selCount = Object.keys(selectedProductIds).length;
     if(selCount > 0 && !catalogShowHiddenProducts){
@@ -2440,33 +2422,41 @@
         '</div>';
     }
 
+    if(!catalogShowHiddenProducts) html += peToolbarHtml();
     html += hiddenColsChipsHtml('cat', [ { col:'price', label:'Preț achiziție' }, { col:'stock', label:'Stoc' }, { col:'days', label:'Zile în depozit' } ]);
-    var catColspan = 2 + 1 + (isColHidden('cat','price')?0:1) + (isColHidden('cat','stock')?0:1) + (isColHidden('cat','days')?0:1);
-    html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th style="width:24px"></th><th style="width:40px"></th>' +
+    // Preț de vânzare și Magazin și Online (prețul cu reducere online/magazine) sînt mereu vizibile și editabile direct în rînd;
+    // restul prețurilor se văd și se editează deschizînd produsul (▸), ca în Comenzi.
+    var catColspan = 2 + 1 + (isColHidden('cat','price')?0:1) + (isColHidden('cat','stock')?0:1) + (isColHidden('cat','days')?0:1) + 2;
+    html += '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table"><thead><tr><th style="width:24px"></th><th style="width:52px"></th>' +
       resizableThHtml('cat', 'name', 'Produs', 260, 160, 640, false) +
       (isColHidden('cat','price') ? '' : resizableThHtml('cat', 'price', 'Preț achiziție', 110, 40, 260)) +
       (isColHidden('cat','stock') ? '' : resizableThHtml('cat', 'stock', 'Stoc', 80, 40, 200)) +
       (isColHidden('cat','days') ? '' : resizableThHtml('cat', 'days', 'Zile în depozit', 110, 40, 260)) +
+      resizableThHtml('cat', 'sell', 'Preț de vânzare 🔔', 120, 100, 260, false) +
+      resizableThHtml('cat', 'shop', 'Magazin și Online 🔔', 130, 110, 280, false) +
       '</tr></thead><tbody>';
     visible.forEach(function(p){
       var isExpanded = expandedCatalogId === p.id;
       ensureImageUrl(p);
-      html += '<tr>';
+      html += '<tr' + (catalogShowHiddenProducts ? '' : (' id="pe-row-' + p.id + '" data-msid="' + p.id + '"' + (peEdits[p.id] ? ' class="pt-pe-row-changed"' : ''))) + '>';
       html += '<td style="width:24px">' + (catalogShowHiddenProducts ? '<button class="btn-outline" style="padding:2px 6px;font-size:11px" onclick="ptUnhideProduct(\'' + p.id + '\')">↺</button>' : '<input type="checkbox" ' + (selectedProductIds[p.id]?'checked':'') + ' onchange="ptToggleProductSelect(\'' + p.id + '\')">') + '</td>';
-      html += '<td style="width:40px">' + (p.imageUrl ? '<img src="' + escAttr(p.imageUrl) + '" style="width:32px;height:32px;object-fit:cover;border-radius:6px;display:block" onerror="this.style.display=\'none\'">' : '') + '</td>';
+      html += '<td style="width:52px">' + (p.imageUrl ? '<img src="' + escAttr(p.imageUrl) + '" style="width:44px;height:44px;object-fit:cover;border-radius:6px;display:block" onerror="this.style.display=\'none\'">' : '') + '</td>';
       html += '<td>' + colwDivHtml('cat','name',260,
         '<button class="prod-title-btn" onclick="ptToggleCatalogExpand(\'' + p.id + '\')" title="' + jsAttrEscape(p.name) + '">' + (isExpanded ? '▾' : '▸') + ' ' + escAttr(p.name) + '</button> <button class="icon-svg-btn" style="padding:0 3px" title="Caută denumirea pe Google" onclick="event.stopPropagation();ptSearchGoogle(\'' + jsAttrEscape(p.name) + '\')">' + ICON_SEARCH + '</button>' +
         '<div class="prod-meta">' + (p.barcodes && p.barcodes.length ? 'EAN ' + p.barcodes.join(', ') : 'fără barcode') + (p.article ? ' · art. ' + escAttr(p.article) : '') + '</div>') + '</td>';
       if(!isColHidden('cat','price')) html += '<td class="dim">' + colwDivHtml('cat','price',110, p.buyPrice !== null ? '<span class="num">' + fmt(p.buyPrice) + '</span> ' + (p.buyPriceCurrency||'') : '—') + '</td>';
       if(!isColHidden('cat','stock')) html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','stock',80, p.stock !== null && p.stock !== undefined ? '<span class="num">' + p.stock + '</span>' : '<span class="num">0</span>') + '</td>';
       if(!isColHidden('cat','days')) html += '<td class="dim" style="text-align:center">' + colwDivHtml('cat','days',110, p.stockDays !== null && p.stockDays !== undefined ? '<span class="num">' + Math.round(p.stockDays) + '</span>' : '—') + '</td>';
+      html += '<td style="vertical-align:top">' + peMainCellHtml(p, PE_SELL) + '</td>';
+      html += '<td style="vertical-align:top">' + peMainCellHtml(p, PE_SHOP) + '</td>';
       html += '</tr>';
       if(isExpanded){
-        html += '<tr><td colspan="' + catColspan + '"><div class="detail-panel">' + historyBlockHtml(p.id) + '</div></td></tr>';
+        html += '<tr><td colspan="' + catColspan + '"><div class="detail-panel">' + (catalogShowHiddenProducts ? '' : peDetailPricesHtml(p.id)) + historyBlockHtml(p.id) + '</div></td></tr>';
       }
     });
     html += '</tbody></table></div></div>';
     setInnerHtmlKeepingFocus(el, html);
+    if(!catalogShowHiddenProducts) peObserveRows(el);
 
     var searchEl = document.getElementById('pt-catalog-search');
     if(searchEl){
@@ -5292,20 +5282,6 @@
     }
     return html + '</div>';
   }
-  function peRowHtml(p){
-    var snap = msSnapshotFor(p.id);
-    var h = '<tr id="pe-row-' + p.id + '"' + (peEdits[p.id] ? ' class="pt-pe-row-changed"' : '') + '>' +
-      '<td><div style="font-weight:600;font-size:12.5px;line-height:1.3" title="' + escAttr(p.name) + '">' + escAttr(p.name) + '</div>' +
-      '<div class="prod-meta">' + (p.barcodes && p.barcodes.length ? 'EAN ' + escAttr(p.barcodes[0]) : 'fără barcode') + ' · stoc ' + (p.stock != null ? p.stock : 0) + '</div></td>';
-    if(!snap){
-      var c = msAttrsCache[p.id];
-      var failed = c && c !== 'loading' && c.error;
-      h += '<td colspan="' + PE_FIELDS.length + '" style="font-size:12px;color:var(--text-soft)">' + (failed ? ('⚠ Nu am putut citi prețurile din MoySklad (' + escAttr(humanMsError(c.error)) + ') <button class="icon-link" onclick="ptPeRetry(\'' + p.id + '\')">↻ Reîncearcă</button>') : 'Se încarcă prețurile din MoySklad…') + '</td></tr>';
-      return h;
-    }
-    PE_FIELDS.forEach(function(f){ h += '<td style="vertical-align:top">' + peCellHtml(p.id, f) + '</td>'; });
-    return h + '</tr>';
-  }
   function peToolbarHtml(){
     var n = peCounts();
     var hasMsg = false;
@@ -5318,21 +5294,10 @@
       '<button id="pt-pe-reset" class="btn-outline" onclick="ptPeResetAll()"' + (n.products ? '' : ' disabled') + '>↺ Renunță la toate</button>' +
       '<button id="pt-pe-review" class="btn-primary" onclick="ptPeReviewOpen()"' + (n.products ? '' : ' disabled') + '>📤 Trimite în MoySklad' + (n.products ? ' (' + n.products + ')' : '') + '</button>' +
       '</div>' +
-      '<div class="pt-pe-hint" style="margin-bottom:10px">Modifică <b>Prețul de vânzare</b> și toate celelalte prețuri se recalculează cu procentul lor de reducere; poți edita oricare preț sau procent direct. Se trimit în MoySklad <b>doar câmpurile modificate</b> (după o confirmare cu lista lor). Când se schimbă <b>Prețul de vânzare</b> sau <b>Magazin și Online</b>, se pregătește mesajul pentru magazin.</div>';
+      '<div class="pt-pe-hint" style="margin:0 0 10px">Editează <b>Prețul de vânzare</b> sau <b>Magazin și Online</b> direct în tabel; deschide produsul (▸) pentru restul prețurilor. Celelalte prețuri se recalculează cu procentul lor, iar în MoySklad se trimit doar câmpurile modificate. 🔔 = la schimbare se pregătește mesajul pentru magazin.</div>';
   }
   function peCountText(n){
     return n.products ? (n.products + (n.products === 1 ? ' produs modificat' : ' produse modificate') + ' · ' + n.fields + (n.fields === 1 ? ' câmp' : ' câmpuri') + ' — nu s-au trimis încă') : 'Nicio modificare';
-  }
-  function peTableHtml(visible){
-    var h = '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table pt-pe-table"><thead><tr><th style="width:250px">Produs</th>';
-    PE_FIELDS.forEach(function(f){
-      var tip = f.notify ? ' title="La schimbare se pregătește mesajul pentru magazin"' : '';
-      h += '<th style="width:104px;text-align:right"' + tip + '>' + escAttr(f.label) + (f.notify ? ' 🔔' : '') + '</th>';
-    });
-    h += '</tr></thead><tbody>';
-    visible.forEach(function(p){ h += peRowHtml(p); });
-    if(!visible.length) h += '<tr><td colspan="' + (PE_FIELDS.length + 1) + '" class="dim">Niciun produs de afișat.</td></tr>';
-    return h + '</tbody></table></div></div>';
   }
   function peUpdateToolbar(){
     var n = peCounts();
@@ -5367,28 +5332,64 @@
   }
 
   // ---- Acțiuni ----
-  window.ptPeEnter = function(){
-    catalogPriceMode = true;
-    peLoadedThisEntry = {};
-    renderCatalog();
-  };
-  window.ptPeExit = function(){
-    catalogPriceMode = false;
-    renderCatalog();
-  };
-  // Pregătește produsele afișate: prețurile citite acum mai mult de PE_SNAPSHOT_MAX_AGE_MS se citesc din nou
-  // (altfel am calcula procente și diferențe pe prețuri vechi), iar cele lipsă se încarcă în fundal.
-  function peLoadVisible(visible){
-    var now = Date.now();
-    visible.forEach(function(p){
-      var c = msAttrsCache[p.id];
-      if(c && c !== 'loading' && c.attrs && !peEdits[p.id] && !peLoadedThisEntry[p.id] && (now - (c.at || 0)) > PE_SNAPSHOT_MAX_AGE_MS){
-        delete msAttrsCache[p.id];
-      }
-      peLoadedThisEntry[p.id] = true;
-      peEnsureLoaded(p.id);
-    });
+  // Prețurile unui produs se citesc din MoySklad doar cînd rîndul lui ajunge pe ecran (IntersectionObserver), nu
+  // pentru tot brandul deodată — la brandurile mari ar fi sute de cereri degeaba. Prețurile citite acum mai mult de
+  // PE_SNAPSHOT_MAX_AGE_MS se citesc din nou (o dată la intrarea în brand), ca să nu calculăm procente și diferențe
+  // pe valori vechi; produsele cu modificări netrimise nu se ating.
+  function peMaybeLoad(msId){
+    var c = msAttrsCache[msId];
+    if(c && c !== 'loading' && c.attrs && !peEdits[msId] && !peLoadedThisEntry[msId] && (Date.now() - (c.at || 0)) > PE_SNAPSHOT_MAX_AGE_MS){
+      delete msAttrsCache[msId];
+    }
+    peLoadedThisEntry[msId] = true;
+    peEnsureLoaded(msId);
   }
+  var peObserver = null;
+  function peObserveRows(root){
+    if(peObserver){ peObserver.disconnect(); peObserver = null; }
+    var rows = root.querySelectorAll('tr[data-msid]');
+    if(!rows.length) return;
+    // Primele rînduri se încarcă imediat (să nu se vadă goluri), restul cînd apar pe ecran.
+    Array.prototype.slice.call(rows, 0, 12).forEach(function(r){ peMaybeLoad(r.getAttribute('data-msid')); });
+    if(!('IntersectionObserver' in window)){
+      Array.prototype.slice.call(rows, 12, 40).forEach(function(r){ peMaybeLoad(r.getAttribute('data-msid')); });
+      return;
+    }
+    peObserver = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if(!en.isIntersecting) return;
+        if(peObserver) peObserver.unobserve(en.target);
+        peMaybeLoad(en.target.getAttribute('data-msid'));
+      });
+    }, { rootMargin: '200px 0px' });
+    Array.prototype.forEach.call(rows, function(r){ peObserver.observe(r); });
+  }
+  // Celula din rîndul produsului (Preț de vânzare / Magazin și Online): cîmpul editabil, sau starea de încărcare/eroare.
+  function peMainCellHtml(p, f){
+    if(catalogShowHiddenProducts) return '<span style="color:var(--text-dim)">—</span>';
+    if(msSnapshotFor(p.id)) return peCellHtml(p.id, f);
+    var c = msAttrsCache[p.id];
+    if(c && c !== 'loading' && c.error){
+      return '<span style="font-size:11px;color:var(--bad)" title="' + escAttr(humanMsError(c.error)) + '">⚠ nu s-au citit <button class="icon-link" onclick="ptPeRetry(\'' + p.id + '\')">↻</button></span>';
+    }
+    return '<span style="font-size:11px;color:var(--text-soft)">se încarcă…</span>';
+  }
+  // Restul prețurilor, în panoul care se deschide cu ▸ (ca în Comenzi).
+  function peDetailPricesHtml(msId){
+    var h = '<div style="font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;margin-bottom:6px">Alte prețuri</div>';
+    if(!msSnapshotFor(msId)) return h + '<div style="font-size:12px;color:var(--text-soft);margin-bottom:8px">Se încarcă prețurile din MoySklad…</div>';
+    h += '<div class="pt-pe-grid">';
+    PE_FIELDS.forEach(function(f){
+      if(f === PE_SELL || f === PE_SHOP) return; // acestea sînt direct în rînd
+      h += '<label class="pt-pe-gitem"><span>' + escAttr(f.label) + '</span>' + peCellHtml(msId, f) + '</label>';
+    });
+    return h + '</div><div style="margin:6px 0 4px"><button class="icon-link" onclick="ptPeResetProduct(\'' + msId + '\')">↺ Renunță la modificările acestui produs</button></div>';
+  }
+  window.ptPeResetProduct = function(msId){
+    if(!peEdits[msId]) return;
+    delete peEdits[msId];
+    peSyncRow(msId); peUpdateToolbar();
+  };
   var peLoadedThisEntry = {};
   window.ptPeRetry = function(msId){
     delete msAttrsRetries[msId]; delete msAttrsNextRetryAt[msId]; delete msAttrsCache[msId];
