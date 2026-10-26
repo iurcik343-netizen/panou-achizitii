@@ -193,6 +193,16 @@ Un tab separat, gândit ca listă de referință a **întregului** catalog MoySk
 - Ultimele 20 de recepții per produs (limită fixă în cod, `limit=20` în worker.js, la ruta `?history=`).
 - **Istoricul din cache nu mai rămîne vechi la nesfîrșit.** Înainte, odată adus pentru un produs, istoricul rămînea în `localStorage` pe nedefinit și o recepție nouă din MoySklad (ex: o приемка din septembrie) nu apărea NICIODATĂ în aplicație, deși Worker-ul o returna corect. Acum fiecare intrare are `fetchedAt` și, după 6 ore (`HISTORY_MAX_AGE_MS` în `index.html`; 5 minute, `HISTORY_EXPANDED_MAX_AGE_MS`, pentru un produs deschis explicit cu ▸), se reîmprospătează în fundal la următoarea afișare a produsului — istoricul vechi rămîne vizibil pînă sosește cel nou, și rămîne și dacă reîmprospătarea eșuează (reîncercare după 10 minute). Intrările vechi, fără `fetchedAt`, se reîmprospătează o dată. Un răspuns 429 de la MoySklad oprește 20 de secunde toată coada de istoric (maxim 3 reluări per produs).
 
+### Editorul de prețuri (butonul „💲 Prețuri" din vederea unui brand)
+
+Tabel cu **toate tipurile de preț** ale produselor din MoySklad, editabile cu procente (aceeași tehnologie ca în Comenzi): Achiziție $ („Pret furnizor in $"), Sinecost MDL („Закупочная цена"), Preț de vânzare („Pret de Vinzare"), Preventiv (reduceri) (în Comenzi: „Secundar"), Beauty Expo, **Magazin și Online** (prețul cu reducere online/magazine), Pachet I/II/III. Citite cu `GET /?attrs=<id>`, scrise cu `POST ?action=setAttrs` (neschimbat).
+
+- Preț ↔ % de reducere față de Prețul de vânzare; la schimbarea Prețului de vânzare, toate prețurile derivate își păstrează procentul.
+- Se trimit **doar câmpurile modificate**, după o fereastră de revizuire cu lista modificărilor și avertismente (sub sinecost, peste prețul de vânzare, variație >50%).
+- Dacă se schimbă Prețul de vânzare sau Magazin și Online → mesaj standard pentru magazin (editabil, cu buton de copiere), ex: „Preț de vânzare modificat în: 325 / Preț cu reducere: 289".
+- Jurnal de audit în `state.settings.priceChangeLog` (ultimele 300 de modificări: cine, ce, când, era → acum) — fără schimbări de schemă.
+- `worker.js` validează acum pe server valorile din `setAttrs` (număr finit între 0 și 10.000.000) — **necesită redeploy manual** al Worker-ului în Cloudflare.
+
 ## 8. Design
 
 Paleta actuală (variabile CSS, în `:root`, la începutul `index.html`):
