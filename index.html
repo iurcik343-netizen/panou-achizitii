@@ -1999,7 +1999,7 @@
               msAttrsNextRetryAt[msId] = Date.now() + Math.min(30000, 1000 * Math.pow(2, msAttrsRetries[msId]));
             }
           } else {
-            msAttrsCache[msId] = { attrs: (data && data.attributes) || {} };
+            msAttrsCache[msId] = { attrs: (data && data.attributes) || {}, at: Date.now() };
             delete msAttrsRetries[msId];
             delete msAttrsNextRetryAt[msId];
           }
@@ -4651,7 +4651,7 @@
           '<button class="btn-outline" onclick="exportOrderPricingExcel(\'' + o.id + '\')">📊 Descarcă Excel</button>' +
           (state.settings.moyskladProxyUrl ? (
             '<button class="btn-outline" id="pt-ms-import-btn" onclick="ptImportPricesFromMoySklad(\'' + o.id + '\')" title="Aduce prețurile deja setate pe produs în MoySklad, ca punct de plecare">📥 Importă prețuri din MoySklad</button>' +
-            '<button class="btn-primary" id="pt-ms-push-btn" onclick="ptPushPricesToMoySklad(\'' + o.id + '\')" title="Trimite prețurile de mai jos în cîmpurile personalizate ale produsului din MoySklad">📤 Trimite prețurile în MoySklad</button>' +
+            '<button class="btn-primary" id="pt-ms-push-btn" onclick="ptPushPricesToMoySklad(\'' + o.id + '\')" title="Trimite în MoySklad DOAR produsele la care s-a schimbat un preț de vînzare față de ce are MoySklad (înainte de trimitere vezi lista modificărilor)">📤 Trimite prețurile în MoySklad</button>' +
             (o.reviewedFields && Object.keys(o.reviewedFields).length ? '<button class="btn-outline" onclick="ptResetReviewedFields(\'' + o.id + '\')" title="Scoate marcajele verzi ale cîmpurilor editate manual — prețurile nu se schimbă. Nu e nevoie de asta ca să trimiți prețurile în MoySklad.">🔓 Deblochează câmpurile verificate manual</button>' : '')
           ) : '') +
           '<div style="flex:1"></div>' +
@@ -4997,6 +4997,76 @@
       setMsSyncBtn('pt-ms-push-btn', false, '', '📤 Trimite prețurile în MoySklad');
     }
   };
+  // ---- Trimitere DOAR a ce s-a schimbat ----
+  // Înainte, „Trimite prețurile" scria TOATE cîmpurile TUTUROR produselor din comandă (cîte o citire +
+  // o scriere în MoySklad per produs), chiar dacă modificaseși prețul la un singur produs — la 76 de
+  // produse însemna zeci de secunde de cereri degeaba, plus valori suprascrise în MoySklad pe care nu
+  // le atinseseși. Acum comparăm, INSTANT și fără nicio cerere, ce vrem să trimitem cu ce știm că are
+  // MoySklad (instantaneul din msAttrsCache, citit în fundal la deschiderea comenzii) și trimitem doar
+  // produsele la care s-a schimbat un PREȚ DE VÎNZARE (Preț, Secundar, Pachet 1/2/3) — pentru ele, toate
+  // cîmpurile care diferă. Produsele la care diferă DOAR Sinecost/Achiziție NU declanșează trimiterea
+  // (MS_PUSH_COST_TRIGGERS) — sînt derivate din comandă, nu „modificate" de utilizator.
+  var MS_PUSH_COST_TRIGGERS = false;
+  var MS_PUSH_LABELS = {};
+  MS_PUSH_LABELS[MS_PRICE_ATTRS.buyPriceMdl] = 'Sinecost';
+  MS_PUSH_LABELS[MS_PRICE_ATTRS.buyPriceUsd] = 'Achiziție $';
+  MS_PUSH_LABELS[MS_PRICE_ATTRS.sellPrice] = 'Preț vînzare';
+  MS_PUSH_LABELS[MS_PRICE_ATTRS.secondaryPrice] = 'Secundar';
+  MS_PUSH_LABELS[MS_PRICE_ATTRS.pachet1] = 'Pachet 1';
+  MS_PUSH_LABELS[MS_PRICE_ATTRS.pachet2] = 'Pachet 2';
+  MS_PUSH_LABELS[MS_PRICE_ATTRS.pachet3] = 'Pachet 3';
+  // Toate cîmpurile pe care aplicația vrea să le aibă în MoySklad pentru un produs din comandă.
+  function buildPushAttrs(o, k){
+    var p = state.products[k];
+    var sc = getOrderLineSinecost(o, k);
+    var pachete = computeOrderRowPachete(p, sc);
+    var attrs = [];
+    if(!PUSH_ONLY_PACHET3_TEST){
+      if(sc.cost != null) attrs.push({ id: MS_PRICE_ATTRS.buyPriceMdl, value: Math.round(sc.cost) });
+      if(sc.usdPrice != null) attrs.push({ id: MS_PRICE_ATTRS.buyPriceUsd, value: Math.round(sc.usdPrice * 100) / 100 });
+      if(p.sellPrice != null) attrs.push({ id: MS_PRICE_ATTRS.sellPrice, value: p.sellPrice });
+      if(p.secondaryPrice != null) attrs.push({ id: MS_PRICE_ATTRS.secondaryPrice, value: p.secondaryPrice });
+      if(pachete.pachet1 != null) attrs.push({ id: MS_PRICE_ATTRS.pachet1, value: Math.round(pachete.pachet1 * 100) / 100 });
+      if(pachete.pachet2 != null) attrs.push({ id: MS_PRICE_ATTRS.pachet2, value: Math.round(pachete.pachet2 * 100) / 100 });
+    }
+    if(pachete.pachet3 != null) attrs.push({ id: MS_PRICE_ATTRS.pachet3, value: Math.round(pachete.pachet3 * 100) / 100 });
+    return attrs;
+  }
+  function msSnapshotFor(msId){
+    var c = msAttrsCache[msId];
+    return (c && c !== 'loading' && c.attrs) ? c : null;
+  }
+  var MS_PUSH_COST_IDS = {};
+  MS_PUSH_COST_IDS[MS_PRICE_ATTRS.buyPriceMdl] = true;
+  MS_PUSH_COST_IDS[MS_PRICE_ATTRS.buyPriceUsd] = true;
+  // Planul de trimitere: pentru fiecare produs, cîmpurile care diferă de instantaneul MoySklad. Un produs
+  // intră în plan doar dacă îi diferă un preț de vînzare (sau, cu MS_PUSH_COST_TRIGGERS, orice cîmp).
+  // Un produs fără instantaneu (citirea din fundal n-a reușit) nu poate fi comparat — se trimite complet,
+  // ca înainte. Sincron și fără cereri de rețea.
+  function planPushChanges(o, keys){
+    var items = [], unchanged = 0, costOnly = 0, unverified = 0;
+    keys.forEach(function(k){
+      var p = state.products[k], mp = moyskladLookup(p);
+      if(!mp) return;
+      var all = buildPushAttrs(o, k);
+      if(!all.length) return;
+      var snap = msSnapshotFor(mp.id);
+      if(!snap){
+        unverified++;
+        items.push({ k: k, p: p, mp: mp, attrs: all, old: null });
+        return;
+      }
+      var changed = all.filter(function(a){
+        var cur = snap.attrs[a.id];
+        return cur == null || Math.abs(cur - a.value) > 0.005;
+      });
+      if(!changed.length){ unchanged++; return; }
+      var priceChanged = changed.some(function(a){ return !MS_PUSH_COST_IDS[a.id]; });
+      if(!priceChanged && !MS_PUSH_COST_TRIGGERS){ costOnly++; return; }
+      items.push({ k: k, p: p, mp: mp, attrs: changed, old: snap.attrs });
+    });
+    return { items: items, unchanged: unchanged, costOnly: costOnly, unverified: unverified };
+  }
   window.ptPushPricesToMoySklad = async function(orderId){
     if(msPriceSyncBusy || msPrepareBusy) return;
     var o = state.orders.find(function(x){ return x.id === orderId; });
@@ -5014,11 +5084,37 @@
     if(!keys.length){ ptToast(ambiguousNamesPush.length ? ('Niciun produs din comandă nu poate fi trimis: ' + ambiguousNamesPush.length + ' au barcode duplicat în MoySklad, restul nu sînt legate de MoySklad (vezi lista de sub tabel).') : 'Niciun produs din comandă nu e legat de MoySklad — verifică barcode-urile produselor.', false); lastMsSyncFailed = (skippedNamesPush.length || ambiguousNamesPush.length) ? { orderId: orderId, type: 'push', failedNames: [], skippedNames: skippedNamesPush, ambiguousNames: ambiguousNamesPush } : null; renderOrderDetailTable(); return; }
     var testNote = PUSH_ONLY_PACHET3_TEST ? ' TEST DE SIGURANȚĂ: se trimite doar cîmpul Pachet 3, restul rămîn neatinse.' : '';
     var ambiguousNote = ambiguousNamesPush.length ? ('\n\n⚠ ' + ambiguousNamesPush.length + ' produse NU se trimit — au barcode duplicat în MoySklad (nu se știe la care din ele să scrie): ' + ambiguousNamesPush.slice(0, 5).join('; ') + (ambiguousNamesPush.length > 5 ? '…' : '') + '\nCorectează duplicatul în MoySklad (tab Produse MoySklad → Verifică duplicate).') : '';
-    if(!confirm('Trimiți prețurile curente pentru ' + keys.length + ' produse direct în MoySklad?' + testNote + ' Suprascrie cîmpurile de preț existente acolo pentru aceste produse.' + ambiguousNote)) return;
+    // Comparație instantanee cu ce știm că are MoySklad — fără cereri de rețea (vezi planPushChanges).
+    var plan = planPushChanges(o, keys);
+    var unlinkedAmbigNote = (skippedPush ? (' ' + skippedPush + ' nelegate de MoySklad.') : '') + (ambiguousNamesPush.length ? (' ' + ambiguousNamesPush.length + ' cu barcode duplicat în MoySklad.') : '');
+    var costOnlyNote = plan.costOnly ? (plan.costOnly + ' produse au diferit doar Sinecost/Achiziție — nu se trimit.') : '';
+    if(!plan.items.length){
+      lastMsSyncFailed = (skippedNamesPush.length || ambiguousNamesPush.length) ? { orderId: orderId, type: 'push', failedNames: [], skippedNames: skippedNamesPush, ambiguousNames: ambiguousNamesPush } : null;
+      renderOrderDetailTable();
+      ptToast('Nimic de trimis — niciun preț de vînzare nu diferă de MoySklad (' + (plan.unchanged + plan.costOnly) + ' produse verificate).' + (costOnlyNote ? ' ' + costOnlyNote : '') + unlinkedAmbigNote, true);
+      return;
+    }
+    var diffLines = plan.items.slice(0, 8).map(function(it){
+      var nm = it.p.displayName || it.k;
+      if(nm.length > 38) nm = nm.slice(0, 38) + '…';
+      var parts = it.attrs.map(function(a){
+        var before = (it.old && it.old[a.id] != null) ? it.old[a.id] : '—';
+        return (MS_PUSH_LABELS[a.id] || a.id) + ' ' + before + ' → ' + a.value;
+      });
+      return '• ' + nm + ': ' + parts.join('; ');
+    });
+    var confirmText = 'Trimiți în MoySklad ' + plan.items.length + ' produse modificate' +
+      ((plan.unchanged + plan.costOnly) ? (' (alte ' + (plan.unchanged + plan.costOnly) + ' nu s-au schimbat și NU se trimit)') : '') + '?' + testNote +
+      '\n\n' + diffLines.join('\n') + (plan.items.length > 8 ? ('\n… și încă ' + (plan.items.length - 8) + ' produse') : '') +
+      '\n\nSe suprascriu în MoySklad doar cîmpurile afișate mai sus (cele care diferă).' +
+      (plan.unverified ? ('\n\n' + plan.unverified + ' produse n-au putut fi comparate cu MoySklad (datele lor n-au fost încă citite de acolo) — pentru ele se trimit toate cîmpurile.') : '') +
+      (costOnlyNote ? ('\n\n' + costOnlyNote) : '') +
+      ambiguousNote;
+    if(!confirm(confirmText)) return;
     msPriceSyncBusy = true;
     setMsSyncBtn('pt-ms-push-btn', true, '⏳ Se trimit…', '📤 Trimite prețurile în MoySklad');
     setMsSyncBtn('pt-ms-import-btn', true, '', '📥 Importă prețuri din MoySklad');
-    ptToast('Se trimit prețurile în MoySklad (' + keys.length + ' produse)' + (PUSH_ONLY_PACHET3_TEST ? ' — doar Pachet 3, test' : '') + '…', true);
+    ptToast('Se trimit prețurile în MoySklad (' + plan.items.length + ' produse modificate)' + (PUSH_ONLY_PACHET3_TEST ? ' — doar Pachet 3, test' : '') + '…', true);
     var sent = 0, failed = 0, firstErr = null, failedNamesPush = [];
     try {
       // Concurență redusă (de la 4 la 3, ca la import) — setAttrs face o CITIRE plus o SCRIERE la
@@ -5026,22 +5122,9 @@
       // era dublă față de numărul afișat aici. Plus o reîncercare tăcută pe eșec, la fel ca la
       // import — numărul de eșecuri raportat varia mult între încercări (8, apoi 6, apoi 11 din 37)
       // exact tiparul unei limite de rată MoySklad, nu al unei erori consistente per produs.
-      await runWithConcurrency(keys, 3, async function(k){
-        var p = state.products[k];
-        var mp = moyskladLookup(p);
-        var sc = getOrderLineSinecost(o, k);
-        var pachete = computeOrderRowPachete(p, sc);
-        var attrsToSet = [];
-        if(!PUSH_ONLY_PACHET3_TEST){
-          if(sc.cost != null) attrsToSet.push({ id: MS_PRICE_ATTRS.buyPriceMdl, value: Math.round(sc.cost) });
-          if(sc.usdPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.buyPriceUsd, value: Math.round(sc.usdPrice * 100) / 100 });
-          if(p.sellPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.sellPrice, value: p.sellPrice });
-          if(p.secondaryPrice != null) attrsToSet.push({ id: MS_PRICE_ATTRS.secondaryPrice, value: p.secondaryPrice });
-          if(pachete.pachet1 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet1, value: Math.round(pachete.pachet1 * 100) / 100 });
-          if(pachete.pachet2 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet2, value: Math.round(pachete.pachet2 * 100) / 100 });
-        }
-        if(pachete.pachet3 != null) attrsToSet.push({ id: MS_PRICE_ATTRS.pachet3, value: Math.round(pachete.pachet3 * 100) / 100 });
-        if(!attrsToSet.length) return;
+      await runWithConcurrency(plan.items, 3, async function(it){
+        var k = it.k, p = it.p, mp = it.mp;
+        var attrsToSet = it.attrs; // doar cîmpurile care diferă de MoySklad (vezi planPushChanges)
         try {
           var r = await moyskladPost('setAttrs', { id: mp.id, attributes: attrsToSet });
           if(!r.ok){
@@ -5069,14 +5152,24 @@
             failedNamesPush.push(p.displayName || k);
             if(!firstErr) firstErr = 'valoare neconfirmată la ' + (p.displayName || k) + ' — verifică manual în MoySklad';
             console.error('ptPushPricesToMoySklad: valoare neconfirmată pentru', p.displayName, k, { trimis: attrsToSet, confirmat: confirmed });
+            // Starea reală din MoySklad nu o mai știm sigur — scoatem instantaneul, ca următoarea
+            // trimitere să-l citească din nou în loc să compare cu o valoare învechită.
+            delete msAttrsCache[mp.id];
             return;
+          }
+          // Ținem instantaneul local la zi cu ce tocmai s-a confirmat în MoySklad — altfel o a doua
+          // trimitere imediată ar vedea aceleași diferențe și ar rescrie aceleași valori.
+          var snapAfter = msSnapshotFor(mp.id);
+          if(snapAfter){
+            attrsToSet.forEach(function(a){ snapAfter.attrs[a.id] = confirmed[a.id]; });
+            snapAfter.at = Date.now();
           }
           sent++;
         } catch(e){ failed++; failedNamesPush.push(p.displayName || k); if(!firstErr) firstErr = humanMsError(String(e)); }
       });
       lastMsSyncFailed = (failedNamesPush.length || skippedNamesPush.length || ambiguousNamesPush.length) ? { orderId: orderId, type: 'push', failedNames: failedNamesPush, skippedNames: skippedNamesPush, ambiguousNames: ambiguousNamesPush } : null;
       renderOrderDetailTable();
-      ptToast('Prețuri trimise în MoySklad: ' + sent + ' produse' + (failed?(', ' + failed + ' eșuate — ' + firstErr):'') + (skippedPush?(', ' + skippedPush + ' nelegate de MoySklad'):'') + (ambiguousNamesPush.length?(', ' + ambiguousNamesPush.length + ' sărite — barcode duplicat în MoySklad'):'') + '.', true);
+      ptToast('Prețuri trimise în MoySklad: ' + sent + ' produse modificate' + ((plan.unchanged + plan.costOnly)?(', ' + (plan.unchanged + plan.costOnly) + ' nemodificate (sărite)'):'') + (failed?(', ' + failed + ' eșuate — ' + firstErr):'') + (skippedPush?(', ' + skippedPush + ' nelegate de MoySklad'):'') + (ambiguousNamesPush.length?(', ' + ambiguousNamesPush.length + ' sărite — barcode duplicat în MoySklad'):'') + '.', true);
     } finally {
       msPriceSyncBusy = false;
       setMsSyncBtn('pt-ms-import-btn', false, '', '📥 Importă prețuri din MoySklad');
