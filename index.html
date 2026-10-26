@@ -230,6 +230,11 @@
   #pt-root .pt-orders-table th { background: var(--panel-2); border-bottom: 1px solid var(--border); }
   #pt-root .pt-orders-table td { border-top: 1px solid var(--border-soft); vertical-align: middle; }
   #pt-root .pt-orders-table tr.row-open td { border-top-color: transparent; }
+  /* Comenzile deja recepționate stau la sfîrșitul listei, estompate (ca documentele „fără provedenie"
+     din MoySklad) — se evidențiază doar cele care n-au ajuns încă. La hover sau deschise revin la normal. */
+  #pt-root .pt-orders-table tr.row-received:not(.row-open) td { opacity: .55; transition: opacity .12s; }
+  #pt-root .pt-orders-table tr.row-received:not(.row-open):hover td { opacity: 1; }
+  #pt-root .pt-orders-table tr.pt-orders-divider td { background: var(--panel-2); padding: 5px 10px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-soft); }
   #pt-root .pt-freight-pill { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; font-size: 11px; padding: 3px 9px; border-radius: 11px; white-space: nowrap; border: 1px solid transparent; }
   #pt-root .pt-transit-pill { display: inline-flex; align-items: stretch; font-size: 11.5px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; white-space: nowrap; }
   #pt-root .pt-transit-pill-left { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; font-weight: 600; }
@@ -4631,7 +4636,14 @@
     // Comanda deschisă capătă tratamentul standard de "rînd deschis" (fundal tintat + bară de
     // accent, regula 2a) DOAR pe rîndul-rezumat, în lista de mai sus — nu și pe panoul de detaliu
     // de dedesubt, ca să nu amestece vizual toate cîmpurile/panourile din interior unele cu altele.
-    state.orders.forEach(function(o){
+    // Comenzile care n-au ajuns încă sus, cele recepționate jos (ordinea dintre ele rămîne cea de pînă acum).
+    // Sortarea se refă la fiecare randare, deci o comandă marcată „Recepționată" coboară singură.
+    var pendingOrders = state.orders.filter(function(o){ return o.status !== 'received'; });
+    var receivedOrders = state.orders.filter(function(o){ return o.status === 'received'; });
+    pendingOrders.concat(receivedOrders).forEach(function(o, idx){
+      if(idx === pendingOrders.length && pendingOrders.length && receivedOrders.length){
+        listHtml += '<tr class="pt-orders-divider"><td colspan="10">Recepționate · ' + receivedOrders.length + '</td></tr>';
+      }
       ensureOrderStatusChecked(o);
       var totalStr = Object.keys(o.totals).map(function(c){ return fmt(o.totals[c]) + ' ' + c; }).join(' + ');
       var overdue = o.status !== 'received' && o.eta && o.eta < today;
@@ -4642,7 +4654,7 @@
       var etaCell = o.eta
         ? ('<span class="num" style="' + (overdue?'color:var(--bad)':'') + '" title="' + (overdue?'întârziat':'sosire estimată') + '">' + fmtDateDMY(o.eta) + '</span>')
         : '<span style="color:var(--text-dim)">—</span>';
-      listHtml += '<tr class="' + (isOpen?'row-open':'') + '">' +
+      listHtml += '<tr class="' + (isOpen?'row-open':'') + (o.status === 'received' ? ' row-received' : '') + '">' +
         '<td style="padding:9px 10px"><span class="num" style="font-size:12px;color:var(--text-soft)">' + fmtDateDMY(o.date) + '</span></td>' +
         '<td style="padding:9px 10px"><span style="font-size:13px;font-weight:' + (isOpen?'600':'500') + '">' + escAttr(supplierName(o.supplierId)) + '</span></td>' +
         '<td style="padding:9px 10px;text-align:right"><span class="num" style="font-size:12.5px">' + o.lines.length + '</span></td>' +
