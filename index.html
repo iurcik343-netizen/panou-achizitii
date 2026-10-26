@@ -235,6 +235,24 @@
   #pt-root .pt-orders-table tr.row-received:not(.row-open) td { opacity: .55; transition: opacity .12s; }
   #pt-root .pt-orders-table tr.row-received:not(.row-open):hover td { opacity: 1; }
   #pt-root .pt-orders-table tr.pt-orders-divider td { background: var(--panel-2); padding: 5px 10px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-soft); }
+  /* Editor de prețuri (Produse MoySklad → brand → «💲 Prețuri») */
+  #pt-root .pt-pe-table { min-width: 1180px; }
+  #pt-root .pt-pe-table td { padding: 7px 8px; }
+  #pt-root .pt-pe-cell { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+  #pt-root .pt-pe-cell input.pt-pe-in { width: 84px; margin: 0; padding: 5px 6px; text-align: right; font-family: var(--mono); font-size: 12.5px; }
+  #pt-root .pt-pe-cell input.pt-pe-pct { width: 54px; margin: 0; padding: 3px 4px; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--text-soft); }
+  #pt-root .pt-pe-pctwrap { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; color: var(--text-soft); }
+  #pt-root .pt-pe-cell input.pt-pe-edited { border-color: var(--accent); background: var(--accent-tint); color: var(--accent-dark); font-weight: 600; }
+  #pt-root tr.pt-pe-row-changed td:first-child { box-shadow: inset 3px 0 0 var(--accent), 2px 0 4px rgba(0,0,0,.05); }
+  #pt-root .pt-pe-overlay { position: fixed; inset: 0; z-index: 9000; background: rgba(20,22,32,.45); display: flex; align-items: flex-start; justify-content: center; padding: 5vh 12px; overflow: auto; }
+  #pt-root .pt-pe-modal { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); width: min(920px, 100%); padding: 18px 20px; }
+  #pt-root .pt-pe-modal h2 { margin: 0 0 6px; }
+  #pt-root .pt-pe-hint { color: var(--text-soft); font-size: 12.5px; line-height: 1.5; margin-bottom: 8px; }
+  #pt-root .pt-pe-chg { padding: 7px 0; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
+  #pt-root .pt-pe-chip { display: inline-block; margin: 3px 6px 0 0; padding: 2px 8px; border: 1px solid var(--border); border-radius: 12px; font-size: 11.5px; background: var(--panel-2); }
+  #pt-root .pt-pe-chip s { color: var(--text-soft); }
+  #pt-root .pt-pe-warn { background: var(--bad-bg); border: 1px solid var(--bad); color: var(--bad); border-radius: var(--radius-md); padding: 8px 12px; font-size: 12px; margin: 10px 0; line-height: 1.5; }
+  #pt-root textarea.pt-pe-msg { width: 100%; box-sizing: border-box; min-height: 170px; font-family: var(--mono); font-size: 12.5px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel); color: var(--text); resize: vertical; }
   #pt-root .pt-freight-pill { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; font-size: 11px; padding: 3px 9px; border-radius: 11px; white-space: nowrap; border: 1px solid transparent; }
   #pt-root .pt-transit-pill { display: inline-flex; align-items: stretch; font-size: 11.5px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; white-space: nowrap; }
   #pt-root .pt-transit-pill-left { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; font-weight: 600; }
@@ -682,6 +700,11 @@
     if(saveInProgress){
       e.preventDefault();
       e.returnValue = 'Modificările încă se salvează — dacă pleci acum, s-ar putea să se piardă.';
+      return e.returnValue;
+    }
+    if(typeof peEdits !== 'undefined' && peEdits && Object.keys(peEdits).length){
+      e.preventDefault();
+      e.returnValue = 'Ai modificări de preț netrimise în MoySklad — dacă pleci acum, se pierd.';
       return e.returnValue;
     }
   });
@@ -1631,7 +1654,7 @@
       // reclamată ("sare sus" la editare). Amânăm din nou; se reia singură imediat ce dă click
       // alături (editarea lui declanșează oricum propria randare, imediată, separat de asta).
       var active = document.activeElement;
-      if(active && active.tagName === 'INPUT' && active.closest && active.closest('#pt-order-detail-table')){
+      if(active && active.tagName === 'INPUT' && active.closest && (active.closest('#pt-order-detail-table') || (catalogPriceMode && active.closest('#tab-catalog')))){
         rerenderVisibleTabsDebounced();
         return;
       }
@@ -2062,6 +2085,7 @@
   var NO_BRAND = '__no_brand__';
   var catalogShowHiddenBrands = false;
   var catalogShowDuplicates = false;
+  var catalogPriceMode = false; // editorul de prețuri pentru brandul deschis (vezi ptPeEnter)
   var catalogShowHiddenProducts = false;
   function hiddenBrandIds(){ return state.settings.hiddenMoyskladBrandIds || (state.settings.hiddenMoyskladBrandIds = []); }
   function hiddenProductIds(){ return state.settings.hiddenMoyskladProductIds || (state.settings.hiddenMoyskladProductIds = []); }
@@ -2166,6 +2190,7 @@
     selectedProductIds = {};
     catalogSearchTerm = '';
     catalogShowHiddenProducts = false;
+    catalogPriceMode = false;
     renderCatalog();
   };
   // Vizualizările secundare din tab-ul Produse MoySklad (arhivate, duplicate). Înainte erau
@@ -2184,6 +2209,7 @@
   };
   window.ptBackToBrands = function(){
     selectedBrandId = null;
+    catalogPriceMode = false;
     selectedProductIds = {};
     catalogShowHiddenBrands = false;
     catalogShowDuplicates = false;
@@ -2366,7 +2392,7 @@
     var hiddenInBrandCount = brandProductIds.filter(function(id){ return hProducts.indexOf(id) !== -1; }).length;
     html += '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
       '<div><button class="icon-link" onclick="ptBackToBrands()">◀ Toate brandurile</button> <h2 style="display:inline;margin-left:8px">' + escAttr(brandName) + '</h2></div>' +
-      '<span><button class="btn-outline" onclick="ptArchiveBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">' + ICON_ARCHIVE + ' Arhivează tot brandul (' + brandProductIds.length + ')</button> ' +
+      '<span>' + (catalogPriceMode ? '<button class="btn-outline" onclick="ptPeExit()">◀ Înapoi la produse</button> ' : '<button class="btn-primary" onclick="ptPeEnter()" title="Vezi și modifică toate prețurile produselor din acest brand, cu procente">💲 Prețuri</button> ') + '<button class="btn-outline" onclick="ptArchiveBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">' + ICON_ARCHIVE + ' Arhivează tot brandul (' + brandProductIds.length + ')</button> ' +
       (selectedBrandId !== NO_BRAND ? '<button class="icon-link" onclick="ptRenameBrand(\'' + selectedBrandId + '\',\'' + jsAttrEscape(brandName) + '\')">' + ICON_EDIT + ' redenumește</button>' : '') + '</span>' +
       '</div>';
 
@@ -2384,10 +2410,27 @@
       var hay = normName(p.name) + ' ' + (p.barcodes||[]).join(' ') + ' ' + (p.article||'') + ' ' + (p.code||'');
       return hay.indexOf(q) !== -1;
     });
-    var RENDER_LIMIT = 200;
+    var RENDER_LIMIT = catalogPriceMode ? 100 : 200; // în editorul de prețuri fiecare rînd cere o citire din MoySklad — afișăm mai puține
     var truncated = filtered.length > RENDER_LIMIT;
     var visible = truncated ? filtered.slice(0, RENDER_LIMIT) : filtered;
     if(truncated) html += '<div style="background:var(--rank3-bg);color:var(--rank3);border:1px solid var(--rank3);border-radius:6px;padding:4px 10px;font-size:10.5px;margin-bottom:8px;display:inline-block">' + filtered.length + ' produse — afișez primele ' + RENDER_LIMIT + '. Caută pentru restul.</div><div style="flex-basis:100%"></div>';
+
+    if(catalogPriceMode){
+      // ---- EDITOR DE PREȚURI ----
+      peLoadVisible(visible);
+      html += peToolbarHtml() + peTableHtml(visible);
+      setInnerHtmlKeepingFocus(el, html);
+      var peSearch = document.getElementById('pt-catalog-search');
+      if(peSearch){
+        peSearch.addEventListener('input', function(e){
+          catalogSearchTerm = e.target.value;
+          renderCatalog();
+          var i2 = document.getElementById('pt-catalog-search');
+          i2.focus(); i2.setSelectionRange(i2.value.length, i2.value.length);
+        });
+      }
+      return;
+    }
 
     var selCount = Object.keys(selectedProductIds).length;
     if(selCount > 0 && !catalogShowHiddenProducts){
@@ -5104,6 +5147,466 @@
     });
     return { items: items, unchanged: unchanged, costOnly: costOnly, unverified: unverified };
   }
+  // ================= EDITOR DE PREȚURI (tab «Produse MoySklad» → brand → «💲 Prețuri») =================
+  // Toate tipurile de preț ale produsului din MoySklad, editabile cu aceeași tehnologie cu % ca în Comenzi:
+  // fiecare preț derivat (Preventiv, Beauty Expo, Magazin și Online, Pachet I/II/III) are un procent de
+  // reducere față de Prețul de vînzare. Editezi prețul → se recalculează procentul; editezi procentul → se
+  // recalculează prețul; editezi Prețul de vînzare → toate prețurile derivate se recalculează păstrîndu-și
+  // procentul (decis explicit de proprietar, inclusiv pentru «Magazin și Online»). Se trimit în MoySklad
+  // DOAR cîmpurile modificate, după o confirmare cu lista modificărilor. Dacă s-a schimbat Prețul de vînzare
+  // sau «Magazin și Online» (prețul cu reducere online/magazine), se pregătește mesajul standard pentru magazin.
+  // Modificările nesalvate stau doar în memorie (peEdits) — beforeunload avertizează dacă există.
+  var PE_SNAPSHOT_MAX_AGE_MS = 5 * 60 * 1000; // la intrarea în editor, prețurile citite acum mai mult de atît se citesc din nou
+  var PE_LOG_MAX = 300;                       // cîte modificări păstrăm în jurnalul de audit (state.settings.priceChangeLog)
+  var PE_MSG_KEY = 'pt_last_store_message_v1';
+  var PE_FIELDS = [
+    { key: 'buyUsd', id: MS_PRICE_ATTRS.buyPriceUsd,      label: 'Achiziție $',          kind: 'cost' },
+    { key: 'buyMdl', id: MS_PRICE_ATTRS.buyPriceMdl,      label: 'Sinecost MDL',         kind: 'cost' },
+    { key: 'sell',   id: MS_PRICE_ATTRS.sellPrice,        label: 'Preț de vânzare',      kind: 'sell', notify: true },
+    { key: 'prev',   id: MS_PRICE_ATTRS.secondaryPrice,   label: 'Preventiv (reduceri)', kind: 'derived', whole: true },
+    { key: 'expo',   id: 'dd492735-54df-4aa4-b4b8-91ded02f64ae', label: 'Beauty Expo',  kind: 'derived', whole: true },
+    { key: 'shop',   id: 'f6f7183f-8e12-48df-acf8-c1cae302a64b', label: 'Magazin și Online', kind: 'derived', whole: true, notify: true },
+    { key: 'p1',     id: MS_PRICE_ATTRS.pachet1,          label: 'Pachet I',             kind: 'derived' },
+    { key: 'p2',     id: MS_PRICE_ATTRS.pachet2,          label: 'Pachet II',            kind: 'derived' },
+    { key: 'p3',     id: MS_PRICE_ATTRS.pachet3,          label: 'Pachet III',           kind: 'derived' }
+  ];
+  var PE_BY_KEY = {}, PE_BY_ID = {};
+  PE_FIELDS.forEach(function(f){ PE_BY_KEY[f.key] = f; PE_BY_ID[f.id] = f; });
+  var PE_SELL = PE_BY_KEY.sell, PE_SHOP = PE_BY_KEY.shop, PE_COST_MDL = PE_BY_KEY.buyMdl;
+  var peEdits = {};          // msId -> { vals: {externalCode: număr nou}, pcts: {externalCode: % reducere față de Prețul de vînzare} }
+  var peModalEl = null;
+  var peModalBusy = false;
+
+  function peNum(v){ return (v == null || !isFinite(v)) ? null : Number(v); }
+  function peFmt(v){ v = peNum(v); if(v === null) return ''; return Number.isInteger(v) ? String(v) : (Math.round(v * 100) / 100).toFixed(2); }
+  // În MoySklad un preț de vînzare 0 înseamnă „necompletat" — în tabel îl arătăm gol; la costuri, 0 e o valoare reală.
+  function peShow(f, v){ v = peNum(v); if(v === null || (v === 0 && f.kind !== 'cost')) return ''; return peFmt(v); }
+  function pePctFmt(p){ p = peNum(p); if(p === null) return ''; var r = Math.round(p * 10) / 10; return String(r); }
+  function peOrig(msId, f){ var s = msSnapshotFor(msId); return s ? peNum(s.attrs[f.id]) : null; }
+  function peVal(msId, f){ var e = peEdits[msId]; if(e && e.vals[f.id] !== undefined) return e.vals[f.id]; return peOrig(msId, f); }
+  function peProduct(msId){ for(var i = 0; i < catalogProducts.length; i++){ if(catalogProducts[i].id === msId) return catalogProducts[i]; } return null; }
+  // Procentul de reducere implicit al unui preț față de Prețul de vînzare. Prețurile din MoySklad sînt rotunjite
+  // (Preventiv la leu întreg, Pachetele la 2 zecimale), deci din 338 / 398 ar ieși 15,08% — dacă un procent
+  // „rotund" (întreg sau .5) reproduce exact prețul după rotunjire, îl folosim pe el (15%), ca să nu se strecoare
+  // abateri la recalcularea din alt Preț de vînzare.
+  function peDerivePct(sell, v){
+    if(sell == null || sell <= 0 || v == null || v <= 0) return null;
+    var exact = (1 - v / sell) * 100;
+    var cand = Math.round(exact * 2) / 2;
+    if(cand >= 0 && cand < 100){
+      var calc = sell * (1 - cand / 100);
+      var ok = Number.isInteger(v) ? (Math.round(calc) === v) : (Math.abs(Math.round(calc * 100) / 100 - v) < 0.0051);
+      if(ok) return cand;
+    }
+    return exact;
+  }
+  function pePct(msId, f){
+    var e = peEdits[msId];
+    if(e && e.pcts[f.id] !== undefined) return e.pcts[f.id];
+    return peDerivePct(peOrig(msId, PE_SELL), peOrig(msId, f));
+  }
+  // Leu întreg pentru prețurile care în MoySklad sînt întregi (sau încă necompletate), 2 zecimale pentru rest.
+  function peRoundVal(f, v, orig){
+    // + epsilon: 325 × 70 / 100 = 227,49999… în virgulă mobilă, dar ca preț înseamnă 227,5 → 228.
+    if(f.whole && (orig == null || Number.isInteger(orig))) return Math.round(v + 1e-9);
+    return Math.round(v * 100 + 1e-7) / 100;
+  }
+  function peEnsure(msId){ return peEdits[msId] || (peEdits[msId] = { vals: {}, pcts: {} }); }
+  // Scoate din modificări cîmpurile care au ajuns la valoarea inițială (ex: ai tastat înapoi prețul vechi).
+  function peNormalize(msId){
+    var e = peEdits[msId];
+    if(!e) return;
+    Object.keys(e.vals).forEach(function(id){
+      var o = peOrig(msId, PE_BY_ID[id]);
+      if(o != null && Math.abs(o - e.vals[id]) <= 0.005){ delete e.vals[id]; delete e.pcts[id]; }
+    });
+    if(!Object.keys(e.vals).length) delete peEdits[msId];
+  }
+  function peSetSell(msId, v){
+    var e = peEnsure(msId);
+    // Înghețăm procentele CURENTE ale prețurilor derivate (doar la cele care au preț acum), apoi recalculăm din noul preț.
+    var frozen = {};
+    PE_FIELDS.forEach(function(f){
+      if(f.kind !== 'derived') return;
+      var cur = peVal(msId, f);
+      if(cur == null || cur <= 0) return;
+      var pct = pePct(msId, f);
+      if(pct != null) frozen[f.id] = pct;
+    });
+    e.vals[PE_SELL.id] = v;
+    Object.keys(frozen).forEach(function(id){
+      var f = PE_BY_ID[id];
+      e.pcts[id] = frozen[id];
+      e.vals[id] = peRoundVal(f, v * (100 - frozen[id]) / 100, peOrig(msId, f));
+    });
+    peNormalize(msId);
+  }
+  function peSetPrice(msId, f, v){
+    var e = peEnsure(msId);
+    e.vals[f.id] = v;
+    if(f.kind === 'derived'){
+      var s = peVal(msId, PE_SELL);
+      if(s != null && s > 0) e.pcts[f.id] = (1 - v / s) * 100; else delete e.pcts[f.id];
+    }
+    peNormalize(msId);
+  }
+  function peSetPct(msId, f, pct){
+    var s = peVal(msId, PE_SELL);
+    var e = peEnsure(msId);
+    e.pcts[f.id] = pct;
+    e.vals[f.id] = peRoundVal(f, s * (100 - pct) / 100, peOrig(msId, f));
+    peNormalize(msId);
+  }
+  function peClearField(msId, f){
+    var e = peEdits[msId];
+    if(!e) return;
+    if(f.kind === 'sell'){
+      var os = peOrig(msId, PE_SELL);
+      if(os != null) peSetSell(msId, os); // înapoi la prețul inițial; prețurile derivate revin odată cu el
+      else { delete e.vals[f.id]; peNormalize(msId); }
+      return;
+    }
+    delete e.vals[f.id]; delete e.pcts[f.id];
+    peNormalize(msId);
+  }
+  function peIsChanged(msId, f){ var e = peEdits[msId]; return !!(e && e.vals[f.id] !== undefined); }
+  function peCounts(){
+    var products = 0, fields = 0;
+    Object.keys(peEdits).forEach(function(id){ products++; fields += Object.keys(peEdits[id].vals).length; });
+    return { products: products, fields: fields };
+  }
+  function peEnsureLoaded(msId){
+    var c = msAttrsCache[msId];
+    if(c && c !== 'loading' && c.attrs) return;
+    ensureMsAttrsLoaded(msId);
+  }
+
+  // ---- Randare ----
+  function peCellHtml(msId, f){
+    var v = peVal(msId, f), changed = peIsChanged(msId, f);
+    var title = changed ? ('Era: ' + (peShow(f, peOrig(msId, f)) || '—')) : '';
+    var base = 'pe-' + msId + '-' + f.key;
+    var html = '<div class="pt-pe-cell"><input id="' + base + '-v" class="qty-input pt-pe-in' + (changed ? ' pt-pe-edited' : '') + '" type="number" step="0.01" min="0" value="' + peShow(f, v) + '" title="' + escAttr(title) + '" placeholder="—" onchange="ptPeEdit(\'' + msId + '\',\'' + f.key + '\',\'v\',this.value)">';
+    if(f.kind === 'derived'){
+      html += '<span class="pt-pe-pctwrap"><input id="' + base + '-p" class="qty-input pt-pe-pct' + (changed ? ' pt-pe-edited' : '') + '" type="number" step="0.1" min="0" max="99.9" value="' + pePctFmt(pePct(msId, f)) + '" title="Reducere față de Prețul de vânzare, în %" onchange="ptPeEdit(\'' + msId + '\',\'' + f.key + '\',\'p\',this.value)">%</span>';
+    }
+    return html + '</div>';
+  }
+  function peRowHtml(p){
+    var snap = msSnapshotFor(p.id);
+    var h = '<tr id="pe-row-' + p.id + '"' + (peEdits[p.id] ? ' class="pt-pe-row-changed"' : '') + '>' +
+      '<td><div style="font-weight:600;font-size:12.5px;line-height:1.3" title="' + escAttr(p.name) + '">' + escAttr(p.name) + '</div>' +
+      '<div class="prod-meta">' + (p.barcodes && p.barcodes.length ? 'EAN ' + escAttr(p.barcodes[0]) : 'fără barcode') + ' · stoc ' + (p.stock != null ? p.stock : 0) + '</div></td>';
+    if(!snap){
+      var c = msAttrsCache[p.id];
+      var failed = c && c !== 'loading' && c.error;
+      h += '<td colspan="' + PE_FIELDS.length + '" style="font-size:12px;color:var(--text-soft)">' + (failed ? ('⚠ Nu am putut citi prețurile din MoySklad (' + escAttr(humanMsError(c.error)) + ') <button class="icon-link" onclick="ptPeRetry(\'' + p.id + '\')">↻ Reîncearcă</button>') : 'Se încarcă prețurile din MoySklad…') + '</td></tr>';
+      return h;
+    }
+    PE_FIELDS.forEach(function(f){ h += '<td style="vertical-align:top">' + peCellHtml(p.id, f) + '</td>'; });
+    return h + '</tr>';
+  }
+  function peToolbarHtml(){
+    var n = peCounts();
+    var hasMsg = false;
+    try { hasMsg = !!localStorage.getItem(PE_MSG_KEY); } catch(e){}
+    return '<div id="pt-pe-toolbar" class="panel" style="padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' +
+      '<span id="pt-pe-count" style="font-size:12.5px;color:' + (n.products ? 'var(--accent-dark)' : 'var(--text-soft)') + ';font-weight:600">' + peCountText(n) + '</span>' +
+      '<span style="flex:1"></span>' +
+      (hasMsg ? '<button class="btn-quiet" onclick="ptPeShowLastMessage()" title="Mesajul pregătit la ultima trimitere de prețuri">📋 Ultimul mesaj</button>' : '') +
+      '<button class="btn-quiet" onclick="ptPeShowLog()" title="Ultimele modificări de preț făcute din aplicație">🕘 Istoric</button>' +
+      '<button id="pt-pe-reset" class="btn-outline" onclick="ptPeResetAll()"' + (n.products ? '' : ' disabled') + '>↺ Renunță la toate</button>' +
+      '<button id="pt-pe-review" class="btn-primary" onclick="ptPeReviewOpen()"' + (n.products ? '' : ' disabled') + '>📤 Trimite în MoySklad' + (n.products ? ' (' + n.products + ')' : '') + '</button>' +
+      '</div>' +
+      '<div class="pt-pe-hint" style="margin-bottom:10px">Modifică <b>Prețul de vânzare</b> și toate celelalte prețuri se recalculează cu procentul lor de reducere; poți edita oricare preț sau procent direct. Se trimit în MoySklad <b>doar câmpurile modificate</b> (după o confirmare cu lista lor). Când se schimbă <b>Prețul de vânzare</b> sau <b>Magazin și Online</b>, se pregătește mesajul pentru magazin.</div>';
+  }
+  function peCountText(n){
+    return n.products ? (n.products + (n.products === 1 ? ' produs modificat' : ' produse modificate') + ' · ' + n.fields + (n.fields === 1 ? ' câmp' : ' câmpuri') + ' — nu s-au trimis încă') : 'Nicio modificare';
+  }
+  function peTableHtml(visible){
+    var h = '<div class="panel" style="padding:0"><div class="table-wrap" style="max-height:70vh;overflow-y:auto"><table class="cmp-table sticky-col-table pt-pe-table"><thead><tr><th style="width:250px">Produs</th>';
+    PE_FIELDS.forEach(function(f){
+      var tip = f.notify ? ' title="La schimbare se pregătește mesajul pentru magazin"' : '';
+      h += '<th style="width:104px;text-align:right"' + tip + '>' + escAttr(f.label) + (f.notify ? ' 🔔' : '') + '</th>';
+    });
+    h += '</tr></thead><tbody>';
+    visible.forEach(function(p){ h += peRowHtml(p); });
+    if(!visible.length) h += '<tr><td colspan="' + (PE_FIELDS.length + 1) + '" class="dim">Niciun produs de afișat.</td></tr>';
+    return h + '</tbody></table></div></div>';
+  }
+  function peUpdateToolbar(){
+    var n = peCounts();
+    var c = document.getElementById('pt-pe-count');
+    if(c){ c.textContent = peCountText(n); c.style.color = n.products ? 'var(--accent-dark)' : 'var(--text-soft)'; }
+    var r = document.getElementById('pt-pe-review');
+    if(r){ r.disabled = !n.products; r.textContent = '📤 Trimite în MoySklad' + (n.products ? ' (' + n.products + ')' : ''); }
+    var x = document.getElementById('pt-pe-reset');
+    if(x) x.disabled = !n.products;
+  }
+  // Actualizează în loc cîmpurile unui rînd (fără să-l rescriem — altfel Tab-ul spre următorul cîmp pierdea focusul).
+  function peSyncRow(msId){
+    var row = document.getElementById('pe-row-' + msId);
+    if(!row) return;
+    row.className = peEdits[msId] ? 'pt-pe-row-changed' : '';
+    PE_FIELDS.forEach(function(f){
+      var changed = peIsChanged(msId, f);
+      var v = document.getElementById('pe-' + msId + '-' + f.key + '-v');
+      if(v){
+        var nv = peShow(f, peVal(msId, f));
+        if(v.value !== nv) v.value = nv;
+        v.classList.toggle('pt-pe-edited', changed);
+        v.title = changed ? ('Era: ' + (peShow(f, peOrig(msId, f)) || '—')) : '';
+      }
+      var p = document.getElementById('pe-' + msId + '-' + f.key + '-p');
+      if(p){
+        var np = pePctFmt(pePct(msId, f));
+        if(p.value !== np) p.value = np;
+        p.classList.toggle('pt-pe-edited', changed);
+      }
+    });
+  }
+
+  // ---- Acțiuni ----
+  window.ptPeEnter = function(){
+    catalogPriceMode = true;
+    peLoadedThisEntry = {};
+    renderCatalog();
+  };
+  window.ptPeExit = function(){
+    catalogPriceMode = false;
+    renderCatalog();
+  };
+  // Pregătește produsele afișate: prețurile citite acum mai mult de PE_SNAPSHOT_MAX_AGE_MS se citesc din nou
+  // (altfel am calcula procente și diferențe pe prețuri vechi), iar cele lipsă se încarcă în fundal.
+  function peLoadVisible(visible){
+    var now = Date.now();
+    visible.forEach(function(p){
+      var c = msAttrsCache[p.id];
+      if(c && c !== 'loading' && c.attrs && !peEdits[p.id] && !peLoadedThisEntry[p.id] && (now - (c.at || 0)) > PE_SNAPSHOT_MAX_AGE_MS){
+        delete msAttrsCache[p.id];
+      }
+      peLoadedThisEntry[p.id] = true;
+      peEnsureLoaded(p.id);
+    });
+  }
+  var peLoadedThisEntry = {};
+  window.ptPeRetry = function(msId){
+    delete msAttrsRetries[msId]; delete msAttrsNextRetryAt[msId]; delete msAttrsCache[msId];
+    peEnsureLoaded(msId);
+    renderCatalog();
+  };
+  window.ptPeEdit = function(msId, fkey, kind, raw){
+    var f = PE_BY_KEY[fkey];
+    if(!f || !msSnapshotFor(msId)) return;
+    var s = String(raw == null ? '' : raw).trim().replace(',', '.');
+    if(s === ''){ peClearField(msId, f); peSyncRow(msId); peUpdateToolbar(); return; }
+    var n = Number(s);
+    if(!isFinite(n)){ ptToast('Introdu un număr valid.', false); peSyncRow(msId); return; }
+    if(kind === 'p'){
+      if(n < 0 || n >= 100){ ptToast('Procentul de reducere trebuie să fie între 0 și 99,9.', false); peSyncRow(msId); return; }
+      var sellEff = peVal(msId, PE_SELL);
+      if(!(sellEff > 0)){ ptToast('Setează întâi Prețul de vânzare al produsului, ca să se poată calcula procentul.', false); peSyncRow(msId); return; }
+      peSetPct(msId, f, n);
+    } else {
+      if(n <= 0){ ptToast('Prețul trebuie să fie mai mare ca 0. Golește câmpul ca să renunți la modificare.', false); peSyncRow(msId); return; }
+      if(n > 10000000){ ptToast('Valoare prea mare — verifică numărul introdus.', false); peSyncRow(msId); return; }
+      n = Math.round(n * 100) / 100;
+      if(f.kind === 'sell') peSetSell(msId, n); else peSetPrice(msId, f, n);
+    }
+    peSyncRow(msId); peUpdateToolbar();
+  };
+  window.ptPeResetAll = function(){
+    var n = peCounts();
+    if(!n.products) return;
+    if(!confirm('Renunți la toate cele ' + n.fields + ' modificări (' + n.products + ' produse)? Nimic nu s-a trimis în MoySklad.')) return;
+    peEdits = {};
+    renderCatalog();
+    ptToast('Modificările au fost anulate.', true);
+  };
+
+  // ---- Plan de trimitere + mesajul pentru magazin ----
+  function pePlan(){
+    var items = [], warnings = [];
+    Object.keys(peEdits).forEach(function(msId){
+      var e = peEdits[msId], p = peProduct(msId);
+      if(!msSnapshotFor(msId) || !p) return;
+      var changes = [];
+      PE_FIELDS.forEach(function(f){
+        if(e.vals[f.id] === undefined) return;
+        var to = e.vals[f.id], from = peOrig(msId, f);
+        if(from != null && Math.abs(from - to) <= 0.005) return;
+        changes.push({ f: f, from: from, to: to });
+      });
+      if(!changes.length) return;
+      var fin = { sell: peVal(msId, PE_SELL), shop: peVal(msId, PE_SHOP) };
+      items.push({ msId: msId, p: p, changes: changes, fin: fin });
+      var cost = peVal(msId, PE_COST_MDL);
+      changes.forEach(function(c){
+        if(c.f.kind === 'cost') return;
+        if(cost != null && cost > 0 && c.to < cost) warnings.push(p.name + ' — ' + c.f.label + ' ' + peFmt(c.to) + ' e SUB sinecost (' + peFmt(cost) + ').');
+        if(c.f.kind === 'derived' && fin.sell != null && c.to > fin.sell) warnings.push(p.name + ' — ' + c.f.label + ' ' + peFmt(c.to) + ' e mai mare decât Prețul de vânzare (' + peFmt(fin.sell) + ').');
+        if(c.from != null && c.from > 0 && Math.abs(c.to - c.from) / c.from > 0.5) warnings.push(p.name + ' — ' + c.f.label + ': variație mare (' + peFmt(c.from) + ' → ' + peFmt(c.to) + '). Verifică să nu fie o greșeală de tastare.');
+      });
+    });
+    items.sort(function(a, b){ return a.p.name.localeCompare(b.p.name, undefined, { sensitivity: 'base' }); });
+    return { items: items, warnings: warnings };
+  }
+  // Mesajul standard pentru magazin: doar produsele la care s-a schimbat Prețul de vînzare sau prețul cu reducere
+  // (Magazin și Online). «Preț cu reducere» = Magazin și Online; dacă nu e completat, e egal cu prețul de vînzare.
+  function peStoreMessage(items){
+    var blocks = [];
+    items.forEach(function(it){
+      var sellCh = it.changes.some(function(c){ return c.f === PE_SELL; });
+      var shopCh = it.changes.some(function(c){ return c.f === PE_SHOP; });
+      if(!sellCh && !shopCh) return;
+      var shopShown = (it.fin.shop != null && it.fin.shop > 0) ? it.fin.shop : it.fin.sell;
+      blocks.push('• ' + it.p.name + '\n' +
+        '  ' + (sellCh ? 'Preț de vânzare modificat în: ' : 'Preț de vânzare: ') + peFmt(it.fin.sell) + '\n' +
+        '  ' + (shopCh && !sellCh ? 'Preț cu reducere modificat în: ' : 'Preț cu reducere: ') + peFmt(shopShown));
+    });
+    if(!blocks.length) return '';
+    return '🔔 Prețuri modificate — ' + new Date().toLocaleDateString('ro-RO') + '\n\n' + blocks.join('\n\n');
+  }
+  function peSaveMessage(text){
+    try { localStorage.setItem(PE_MSG_KEY, JSON.stringify({ at: Date.now(), text: text })); } catch(e){}
+  }
+
+  // ---- Fereastra modală (revizuire → trimitere → rezultat) ----
+  function peCloseModal(force){
+    if(peModalBusy && !force) return;
+    if(peModalEl){ peModalEl.remove(); peModalEl = null; }
+  }
+  function peOpenModal(innerHtml){
+    peCloseModal(true);
+    var ov = document.createElement('div');
+    ov.className = 'pt-pe-overlay';
+    ov.innerHTML = '<div class="pt-pe-modal" role="dialog" aria-modal="true">' + innerHtml + '</div>';
+    ov.addEventListener('mousedown', function(e){ if(e.target === ov) peCloseModal(); });
+    (document.getElementById('pt-root') || document.body).appendChild(ov);
+    peModalEl = ov;
+    return ov;
+  }
+  document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && peModalEl) peCloseModal(); });
+  window.ptPeCloseModal = function(){ peCloseModal(); };
+  function peChipsHtml(changes){
+    return changes.map(function(c){
+      return '<span class="pt-pe-chip">' + escAttr(c.f.label) + ' <s>' + (peShow(c.f, c.from) || '—') + '</s> → <b>' + peFmt(c.to) + '</b></span>';
+    }).join('');
+  }
+  function peMessageBoxHtml(text){
+    if(!text) return '';
+    return '<div style="margin-top:14px"><div style="font-size:12px;font-weight:600;margin-bottom:5px">Mesaj pentru magazin <span style="font-weight:400;color:var(--text-soft)">— poți edita textul înainte să-l copiezi</span></div>' +
+      '<textarea id="pt-pe-msg" class="pt-pe-msg">' + escAttr(text) + '</textarea>' +
+      '<div style="margin-top:6px"><button class="btn-outline" onclick="ptPeCopyMessage()">📋 Copiază mesajul</button></div></div>';
+  }
+  window.ptPeCopyMessage = function(){
+    var ta = document.getElementById('pt-pe-msg');
+    if(ta) ptCopyText(ta.value, 'Mesajul');
+  };
+  window.ptPeReviewOpen = function(){
+    if(peModalBusy || msPriceSyncBusy || msPrepareBusy) return;
+    var plan = pePlan();
+    if(!plan.items.length){ ptToast('Nu ai nicio modificare de trimis.', false); return; }
+    var fields = plan.items.reduce(function(a, it){ return a + it.changes.length; }, 0);
+    var warnHtml = plan.warnings.length ? ('<div class="pt-pe-warn"><b>⚠ Verifică înainte să trimiți:</b><br>' + plan.warnings.slice(0, 12).map(escAttr).join('<br>') + (plan.warnings.length > 12 ? ('<br>… și încă ' + (plan.warnings.length - 12)) : '') + '</div>') : '';
+    var html = '<h2>Revizuiește modificările de preț</h2>' +
+      '<div class="pt-pe-hint">' + plan.items.length + (plan.items.length === 1 ? ' produs' : ' produse') + ' · ' + fields + (fields === 1 ? ' câmp' : ' câmpuri') + '. Se scriu în MoySklad <b>doar</b> câmpurile de mai jos.</div>' +
+      warnHtml +
+      '<div style="max-height:42vh;overflow:auto;border-top:1px solid var(--border-soft)">' +
+      plan.items.map(function(it){ return '<div class="pt-pe-chg"><b>' + escAttr(it.p.name) + '</b><div>' + peChipsHtml(it.changes) + '</div></div>'; }).join('') + '</div>' +
+      peMessageBoxHtml(peStoreMessage(plan.items)) +
+      '<div id="pt-pe-progress" style="font-size:12.5px;color:var(--text-soft);margin-top:12px"></div>' +
+      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">' +
+      '<button id="pt-pe-cancel" class="btn-quiet" onclick="ptPeCloseModal()">Anulează</button>' +
+      '<button id="pt-pe-send" class="btn-primary" onclick="ptPeSend()">📤 Trimite în MoySklad (' + plan.items.length + ')</button></div>';
+    peOpenModal(html);
+  };
+  function peLogChanges(item){
+    var log = state.settings.priceChangeLog || (state.settings.priceChangeLog = []);
+    var at = new Date().toISOString();
+    item.changes.forEach(function(c){
+      log.push({ t: at, by: currentUserEmail || '', id: item.msId, name: item.p.name, f: c.f.label, from: c.from, to: c.to });
+    });
+    if(log.length > PE_LOG_MAX) log.splice(0, log.length - PE_LOG_MAX);
+  }
+  window.ptPeSend = async function(){
+    if(peModalBusy || msPriceSyncBusy || msPrepareBusy) return;
+    var plan = pePlan();
+    if(!plan.items.length){ peCloseModal(true); renderCatalog(); return; }
+    var editedMsg = (document.getElementById('pt-pe-msg') || {}).value;
+    peModalBusy = true; msPriceSyncBusy = true;
+    var sendBtn = document.getElementById('pt-pe-send'), cancelBtn = document.getElementById('pt-pe-cancel'), prog = document.getElementById('pt-pe-progress');
+    if(sendBtn){ sendBtn.disabled = true; sendBtn.textContent = '⏳ Se trimit…'; }
+    if(cancelBtn) cancelBtn.disabled = true;
+    var ok = [], failed = [], done = 0;
+    try {
+      // Concurență 3, ca la trimiterea din Comenzi — setAttrs face o citire + o scriere per produs la MoySklad.
+      await runWithConcurrency(plan.items, 3, async function(it){
+        var attrs = it.changes.map(function(c){ return { id: c.f.id, value: c.to }; });
+        try {
+          var r = await moyskladPost('setAttrs', { id: it.msId, attributes: attrs });
+          if(!r.ok){
+            await new Promise(function(res){ setTimeout(res, 1200); });
+            r = await moyskladPost('setAttrs', { id: it.msId, attributes: attrs });
+          }
+          if(!r.ok){ failed.push({ it: it, reason: humanMsError((r.data && (r.data.detail || r.data.error)) || 'eroare necunoscută') }); return; }
+          // Un 200 OK nu garantează că MoySklad a păstrat exact valoarea — comparăm cu ce s-a confirmat salvat.
+          var conf = (r.data && r.data.confirmed) || {};
+          var bad = attrs.filter(function(a){ return conf[a.id] == null || Math.abs(conf[a.id] - a.value) > 0.01; });
+          if(bad.length){
+            delete msAttrsCache[it.msId]; // starea reală din MoySklad nu mai e sigură — se citește din nou
+            failed.push({ it: it, reason: 'MoySklad n-a confirmat valoarea la: ' + bad.map(function(a){ return PE_BY_ID[a.id].label; }).join(', ') + ' — verifică produsul în MoySklad.' });
+            return;
+          }
+          var snap = msSnapshotFor(it.msId);
+          if(snap){ attrs.forEach(function(a){ snap.attrs[a.id] = conf[a.id]; }); snap.at = Date.now(); }
+          delete peEdits[it.msId];
+          peLogChanges(it);
+          ok.push(it);
+        } catch(e){
+          failed.push({ it: it, reason: humanMsError(String(e)) });
+        } finally {
+          done++;
+          if(prog) prog.textContent = 'Se trimit… ' + done + ' / ' + plan.items.length;
+        }
+      });
+    } finally {
+      msPriceSyncBusy = false; peModalBusy = false;
+    }
+    if(ok.length) save();
+    var msgText = '';
+    if(ok.length){
+      msgText = peStoreMessage(ok);
+      // Dacă ai editat textul mesajului în fereastra de revizuire și s-au trimis TOATE produsele, păstrăm editarea.
+      if(msgText && editedMsg && !failed.length) msgText = editedMsg;
+      if(msgText) peSaveMessage(msgText);
+    }
+    var res = '<h2>' + (failed.length ? (ok.length ? 'Trimis parțial' : 'Nu s-a trimis nimic') : '✓ Prețurile au fost trimise') + '</h2>' +
+      '<div class="pt-pe-hint">' + ok.length + ' ' + (ok.length === 1 ? 'produs trimis' : 'produse trimise') + (failed.length ? (' · <b style="color:var(--bad)">' + failed.length + ' eșuate</b>') : '') + '.</div>' +
+      (failed.length ? ('<div class="pt-pe-warn"><b>Eșuate (modificările lor au rămas în tabel, poți reîncerca):</b><br>' + failed.slice(0, 15).map(function(x){ return escAttr(x.it.p.name) + ' — ' + escAttr(x.reason); }).join('<br>') + (failed.length > 15 ? ('<br>… și încă ' + (failed.length - 15)) : '') + '</div>') : '') +
+      (msgText ? peMessageBoxHtml(msgText) : (ok.length ? '<div class="pt-pe-hint" style="margin-top:12px">Nu s-a schimbat nici Prețul de vânzare, nici «Magazin și Online» — nu e nevoie de mesaj pentru magazin.</div>' : '')) +
+      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px"><button class="btn-primary" onclick="ptPeCloseModal()">Închide</button></div>';
+    peOpenModal(res);
+    renderCatalog();
+    ptToast(failed.length ? ('Trimise: ' + ok.length + ', eșuate: ' + failed.length + '.') : ('Prețuri trimise în MoySklad: ' + ok.length + ' produse.'), !failed.length);
+  };
+  window.ptPeShowLastMessage = function(){
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(PE_MSG_KEY)); } catch(e){}
+    if(!saved || !saved.text){ ptToast('Nu există încă un mesaj pregătit.', false); return; }
+    peOpenModal('<h2>Ultimul mesaj pentru magazin</h2><div class="pt-pe-hint">Pregătit la ' + escAttr(new Date(saved.at).toLocaleString('ro-RO')) + '.</div>' + peMessageBoxHtml(saved.text) +
+      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px"><button class="btn-quiet" onclick="ptPeCloseModal()">Închide</button></div>');
+  };
+  window.ptPeShowLog = function(){
+    var log = (state.settings.priceChangeLog || []).slice().reverse().slice(0, 150);
+    var body = log.length ? ('<div style="max-height:60vh;overflow:auto"><table class="cmp-table" style="table-layout:auto"><thead><tr><th>Data</th><th>Cine</th><th>Produs</th><th>Câmp</th><th style="text-align:right">Era</th><th style="text-align:right">Acum</th></tr></thead><tbody>' +
+      log.map(function(l){
+        return '<tr><td class="num" style="white-space:nowrap">' + escAttr(new Date(l.t).toLocaleString('ro-RO')) + '</td><td>' + escAttr(l.by || '—') + '</td><td>' + escAttr(l.name) + '</td><td>' + escAttr(l.f) + '</td><td class="num" style="text-align:right">' + (peFmt(l.from) || '—') + '</td><td class="num" style="text-align:right"><b>' + peFmt(l.to) + '</b></td></tr>';
+      }).join('') + '</tbody></table></div>') : '<div class="panel empty">Nicio modificare de preț făcută încă din aplicație.</div>';
+    peOpenModal('<h2>Istoric modificări de preț</h2><div class="pt-pe-hint">Ultimele ' + log.length + ' modificări trimise din acest editor (se păstrează maximum ' + PE_LOG_MAX + ').</div>' + body +
+      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px"><button class="btn-quiet" onclick="ptPeCloseModal()">Închide</button></div>');
+  };
+
   window.ptPushPricesToMoySklad = async function(orderId){
     if(msPriceSyncBusy || msPrepareBusy) return;
     var o = state.orders.find(function(x){ return x.id === orderId; });

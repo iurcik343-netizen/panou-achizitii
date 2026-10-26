@@ -568,6 +568,14 @@ async function handleSetAttrs(body, baseHeaders, corsHeaders) {
   const productId = body && body.id;
   const updates = (body && body.attributes) || []; // [{ id: externalCode, value: număr real (MDL sau $, nu bani) }]
   if (!productId || !updates.length) return json({ error: 'Lipsește produsul sau lista de atribute.' }, 400, corsHeaders);
+  // Validare și pe server (nu doar în browser): fiecare valoare trebuie să fie un număr finit, între 0 și
+  // 10.000.000 — altfel o greșeală de client (NaN, text, valoare negativă sau absurdă) ar ajunge direct
+  // în prețurile reale din MoySklad.
+  for (const u of updates) {
+    if (!u || typeof u.id !== 'string' || typeof u.value !== 'number' || !isFinite(u.value) || u.value < 0 || u.value > 10000000) {
+      return json({ error: 'Valoare de preț invalidă pentru câmpul ' + (u && u.id) + '.' }, 400, corsHeaders);
+    }
+  }
   const getRes = await msFetch(`${API}/entity/product/${productId}`, { headers: baseHeaders });
   if (!getRes.ok) return json({ error: 'Eroare la citirea produsului din MoySklad', status: getRes.status, detail: await getRes.text() }, 502, corsHeaders);
   const current = await getRes.json();
