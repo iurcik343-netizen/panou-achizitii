@@ -1762,6 +1762,27 @@
       if(ro) ro.disconnect();
     };
   }
+  // ================= PRIORITATE: OPERAȚIILE UTILIZATORULUI ÎNAINTEA ÎNCĂRCĂRILOR DE FUNDAL =================
+  // MoySklad limitează cererile SIMULTANE per cont (eroarea 1073 „Превышено ограничение на одновременное
+  // количество запросов", cod 429). La deschiderea unei comenzi mari pornesc zeci de cereri de fundal —
+  // în special istoricul de achiziții, 7–12 secunde fiecare (măsurat) — care ocupau tot bugetul, iar
+  // trimiterea/importul de prețuri sau sincronizarea catalogului stăteau la coadă ori primeau 429
+  // („se trimit foarte greu chiar pentru un singur produs"). Acum: (1) cît timp rulează o operație a
+  // utilizatorului, încărcările de fundal (poze, istoric, atribute) nu pornesc cereri noi; (2) împreună
+  // nu au voie să țină mai mult de MS_BG_MAX_CONCURRENT cereri simultane.
+  var MS_BG_MAX_CONCURRENT = 4;
+  var msBgResumeTimer = null;
+  function msForegroundBusy(){ return !!(msPriceSyncBusy || msPrepareBusy || catalogSyncing); }
+  function msBgActive(){ return imgActive + historyActive + attrsActive; }
+  function msBgCanStart(){ return msBgActive() < MS_BG_MAX_CONCURRENT; }
+  // Cînd se termină o cerere de fundal, eliberează un loc pentru oricare coadă (ordinea: atribute, poze, istoric).
+  function msPumpAllBackground(){ pumpAttrsQueue(); pumpImgQueue(); pumpHistoryQueue(); }
+  // true = încărcările de fundal trebuie să aștepte; se reiau singure după ce se termină operația.
+  function msBgWaiting(){
+    if(!msForegroundBusy()) return false;
+    if(!msBgResumeTimer) msBgResumeTimer = setTimeout(function(){ msBgResumeTimer = null; msPumpAllBackground(); }, 1000);
+    return true;
+  }
   // ================= ÎNCĂRCARE TREPTATĂ A IMAGINILOR LIPSĂ =================
   var imgUrlCache = {};
   var imgQueue = [];
@@ -1781,7 +1802,8 @@
     pumpImgQueue();
   }
   function pumpImgQueue(){
-    while(imgActive < IMG_CONCURRENCY && imgQueue.length){
+    if(msBgWaiting()) return;
+    while(imgActive < IMG_CONCURRENCY && msBgCanStart() && imgQueue.length){
       (function(msProd){
         imgActive++;
         var url = catalogProxyUrl('imgurl=' + encodeURIComponent(msProd.id));
@@ -1790,7 +1812,7 @@
         }).catch(function(){}).then(function(){
           imgUrlCache[msProd.id] = 'done';
           imgActive--;
-          pumpImgQueue();
+          msPumpAllBackground();
           rerenderVisibleTabsDebounced();
         });
       })(imgQueue.shift());
@@ -1845,7 +1867,7 @@
   }
   var historyQueue = [];
   var historyActive = 0;
-  var HISTORY_CONCURRENCY = 6;
+  var HISTORY_CONCURRENCY = 3; // redus de la 6: fiecare cerere de istoric durează 7–12 s la MoySklad
   var HISTORY_CACHE_KEY = 'pt_history_cache_v1';
   var historyCacheSaveTimer = null;
   function saveHistoryCacheDebounced(){
@@ -1869,7 +1891,8 @@
   // fetchedAt și e considerată veche după HISTORY_MAX_AGE_MS; atunci se reîmprospătează în fundal,
   // iar istoricul vechi rămîne afișat pînă sosește cel nou (și rămîne dacă reîmprospătarea eșuează).
   // Intrările vechi din localStorage, fără fetchedAt, se reîmprospătează o dată la prima vizualizare.
-  var HISTORY_MAX_AGE_MS = 30 * 60 * 1000;
+  var HISTORY_MAX_AGE_MS = 6 * 60 * 60 * 1000;           // liste/comenzi: istoric mai vechi de 6 ore se reîmprospătează în fundal
+  var HISTORY_EXPANDED_MAX_AGE_MS = 5 * 60 * 1000;       // un produs deschis explicit (săgeata ▸): mai vechi de 5 minute
   var HISTORY_RETRY_AFTER_FAIL_MS = 10 * 60 * 1000;
   var HISTORY_MAX_RETRIES = 3;
   var HISTORY_RATE_LIMIT_PAUSE_MS = 20000;
@@ -1877,19 +1900,19 @@
   var historyPauseTimer = null;
   var historyRetries = {};
   var historyInFlight = {};
-  function historyEntryFresh(c){
+  function historyEntryFresh(c, maxAgeMs){
     if(!c || !c.rows) return false;
     if(c.retryAt && Date.now() < c.retryAt) return true; // reîmprospătare eșuată recent — nu mai bombardăm
-    return !!(c.fetchedAt && (Date.now() - c.fetchedAt) < HISTORY_MAX_AGE_MS);
+    return !!(c.fetchedAt && (Date.now() - c.fetchedAt) < (maxAgeMs || HISTORY_MAX_AGE_MS));
   }
-  function ensureHistoryLoaded(msId){
+  function ensureHistoryLoaded(msId, maxAgeMs){
     var c = catalogHistoryCache[msId];
     if(c === 'loading' || historyInFlight[msId]) return;
     // Prima încărcare a eșuat: nu reîncercăm la fiecare randare. O eroare trecătoare (mentenanță
     // MoySklad, limită de rată, conexiune) are retryAt și se reia după HISTORY_RETRY_AFTER_FAIL_MS —
     // altfel istoricul rămînea „Eroare" pînă la reîncărcarea paginii, chiar și după ce MoySklad revenea.
     if(c && c.error && Date.now() < (c.retryAt || Infinity)) return;
-    if(historyEntryFresh(c)) return;
+    if(historyEntryFresh(c, maxAgeMs)) return;
     if(!c) catalogHistoryCache[msId] = 'loading';
     historyInFlight[msId] = true;
     historyQueue.push(msId);
@@ -1911,7 +1934,8 @@
       }
       return;
     }
-    while(historyActive < HISTORY_CONCURRENCY && historyQueue.length){
+    if(msBgWaiting()) return;
+    while(historyActive < HISTORY_CONCURRENCY && msBgCanStart() && historyQueue.length){
       (function(msId){
         historyActive++;
         fetch(catalogProxyUrl('history=' + encodeURIComponent(msId))).then(function(r){ return r.json(); }).then(function(data){
@@ -1933,7 +1957,7 @@
           historyFetchFailed(msId, err && err.message ? err.message : String(err));
         }).then(function(){
           historyActive--;
-          pumpHistoryQueue();
+          msPumpAllBackground();
           rerenderVisibleTabsDebounced();
         });
       })(historyQueue.shift());
@@ -1985,7 +2009,8 @@
       setTimeout(pumpAttrsQueue, attrsGlobalPausedUntil - Date.now() + 50);
       return;
     }
-    while(attrsActive < ATTRS_CONCURRENCY && attrsQueue.length){
+    if(msBgWaiting()) return;
+    while(attrsActive < ATTRS_CONCURRENCY && msBgCanStart() && attrsQueue.length){
       (function(msId){
         attrsActive++;
         fetch(catalogProxyUrl('attrs=' + encodeURIComponent(msId))).then(function(r){ return r.json(); }).then(function(data){
@@ -2009,7 +2034,7 @@
           msAttrsNextRetryAt[msId] = Date.now() + Math.min(30000, 1000 * Math.pow(2, msAttrsRetries[msId]));
         }).then(function(){
           attrsActive--;
-          pumpAttrsQueue();
+          msPumpAllBackground();
           rerenderVisibleTabsDebounced();
         });
       })(attrsQueue.shift());
@@ -2129,7 +2154,7 @@
   window.ptToggleCatalogExpand = function(id){
     expandedCatalogId = (expandedCatalogId === id) ? null : id;
     renderCatalog();
-    if(expandedCatalogId) ensureHistoryLoaded(id);
+    if(expandedCatalogId) ensureHistoryLoaded(id, HISTORY_EXPANDED_MAX_AGE_MS);
   };
   window.ptSelectBrand = function(brandId){
     selectedBrandId = brandId;
@@ -2510,7 +2535,7 @@
     renderCompare();
     if(expandedProductKey && state.settings.moyskladProxyUrl){
       var msProd = moyskladLookup(state.products[key]);
-      if(msProd) ensureHistoryLoaded(msProd.id);
+      if(msProd) ensureHistoryLoaded(msProd.id, HISTORY_EXPANDED_MAX_AGE_MS);
     }
   };
   var mergeOpenKey = null;
@@ -4859,13 +4884,13 @@
     var b = document.getElementById(id);
     if(!b) return;
     b.disabled = busy;
-    b.textContent = busy ? busyLabel : idleLabel;
+    b.textContent = busy ? (busyLabel || idleLabel) : idleLabel;
   }
   // Ținut separat de msPriceSyncBusy: acoperă faza de PREGĂTIRE (sincronizarea automată a catalogului,
   // care poate dura cîteva secunde), ca un al doilea clic în acest interval să nu pornească un al doilea
   // ciclu — msPriceSyncBusy se setează abia după confirmare, cînd începe efectiv scrierea/citirea.
   var msPrepareBusy = false;
-  var MS_PREP_MAX_CATALOG_AGE_MS = 60 * 60 * 1000;   // catalog mai vechi de 1h → resincronizăm înainte
+  var MS_PREP_MAX_CATALOG_AGE_MS = 6 * 60 * 60 * 1000;   // catalog mai vechi de 6h → resincronizăm înainte (sincronizarea durează ~11 s)
   var MS_PREP_RECHECK_UNLINKED_MS = 2 * 60 * 1000;   // produse nelegate: re-verificăm doar dacă ultima sincronizare e mai veche de 2 min
   // Pregătește o comandă pentru import/trimitere de prețuri în MoySklad: (1) sincronizează catalogul
   // AUTOMAT dacă lipsește, e vechi sau unele produse din comandă nu sînt încă legate (înainte,
@@ -5074,8 +5099,12 @@
     var base = state.settings.moyskladProxyUrl;
     if(!base){ ptToast('MoySklad nu e configurat în Setări.', false); return; }
     msPrepareBusy = true;
+    setMsSyncBtn('pt-ms-push-btn', true, '⏳ Se pregătește…', '📤 Trimite prețurile în MoySklad');
     var prep;
-    try { prep = await prepareOrderForMoySklad(o); } finally { msPrepareBusy = false; }
+    try { prep = await prepareOrderForMoySklad(o); } finally {
+      msPrepareBusy = false;
+      setMsSyncBtn('pt-ms-push-btn', false, '', '📤 Trimite prețurile în MoySklad');
+    }
     if(!prep) return;
     var keys = prep.keys;
     var skippedPush = prep.skippedNames.length;
