@@ -671,12 +671,24 @@ async function handleSiteProducts(corsHeaders) {
   if (!categorySitemaps.length) return json({ error: 'Sitemap-ul de produse al site-ului e gol sau are alt format.' }, 502, corsHeaders);
   if (categorySitemaps.length > 45) return json({ error: 'Sitemap-ul are prea multe părți (' + categorySitemaps.length + ') pentru o singură citire.' }, 502, corsHeaders);
   const urls = new Set();
-  const failed = [];
-  await Promise.all(categorySitemaps.map(async (sm) => {
-    try {
-      for (const u of xmlLocs(await siteFetchText(sm))) if (isSiteProductUrl(u)) urls.add(u);
-    } catch (err) { failed.push(sm); }
-  }));
+  // Cîte 4 simultan (Cloudflare ține oricum max. 6 conexiuni deschise; restul așteaptă la coadă și
+  // le expira timeout-ul în spatele sitemap-urilor mari, de ~2 MB), plus o a doua încercare pentru eșuate.
+  async function readAll(list) {
+    const failed = [];
+    let next = 0;
+    async function worker() {
+      while (next < list.length) {
+        const sm = list[next++];
+        try {
+          for (const u of xmlLocs(await siteFetchText(sm))) if (isSiteProductUrl(u)) urls.add(u);
+        } catch (err) { failed.push(sm); }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, list.length) }, worker));
+    return failed;
+  }
+  let failed = await readAll(categorySitemaps);
+  if (failed.length) failed = await readAll(failed);
   // Dacă o parte a sitemap-ului nu s-a putut citi, raportăm — altfel produsele din ea ar părea „fără pagină".
   return json({ urls: Array.from(urls).sort(), sitemaps: categorySitemaps.length, failedSitemaps: failed }, 200, corsHeaders);
 }
