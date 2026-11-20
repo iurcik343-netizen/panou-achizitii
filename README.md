@@ -148,6 +148,10 @@ Worker-ul răspunde diferit după parametrul din URL:
 |---|---|---|
 | `GET /` (fără parametri) | Stoc rapid: combină `entity/product` (barcode-uri) cu `report/stock/all/current` (cantități) → `{ "barcode": cantitate }` | Butonul „Actualizează stocuri MoySklad" din tab-ul Comparație produse |
 | `GET /?catalog=1` | Catalog complet: nume, barcode, preț de achiziție (`buyPrice`), stoc, zile în depozit (`stockDays`), link imagine miniaturală — din `entity/product` + `report/stock/all` (raportul extins) | Tab-ul „Produse MoySklad" |
+| `GET /?siteproducts=1` | Lista paginilor de produs (RO) de pe sublime.md, din `sitemap-products.xml` + sitemap-urile pe categorii | „Linkuri site / feed ChatGPT" — pasul 1 |
+| `POST ?action=siteScan` | Citește max. 40 de pagini de produs (doar `https://sublime.md/ro/produse/…`, 4 simultan) și întoarce din schema.org `Product`: sku (= codul MoySklad), poză, preț, disponibilitate | idem |
+| `POST ?action=ensureSiteAttrs` / `setSiteLinks` | Creează o singură dată (idempotent) cîmpurile suplimentare de tip link „Link site" și „Poza site" pe produse; scrie linkul + poza pe max. 100 de produse într-o singură cerere MoySklad (actualizare în masă, doar aceste două cîmpuri), cu confirmare per produs din răspuns | „Linkuri site / feed ChatGPT" — pasul 2 |
+| `GET /?feed=chatgpt` (`&download=1` pentru fișier) | Feed CSV în format Google Merchant: produsele active cu „Link site" + „Poza site" și preț „Magazin și Online" > 0; stoc din `report/stock/all/current`. Public (doar date afișate oricum pe site) | ChatGPT („Folosește o adresă URL găzduită") și butonul „Descarcă CSV" |
 | `GET /?history=<id-produs-moysklad>` | Istoric achiziții pentru UN produs: dată, furnizor, cantitate, preț plătit — din `entity/supply` filtrat cu `filter=assortment=<link produs>` (nu scanează tot istoricul contului) | Săgeata de expandare (▸) din tab-ul „Produse MoySklad", încărcat la cerere |
 
 > Bug găsit și reparat: rândurile din `report/stock/all` vin cu un `meta.href` care are un query string atașat (`...?expand=supplier`) — dacă îl compari direct cu ID-ul curat din `entity/product`, nu se potrivesc niciodată și stocul/zilele în depozit rămân goale. Rezolvarea: se taie orice ce vine după `?` înainte de comparație (funcția `extractId` din worker.js).
@@ -202,6 +206,16 @@ Un tab separat, gândit ca listă de referință a **întregului** catalog MoySk
 - Dacă se schimbă Prețul de vânzare sau Magazin și Online → mesaj standard pentru magazin (editabil, cu buton de copiere), ex: „Preț de vânzare modificat în: 325 / Preț cu reducere: 289".
 - Jurnal de audit în `state.settings.priceChangeLog` (ultimele 300 de modificări: cine, ce, când, era → acum) — fără schimbări de schemă.
 - `worker.js` validează acum pe server valorile din `setAttrs` (număr finit între 0 și 10.000.000) — **necesită redeploy manual** al Worker-ului în Cloudflare.
+
+### Linkuri site și feed pentru ChatGPT (butonul „🔗 Linkuri site / feed ChatGPT")
+
+Scop: un feed de produse pe care ChatGPT îl citește singur, periodic (opțiunea „Folosește o adresă URL găzduită"), cu link către pagina produsului de pe sublime.md. Linkul paginii nu există în MoySklad, deci panoul îl află din site:
+
+1. **Citește site-ul** — Worker-ul ia sitemap-ul (~3.900 de pagini RO) și citește fiecare pagină în loturi de 40 (2 loturi simultan din browser × 4 pagini în Worker). Din blocul schema.org `Product` se ia `sku` — verificat: e **codul** produsului din MoySklad (comparat exact, ca text: „028058" ≠ „28058"). Rezultatul se ține în `localStorage` (`pt_site_scan_cache_v1`) 7 zile: o reîncărcare a paginii în mijlocul citirii continuă de unde a rămas; paginile eșuate se reiau la următoarea apăsare; „recitește tot de la zero" ignoră cache-ul.
+2. **Potrivire și salvare** — grupe: deja salvate, noi, link schimbat (se înlocuiesc doar cu bifa explicită), cod inexistent în MoySklad / produs arhivat, pagini fără sku (ex: seturi cadou), cod dublu în MoySklad sau pe site (sărite, nu se ghicește), pagini necitite, produse cu stoc fără pagină pe site. „Scrie în MoySklad" cere confirmare, creează la nevoie cîmpurile „Link site" și „Poza site" (tip link) și scrie în loturi de 100, cu pauză între loturi și reîncercare la 429/5xx. Jurnal în `state.settings.siteLinkLog` (ultimele 50 de rulări: cînd, cîte, cîte erori, cîte înlocuite).
+3. **Feed** — linkul `<URL Worker>?feed=chatgpt` (se pune în ChatGPT) și butonul „Descarcă CSV pentru ChatGPT" (pentru testul cu „Încarcă un fișier"). Coloane: `id` (cod), `title`, `description` (descrierea din MoySklad, altfel denumirea), `link`, `image_link`, `availability`, `price` („284.00 MDL", tipul „Magazin și Online"), `brand` (grupul), `gtin` (barcode EAN valid), `identifier_exists`, `condition`.
+
+Se salvează doar linkul **RO** — pagina RU are aceeași adresă cu `/ru/` în loc de `/ro/`. Linkul fără limbă (`/produse/…`) redirecționează mereu pe `/ro/`, indiferent de limba browserului (testat), deci nu aduce nimic în plus. **După trecerea site-ului pe ECOM** linkurile se schimbă: se rulează din nou pașii 1–2 (cu bifa de înlocuire); dacă site-ul nou nu mai publică `sku` în schema.org sau are alt sitemap, trebuie adaptate `handleSiteProducts` / `parseProductPage` din worker.js.
 
 ## 8. Design
 
