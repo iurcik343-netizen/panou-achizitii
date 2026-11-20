@@ -2231,8 +2231,11 @@
   // continue de unde a rămas, nu să ia de la capăt cele ~3.900 de pagini.
   var SL_CACHE_KEY = 'pt_site_scan_cache_v1';
   var SL_CACHE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
-  var SL_SCAN_BATCH = 40;        // = limita din Worker (subcereri per apel pe planul gratuit Cloudflare)
-  var SL_SCAN_CONCURRENCY = 2;   // × 4 pagini simultan în Worker = max ~8 cereri simultane spre site
+  // Site-ul (Hostinger) refuză cererile simultane (429) și apoi blochează temporar Worker-ul (403):
+  // citim un singur lot odată, iar Worker-ul citește paginile lotului strict una cîte una. La refuz,
+  // Worker-ul se oprește și raportează „blocked"; panoul face pauză crescătoare și reia de unde a rămas.
+  var SL_SCAN_BATCH = 20;
+  var SL_BLOCK_PAUSES_S = [60, 120, 300, 600, 900];  // după ultima pauză fără progres, ne oprim
   var SL_WRITE_BATCH = 100;      // produse per scriere în masă în MoySklad (o cerere)
   var SL_LIST_LIMIT = 200;       // rînduri afișate per grupă (restul doar numărate)
   var catalogShowSiteLinks = false;
@@ -2266,40 +2269,44 @@
       var now = Date.now();
       var todo = sl.urls.filter(function(u){ var c = slCache.pages[u]; return !c || c.e || (now - c.t) > SL_CACHE_MAX_AGE_MS; });
       sl.total = todo.length;
-      var batches = [];
-      for(var i = 0; i < todo.length; i += SL_SCAN_BATCH) batches.push(todo.slice(i, i + SL_SCAN_BATCH));
-      async function runner(){
-        while(batches.length && !sl.cancel){
-          var b = batches.shift();
-          for(var attempt = 1; ; attempt++){
-            try {
-              var r = await moyskladPost('siteScan', { urls: b });
-              if(!r.ok || !r.data || !Array.isArray(r.data.items)) throw new Error((r.data && r.data.error) || ('eroare ' + r.status));
-              r.data.items.forEach(function(it){
-                slCache.pages[it.url] = it.error ? { e: String(it.error).slice(0, 120), t: Date.now() } : { s: it.sku || '', i: it.image || null, t: Date.now() };
-                if(it.error) failedPages++;
-              });
-              break;
-            } catch(err){
-              // Eroare a întregului lot (rețea, Worker): reîncercăm de 2 ori cu pauză crescătoare, apoi
-              // marcăm paginile ca eșuate — se reiau automat la următoarea apăsare a butonului.
-              if(attempt >= 3){
-                var msg = String(err && err.message || err).slice(0, 120);
-                b.forEach(function(u){ slCache.pages[u] = { e: msg, t: Date.now() }; });
-                failedPages += b.length;
-                break;
-              }
-              await slSleep(2000 * attempt);
-            }
-          }
-          sl.done += b.length;
-          slSaveCache();
-          slRerender();
+      var queue = todo.slice();
+      var blockStreak = 0, netFails = 0;
+      while(queue.length && !sl.cancel){
+        var b = queue.slice(0, SL_SCAN_BATCH);
+        var r;
+        try { r = await moyskladPost('siteScan', { urls: b }); }
+        catch(err){ r = { ok: false, data: { error: err && err.message ? err.message : String(err) }, status: 0 }; }
+        if(!r.ok || !r.data || !Array.isArray(r.data.items)){
+          // Eroare a întregului lot (rețea, Worker): pînă la 3 reîncercări cu pauză, apoi oprim citirea —
+          // paginile rămase se reiau la următoarea apăsare a butonului.
+          if(++netFails > 3) throw new Error((r.data && r.data.error) || ('eroare ' + r.status));
+          await slSleep(3000 * netFails);
+          continue;
         }
+        netFails = 0;
+        var got = r.data.items;
+        got.forEach(function(it){
+          slCache.pages[it.url] = it.error ? { e: String(it.error).slice(0, 120), t: Date.now() } : { s: it.sku || '', i: it.image || null, t: Date.now() };
+          if(it.error) failedPages++;
+        });
+        var doneUrls = {};
+        got.forEach(function(it){ doneUrls[it.url] = true; });
+        queue = queue.filter(function(u){ return !doneUrls[u]; });
+        sl.done += got.length;
+        if(got.length) slSaveCache();
+        if(r.data.blocked){
+          // Site-ul a refuzat (protecția anti-bot a găzduirii) — pauză crescătoare; dacă după cea mai
+          // lungă pauză tot nu progresăm, ne oprim și utilizatorul reia mai tîrziu.
+          if(got.length) blockStreak = 0;
+          if(blockStreak >= SL_BLOCK_PAUSES_S.length) throw new Error('site-ul sublime.md refuză în continuare citirea (protecție anti-bot a găzduirii, ' + r.data.blocked + '). Încearcă din nou peste o oră — citirea continuă de unde a rămas.');
+          var waitS = SL_BLOCK_PAUSES_S[blockStreak++];
+          for(var s = waitS; s > 0 && !sl.cancel; s--){ sl.pauseLeft = s; slRerender(); await slSleep(1000); }
+          sl.pauseLeft = 0;
+        } else {
+          blockStreak = 0;
+        }
+        slRerender();
       }
-      var runners = [];
-      for(var k = 0; k < SL_SCAN_CONCURRENCY; k++) runners.push(runner());
-      await Promise.all(runners);
     } catch(err){
       sl.lastError = 'Nu am putut citi site-ul: ' + humanMsError(err && err.message ? err.message : err);
     }
@@ -2466,14 +2473,16 @@
     if(sl.phase === 'scanning'){
       var pct = sl.total ? Math.round(sl.done / sl.total * 100) : 0;
       html += '<div style="font-size:12.5px;margin-bottom:6px">' + (sl.total ? ('Se citesc paginile: <span class="num">' + sl.done + ' / ' + sl.total + '</span>') : 'Se citește sitemap-ul…') + (sl.cancel ? ' — se oprește…' : '') + '</div>' +
+        (sl.pauseLeft ? ('<div class="feedback warn">Site-ul a cerut o pauză (protecția anti-bot a găzduirii). Reiau automat în <span class="num">' + sl.pauseLeft + '</span> s.</div>') : '') +
         '<div style="height:8px;background:var(--border-soft);border-radius:4px;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:' + pct + '%;background:var(--accent)"></div></div>' +
         '<button class="btn-outline" onclick="ptSiteCancel()"' + (sl.cancel ? ' disabled' : '') + '>Oprește</button>' +
         '<div class="hint" style="margin-top:6px">Poți lăsa pagina deschisă; dacă o închizi, citirea continuă de unde a rămas la următoarea apăsare.</div>';
     } else {
       html += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
         '<button class="btn-primary" onclick="ptSiteScan(false)"' + (slBusy() ? ' disabled' : '') + '>' + (sl.urls ? 'Citește din nou site-ul' : 'Citește site-ul') + '</button>' +
-        (sl.urls ? '<button class="icon-link" onclick="if(confirm(\'Reciteşti TOATE paginile de la zero (nu doar cele noi sau mai vechi de 7 zile)? Durează cîteva minute.\')) ptSiteScan(true)"' + (slBusy() ? ' disabled' : '') + '>recitește tot de la zero</button>' : '') +
-        '<span style="font-size:11.5px;color:var(--text-soft)">' + (sl.urls ? (scanned + ' din ' + sl.urls.length + ' pagini citite' + (sl.fromCache ? ' (salvate anterior)' : '')) : 'Încă necitit. Durează cîteva minute (~3.900 de pagini).') + '</span></div>';
+        (sl.urls ? '<button class="icon-link" onclick="if(confirm(\'Reciteşti TOATE paginile de la zero (nu doar cele noi sau mai vechi de 7 zile)? Durează ~45 de minute.\')) ptSiteScan(true)"' + (slBusy() ? ' disabled' : '') + '>recitește tot de la zero</button>' : '') +
+        (sl.urls && scanned < sl.urls.length ? '<span style="font-size:11.5px;color:var(--text-soft)">~' + Math.max(1, Math.round((sl.urls.length - scanned) * 0.75 / 60)) + ' min pentru restul</span>' : '') +
+        '<span style="font-size:11.5px;color:var(--text-soft)">' + (sl.urls ? (scanned + ' din ' + sl.urls.length + ' pagini citite' + (sl.fromCache ? ' (salvate anterior)' : '')) : 'Încă necitit. Prima citire durează ~45 de minute (~3.900 de pagini, citite una cîte una ca să nu încarce site-ul); următoarele, doar paginile noi sau mai vechi de 7 zile.') + '</span></div>';
       if(sl.lastError) html += '<div class="feedback err">' + escAttr(sl.lastError) + '</div>';
       if(sl.failedSitemaps && sl.failedSitemaps.length) html += '<div class="feedback warn">' + sl.failedSitemaps.length + ' părți din sitemap nu s-au putut citi — produsele din ele lipsesc din rezultat. Citește din nou.</div>';
     }

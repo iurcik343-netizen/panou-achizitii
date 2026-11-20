@@ -634,7 +634,10 @@ const SITE_IMAGE_ATTR = 'Poza site';
 // Tipul de preț afișat pe site („Magazin și Online"), identificat prin externalCode, ca în panou (PE_FIELDS).
 const SITE_PRICE_EXTCODE = 'f6f7183f-8e12-48df-acf8-c1cae302a64b';
 const SITE_SCAN_MAX_URLS = 40;      // planul gratuit Cloudflare permite 50 de subcereri per apel
-const SITE_SCAN_CONCURRENCY = 4;    // nu încărcăm site-ul magazinului cu prea multe cereri simultane
+// Site-ul e pe Hostinger, al cărui CDN (hcdn) răspunde 429 la cereri simultane și apoi blochează
+// temporar (403) adresa care le-a trimis — citim STRICT o pagină pe rînd, cu pauză între ele, și ne
+// oprim la primul refuz (panoul așteaptă și reia), ca să nu prelungim blocarea.
+const SITE_SCAN_DELAY_MS = 400;
 const SITE_LINKS_MAX_ITEMS = 100;   // produse per scriere în masă în MoySklad (o singură cerere)
 
 function siteAttrValue(p, name) {
@@ -671,7 +674,7 @@ async function handleSiteProducts(corsHeaders) {
   if (!categorySitemaps.length) return json({ error: 'Sitemap-ul de produse al site-ului e gol sau are alt format.' }, 502, corsHeaders);
   if (categorySitemaps.length > 45) return json({ error: 'Sitemap-ul are prea multe părți (' + categorySitemaps.length + ') pentru o singură citire.' }, 502, corsHeaders);
   const urls = new Set();
-  // Cîte 4 simultan (Cloudflare ține oricum max. 6 conexiuni deschise; restul așteaptă la coadă și
+  // Cîte 2 simultan (protecția Hostinger a site-ului refuză rafalele; Cloudflare ține oricum max. 6 conexiuni deschise; restul așteaptă la coadă și
   // le expira timeout-ul în spatele sitemap-urilor mari, de ~2 MB), plus o a doua încercare pentru eșuate.
   async function readAll(list) {
     const failed = [];
@@ -684,7 +687,7 @@ async function handleSiteProducts(corsHeaders) {
         } catch (err) { failed.push(sm); }
       }
     }
-    await Promise.all(Array.from({ length: Math.min(4, list.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(2, list.length) }, worker));
     return failed;
   }
   let failed = await readAll(categorySitemaps);
@@ -725,22 +728,22 @@ async function handleSiteScan(body, corsHeaders) {
   // Citim DOAR pagini de produs de pe sublime.md — Worker-ul nu devine un proxy deschis pentru orice adresă.
   const bad = urls.find(u => !isSiteProductUrl(u));
   if (bad) return json({ error: 'Adresă nepermisă: ' + String(bad).slice(0, 120) }, 400, corsHeaders);
-  const items = new Array(urls.length);
-  let next = 0;
-  async function worker() {
-    while (next < urls.length) {
-      const i = next++;
-      const u = urls[i];
-      try {
-        const info = parseProductPage(await siteFetchText(u));
-        items[i] = info ? Object.assign({ url: u }, info) : { url: u, error: 'Pagina nu are date de produs (schema.org).' };
-      } catch (err) {
-        items[i] = { url: u, error: String(err && err.message || err) };
-      }
+  // Paginile neîncercate (după un refuz) NU apar în „items" — panoul le trimite din nou mai tîrziu.
+  const items = [];
+  let blocked = null;
+  for (let i = 0; i < urls.length; i++) {
+    const u = urls[i];
+    if (i > 0) await sleep(SITE_SCAN_DELAY_MS);
+    try {
+      const info = parseProductPage(await siteFetchText(u));
+      items.push(info ? Object.assign({ url: u }, info) : { url: u, error: 'Pagina nu are date de produs (schema.org).' });
+    } catch (err) {
+      const msg = String(err && err.message || err);
+      if (/HTTP (403|429|503)/.test(msg)) { blocked = msg; break; }
+      items.push({ url: u, error: msg });
     }
   }
-  await Promise.all(Array.from({ length: Math.min(SITE_SCAN_CONCURRENCY, urls.length) }, worker));
-  return json({ items }, 200, corsHeaders);
+  return json({ items, blocked }, 200, corsHeaders);
 }
 
 // Creează (o singură dată) cîmpurile suplimentare „Link site" și „Poza site" pe produse. Idempotent:
