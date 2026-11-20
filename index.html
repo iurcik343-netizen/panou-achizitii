@@ -2259,13 +2259,20 @@
     try {
       var res = await fetch(catalogProxyUrl('siteproducts=1'));
       var data = await res.json().catch(function(){ return {}; });
-      if(!res.ok || data.error || !Array.isArray(data.urls)) throw new Error(data.error || ('răspuns neașteptat (' + res.status + ')'));
-      if(!data.urls.length) throw new Error('sitemap-ul site-ului nu conține nicio pagină de produs.');
-      sl.urls = data.urls; sl.fromCache = false; sl.failedSitemaps = data.failedSitemaps || [];
-      // Păstrăm în cache doar paginile care mai există în sitemap (cele șterse de pe site dispar).
-      var keep = {};
-      sl.urls.forEach(function(u){ if(!fresh && slCache.pages[u]) keep[u] = slCache.pages[u]; });
-      slCache.pages = keep;
+      var sitemapOk = res.ok && !data.error && Array.isArray(data.urls) && data.urls.length > 0;
+      if(sitemapOk){
+        sl.urls = data.urls; sl.fromCache = false; sl.failedSitemaps = data.failedSitemaps || [];
+        // Păstrăm în cache doar paginile care mai există în sitemap (cele șterse de pe site dispar).
+        var keep = {};
+        sl.urls.forEach(function(u){ if(!fresh && slCache.pages[u]) keep[u] = slCache.pages[u]; });
+        slCache.pages = keep;
+      } else if(!fresh && sl.urls && sl.urls.length){
+        // Sitemap-ul refuzat (de obicei aceeași blocare temporară a găzduirii) — continuăm cu lista de
+        // pagini de la citirea anterioară; paginile se citesc cu aceleași pauze automate.
+        ptToast('Sitemap-ul nu s-a putut citi acum (' + (data.error || ('cod ' + res.status)) + ') — continui cu lista de pagini de la citirea anterioară.', false);
+      } else {
+        throw new Error(data.error || (Array.isArray(data.urls) ? 'sitemap-ul site-ului nu conține nicio pagină de produs.' : ('răspuns neașteptat (' + res.status + ')')));
+      }
       var now = Date.now();
       var todo = sl.urls.filter(function(u){ var c = slCache.pages[u]; return !c || c.e || (now - c.t) > SL_CACHE_MAX_AGE_MS; });
       sl.total = todo.length;
