@@ -708,6 +708,11 @@
       e.returnValue = 'Ai modificări de preț netrimise în MoySklad — dacă pleci acum, se pierd.';
       return e.returnValue;
     }
+    if(typeof sl !== 'undefined' && sl && (sl.phase === 'scanning' || sl.phase === 'writing')){
+      e.preventDefault();
+      e.returnValue = sl.phase === 'writing' ? 'Linkurile încă se salvează în MoySklad — dacă pleci acum, salvarea se oprește la jumătate.' : 'Citirea site-ului e în curs — o poți relua mai tîrziu de unde a rămas.';
+      return e.returnValue;
+    }
   });
   window.addEventListener('pagehide', flushPendingSave);
   // Folosit ca să deosebim un blip trecător de conexiune (merită reîncercat tăcut, ca la
@@ -2142,7 +2147,7 @@
     var url = base + (base.indexOf('?')===-1?'?':'&') + 'action=' + action;
     var res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     var data = await res.json().catch(function(){ return {}; });
-    return { ok: res.ok && !data.error, data: data };
+    return { ok: res.ok && !data.error, data: data, status: res.status };
   }
   // Întoarce o promisiune cu true/false (reușit sau nu) și, dacă o sincronizare e deja în curs
   // (ex: cea automată de la pornire), întoarce ACEEAȘI promisiune — cine o cheamă o poate aștepta
@@ -2200,6 +2205,7 @@
   window.ptSetCatalogView = function(view){
     catalogShowHiddenBrands = (view === 'hidden');
     catalogShowDuplicates = (view === 'duplicates');
+    catalogShowSiteLinks = (view === 'sitelinks');
     if(view){ selectedBrandId = null; selectedProductIds = {}; }
     renderCatalog();
   };
@@ -2212,8 +2218,310 @@
     selectedProductIds = {};
     catalogShowHiddenBrands = false;
     catalogShowDuplicates = false;
+    catalogShowSiteLinks = false;
     renderCatalog();
   };
+
+  // ================= LINKURI SITE (sublime.md) + FEED PENTRU CHATGPT =================
+  // Pașii: (1) citim paginile de produs ale site-ului prin Worker și luăm „sku"-ul fiecăreia (= codul
+  // produsului din MoySklad); (2) potrivim cu catalogul sincronizat și arătăm rezultatul pe grupe;
+  // (3) doar la confirmare scriem linkul RO + poza în cîmpurile „Link site" / „Poza site" din MoySklad;
+  // (4) feedul CSV pentru ChatGPT se generează de Worker din MoySklad (?feed=chatgpt).
+  // Citirile de pagini se țin în localStorage 7 zile, ca o reîncărcare a paginii în mijlocul citirii să
+  // continue de unde a rămas, nu să ia de la capăt cele ~3.900 de pagini.
+  var SL_CACHE_KEY = 'pt_site_scan_cache_v1';
+  var SL_CACHE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+  var SL_SCAN_BATCH = 40;        // = limita din Worker (subcereri per apel pe planul gratuit Cloudflare)
+  var SL_SCAN_CONCURRENCY = 2;   // × 4 pagini simultan în Worker = max ~8 cereri simultane spre site
+  var SL_WRITE_BATCH = 100;      // produse per scriere în masă în MoySklad (o cerere)
+  var SL_LIST_LIMIT = 200;       // rînduri afișate per grupă (restul doar numărate)
+  var catalogShowSiteLinks = false;
+  var sl = { phase: 'idle', urls: null, fromCache: false, failedSitemaps: [], done: 0, total: 0, cancel: false,
+             writeDone: 0, writeTotal: 0, writeErrors: [], includeChanged: false, lastError: null, feedBusy: false };
+  var slCache = (function(){
+    try { var c = JSON.parse(localStorage.getItem(SL_CACHE_KEY)); return (c && c.pages) ? c : { pages: {} }; } catch(e){ return { pages: {} }; }
+  })();
+  (function(){ var keys = Object.keys(slCache.pages); if(keys.length){ sl.urls = keys.sort(); sl.fromCache = true; } })();
+  function slSaveCache(){ try { localStorage.setItem(SL_CACHE_KEY, JSON.stringify(slCache)); } catch(e){ /* plin/indisponibil — rezultatul rămîne doar în memorie */ } }
+  function slSleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  function slRerender(){ if(catalogShowSiteLinks) renderCatalog(); }
+  function slBusy(){ return sl.phase === 'scanning' || sl.phase === 'writing'; }
+
+  window.ptSiteScan = async function(fresh){
+    if(slBusy()) return;
+    if(!catalogProducts.length){ ptToast('Sincronizează întîi catalogul MoySklad.', false); return; }
+    sl.phase = 'scanning'; sl.cancel = false; sl.lastError = null; sl.done = 0; sl.total = 0;
+    slRerender();
+    var failedPages = 0;
+    try {
+      var res = await fetch(catalogProxyUrl('siteproducts=1'));
+      var data = await res.json().catch(function(){ return {}; });
+      if(!res.ok || data.error || !Array.isArray(data.urls)) throw new Error(data.error || ('răspuns neașteptat (' + res.status + ')'));
+      if(!data.urls.length) throw new Error('sitemap-ul site-ului nu conține nicio pagină de produs.');
+      sl.urls = data.urls; sl.fromCache = false; sl.failedSitemaps = data.failedSitemaps || [];
+      // Păstrăm în cache doar paginile care mai există în sitemap (cele șterse de pe site dispar).
+      var keep = {};
+      sl.urls.forEach(function(u){ if(!fresh && slCache.pages[u]) keep[u] = slCache.pages[u]; });
+      slCache.pages = keep;
+      var now = Date.now();
+      var todo = sl.urls.filter(function(u){ var c = slCache.pages[u]; return !c || c.e || (now - c.t) > SL_CACHE_MAX_AGE_MS; });
+      sl.total = todo.length;
+      var batches = [];
+      for(var i = 0; i < todo.length; i += SL_SCAN_BATCH) batches.push(todo.slice(i, i + SL_SCAN_BATCH));
+      async function runner(){
+        while(batches.length && !sl.cancel){
+          var b = batches.shift();
+          for(var attempt = 1; ; attempt++){
+            try {
+              var r = await moyskladPost('siteScan', { urls: b });
+              if(!r.ok || !r.data || !Array.isArray(r.data.items)) throw new Error((r.data && r.data.error) || ('eroare ' + r.status));
+              r.data.items.forEach(function(it){
+                slCache.pages[it.url] = it.error ? { e: String(it.error).slice(0, 120), t: Date.now() } : { s: it.sku || '', i: it.image || null, t: Date.now() };
+                if(it.error) failedPages++;
+              });
+              break;
+            } catch(err){
+              // Eroare a întregului lot (rețea, Worker): reîncercăm de 2 ori cu pauză crescătoare, apoi
+              // marcăm paginile ca eșuate — se reiau automat la următoarea apăsare a butonului.
+              if(attempt >= 3){
+                var msg = String(err && err.message || err).slice(0, 120);
+                b.forEach(function(u){ slCache.pages[u] = { e: msg, t: Date.now() }; });
+                failedPages += b.length;
+                break;
+              }
+              await slSleep(2000 * attempt);
+            }
+          }
+          sl.done += b.length;
+          slSaveCache();
+          slRerender();
+        }
+      }
+      var runners = [];
+      for(var k = 0; k < SL_SCAN_CONCURRENCY; k++) runners.push(runner());
+      await Promise.all(runners);
+    } catch(err){
+      sl.lastError = 'Nu am putut citi site-ul: ' + humanMsError(err && err.message ? err.message : err);
+    }
+    var cancelled = sl.cancel;
+    sl.phase = 'idle'; sl.cancel = false;
+    slSaveCache();
+    slRerender();
+    if(sl.lastError) ptToast(sl.lastError, false);
+    else if(cancelled) ptToast('Citirea site-ului a fost oprită. Apasă din nou „Citește site-ul" ca să continui de unde a rămas.', false);
+    else ptToast('Site citit: ' + sl.urls.length + ' pagini de produs' + (failedPages ? (' — ' + failedPages + ' nu s-au putut citi (se reiau la următoarea citire).') : '.'), !failedPages);
+  };
+  window.ptSiteCancel = function(){ if(slBusy()){ sl.cancel = true; slRerender(); } };
+  window.ptSiteToggleChanged = function(v){ sl.includeChanged = !!v; slRerender(); };
+
+  // Potrivirea paginilor citite cu catalogul MoySklad, după sku = cod produs (comparat exact, ca text —
+  // „028058" ≠ „28058").
+  function slMatch(){
+    if(!sl.urls) return null;
+    var byCode = {};
+    catalogProducts.forEach(function(p){ if(p.code) (byCode[p.code] = byCode[p.code] || []).push(p); });
+    var bySku = {};
+    var m = { unscanned: 0, errors: [], noSku: [], notInMs: [], dupCode: [], dupSku: [], toWrite: [], changed: [], same: [], noPage: [] };
+    sl.urls.forEach(function(u){
+      var c = slCache.pages[u];
+      if(!c) m.unscanned++;
+      else if(c.e) m.errors.push({ url: u, error: c.e });
+      else if(!c.s) m.noSku.push({ url: u });
+      else (bySku[c.s] = bySku[c.s] || []).push({ url: u, image: c.i });
+    });
+    var linked = {};
+    Object.keys(bySku).forEach(function(sku){
+      var pages = bySku[sku], ps = byCode[sku] || [];
+      if(!ps.length){ pages.forEach(function(pg){ m.notInMs.push({ url: pg.url, sku: sku }); }); return; }
+      ps.forEach(function(p){ linked[p.id] = true; });
+      if(ps.length > 1){ m.dupCode.push({ sku: sku, products: ps, url: pages[0].url }); return; }
+      if(pages.length > 1){ m.dupSku.push({ sku: sku, pages: pages, product: ps[0] }); return; }
+      var p = ps[0], pg = pages[0];
+      var row = { product: p, url: pg.url, image: pg.image };
+      if(!p.siteLink) m.toWrite.push(row);
+      else if(p.siteLink !== pg.url) m.changed.push(row);
+      else if(pg.image && p.siteImage !== pg.image) m.toWrite.push(row);  // doar poza s-a schimbat — o actualizăm
+      else m.same.push(row);
+    });
+    m.noPage = catalogProducts.filter(function(p){ return !linked[p.id] && (p.stock || 0) > 0; });
+    return m;
+  }
+
+  window.ptSiteWrite = async function(){
+    if(slBusy()) return;
+    var m = slMatch();
+    if(!m) return;
+    var items = m.toWrite.concat(sl.includeChanged ? m.changed : []);
+    if(!items.length){ ptToast('Nu e nimic de scris în MoySklad.', false); return; }
+    var replaced = sl.includeChanged ? m.changed.length : 0;
+    if(!confirm('Scrii linkul de pe site în MoySklad pentru ' + items.length + ' produse?' +
+      (replaced ? ('\n\n⚠ ' + replaced + ' dintre ele au deja alt link în MoySklad — vechiul link va fi înlocuit.') : '') +
+      '\n\nSe completează doar cîmpurile „Link site" și „Poza site" (se creează automat în MoySklad dacă nu există). Prețurile, stocul și restul produsului rămîn neatinse.')) return;
+    sl.phase = 'writing'; sl.cancel = false; sl.lastError = null; sl.writeDone = 0; sl.writeTotal = items.length; sl.writeErrors = [];
+    slRerender();
+    var okCount = 0;
+    try {
+      var en = await moyskladPost('ensureSiteAttrs', {});
+      if(!en.ok) throw new Error(humanMsError(en.data && en.data.error, en.status));
+      for(var i = 0; i < items.length && !sl.cancel; i += SL_WRITE_BATCH){
+        var chunk = items.slice(i, i + SL_WRITE_BATCH);
+        var payload = chunk.map(function(r){ return { id: r.product.id, link: r.url, image: r.image || null }; });
+        var r;
+        for(var attempt = 1; ; attempt++){
+          try { r = await moyskladPost('setSiteLinks', { items: payload }); }
+          catch(err){ r = { ok: false, data: { error: err && err.message ? err.message : String(err) }, status: 0 }; }
+          if(r.ok) break;
+          // Reîncercăm doar erorile temporare (limită de rată, mentenanță, rețea) — nu și validările.
+          var info = humanMsErrorInfo(r.data && r.data.error, r.status === 429 ? 429 : r.status);
+          if(attempt >= 3 || !(info.transient || r.status === 429 || r.status === 0)) break;
+          await slSleep(r.status === 429 ? 10000 * attempt : 3000 * attempt);
+        }
+        if(!r.ok){
+          var emsg = humanMsError(r.data && r.data.error, r.status);
+          chunk.forEach(function(c){ sl.writeErrors.push({ product: c.product, error: emsg }); });
+        } else {
+          (r.data.results || []).forEach(function(res, j){
+            var p = chunk[j] && chunk[j].product;
+            if(!p) return;
+            if(res.ok){ p.siteLink = res.link; p.siteImage = res.image; okCount++; }
+            else sl.writeErrors.push({ product: p, error: res.error || 'refuzat de MoySklad' });
+          });
+        }
+        sl.writeDone += chunk.length;
+        slRerender();
+        if(i + SL_WRITE_BATCH < items.length) await slSleep(500);  // pauză între loturi — limita de rată MoySklad
+      }
+    } catch(err){
+      sl.lastError = 'Nu am putut scrie în MoySklad: ' + (err && err.message ? err.message : err);
+    }
+    saveCatalogCache();
+    // Jurnal (cine nu se știe în panou — dar cînd, cîte și cu ce erori): ultimele 50 de rulări.
+    var log = state.settings.siteLinkLog || (state.settings.siteLinkLog = []);
+    log.unshift({ at: new Date().toISOString(), requested: items.length, ok: okCount, failed: sl.writeErrors.length, replaced: replaced, cancelled: !!sl.cancel });
+    if(log.length > 50) log.length = 50;
+    save();
+    var cancelled = sl.cancel;
+    sl.phase = 'idle'; sl.cancel = false;
+    slRerender();
+    if(sl.lastError) ptToast(sl.lastError, false);
+    else ptToast('✓ ' + okCount + ' linkuri salvate în MoySklad' + (sl.writeErrors.length ? (' — ' + sl.writeErrors.length + ' cu erori (vezi lista).') : '') + (cancelled ? ' Oprit înainte de final.' : '.'), !sl.writeErrors.length && !cancelled);
+  };
+
+  window.ptDownloadFeed = async function(){
+    if(sl.feedBusy) return;
+    sl.feedBusy = true; slRerender();
+    try {
+      var res = await fetch(catalogProxyUrl('feed=chatgpt&download=1'));
+      if(!res.ok){ var d = await res.json().catch(function(){ return {}; }); throw new Error(humanMsError(d.detail || d.error, res.status)); }
+      var n = parseInt(res.headers.get('X-Feed-Products') || '0', 10);
+      var noPrice = parseInt(res.headers.get('X-Feed-Skipped-No-Price') || '0', 10);
+      var noImage = parseInt(res.headers.get('X-Feed-Skipped-No-Image') || '0', 10);
+      var blob = await res.blob();
+      if(!n){ ptToast('Feedul e gol — niciun produs nu are încă „Link site" completat în MoySklad. Scrie întîi linkurile.', false); return; }
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'sublime-produse-chatgpt.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
+      ptToast('✓ CSV descărcat: ' + n + ' produse.' + (noPrice ? (' ' + noPrice + ' sărite (fără preț „Magazin și Online").') : '') + (noImage ? (' ' + noImage + ' sărite (fără poză).') : ''), true);
+    } catch(err){
+      ptToast('Nu am putut genera feedul: ' + (err && err.message ? err.message : err), false);
+    } finally {
+      sl.feedBusy = false; slRerender();
+    }
+  };
+  window.ptCopyFeedUrl = function(){
+    var u = catalogProxyUrl('feed=chatgpt');
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(u).then(function(){ ptToast('Link copiat.', true); }, function(){ prompt('Copiază linkul feedului:', u); });
+    } else prompt('Copiază linkul feedului:', u);
+  };
+
+  function slLink(u){ return '<a href="' + escAttr(u) + '" target="_blank" rel="noopener">' + escAttr(u.replace(/^https:\/\/sublime\.md\/ro\/produse\//, '…/')) + '</a>'; }
+  function slGroup(title, count, tone, rowsHtml, hint, open){
+    if(!count) return '';
+    return '<details class="panel" style="padding:0;margin-bottom:10px;overflow:hidden"' + (open ? ' open' : '') + '>' +
+      '<summary style="padding:9px 14px;cursor:pointer;font-weight:600;font-size:13px;' + (tone ? ('color:var(--' + tone + ')') : '') + '">' + title + ' <span class="num">(' + count + ')</span></summary>' +
+      (hint ? '<div class="hint" style="margin:0 14px 8px">' + hint + '</div>' : '') +
+      '<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse;font-family:inherit">' + rowsHtml +
+      (count > SL_LIST_LIMIT ? ('<tr><td colspan="4" style="padding:6px 14px;color:var(--text-soft)">… și încă ' + (count - SL_LIST_LIMIT) + '</td></tr>') : '') +
+      '</table></div></details>';
+  }
+  function slRows(list, cells){
+    return list.slice(0, SL_LIST_LIMIT).map(function(x){
+      return '<tr style="border-top:1px solid var(--border-soft)">' + cells(x).map(function(c){ return '<td style="padding:5px 14px;vertical-align:top">' + c + '</td>'; }).join('') + '</tr>';
+    }).join('');
+  }
+  function slProd(p){ return '<b>' + escAttr(p.name) + '</b><div style="color:var(--text-soft);font-size:11px">Cod <span class="num">' + escAttr(p.code || '—') + '</span>' + (p.brand ? (' · ' + escAttr(p.brand)) : '') + '</div>'; }
+
+  function slRenderHtml(){
+    var html = '<div class="panel" style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
+      '<h2 style="margin:0">Linkuri site și feed ChatGPT</h2>' +
+      '<button class="btn-outline" onclick="ptBackToBrands()"' + (slBusy() ? ' disabled' : '') + '>◀ Înapoi la branduri</button></div>';
+    html += '<div class="hint" style="margin-bottom:12px">Panoul citește paginile de produs de pe <b>sublime.md</b>, ia codul fiecărui produs (sku) și îl potrivește cu <b>codul</b> din MoySklad. Linkul paginii (în română) și poza se salvează în MoySklad, în cîmpurile <b>„Link site"</b> și <b>„Poza site"</b>, doar după ce confirmi. Din ele se generează feedul de produse pentru ChatGPT. După o schimbare a site-ului (ex: trecerea pe ECOM), rulează din nou citirea și potrivirea.</div>';
+
+    // Pasul 1 — citirea site-ului
+    var scanned = sl.urls ? sl.urls.filter(function(u){ var c = slCache.pages[u]; return c && !c.e; }).length : 0;
+    html += '<div class="panel" style="margin-bottom:12px"><h3 style="margin:0 0 8px">1. Citește site-ul</h3>';
+    if(sl.phase === 'scanning'){
+      var pct = sl.total ? Math.round(sl.done / sl.total * 100) : 0;
+      html += '<div style="font-size:12.5px;margin-bottom:6px">' + (sl.total ? ('Se citesc paginile: <span class="num">' + sl.done + ' / ' + sl.total + '</span>') : 'Se citește sitemap-ul…') + (sl.cancel ? ' — se oprește…' : '') + '</div>' +
+        '<div style="height:8px;background:var(--border-soft);border-radius:4px;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:' + pct + '%;background:var(--accent)"></div></div>' +
+        '<button class="btn-outline" onclick="ptSiteCancel()"' + (sl.cancel ? ' disabled' : '') + '>Oprește</button>' +
+        '<div class="hint" style="margin-top:6px">Poți lăsa pagina deschisă; dacă o închizi, citirea continuă de unde a rămas la următoarea apăsare.</div>';
+    } else {
+      html += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+        '<button class="btn-primary" onclick="ptSiteScan(false)"' + (slBusy() ? ' disabled' : '') + '>' + (sl.urls ? 'Citește din nou site-ul' : 'Citește site-ul') + '</button>' +
+        (sl.urls ? '<button class="icon-link" onclick="if(confirm(\'Reciteşti TOATE paginile de la zero (nu doar cele noi sau mai vechi de 7 zile)? Durează cîteva minute.\')) ptSiteScan(true)"' + (slBusy() ? ' disabled' : '') + '>recitește tot de la zero</button>' : '') +
+        '<span style="font-size:11.5px;color:var(--text-soft)">' + (sl.urls ? (scanned + ' din ' + sl.urls.length + ' pagini citite' + (sl.fromCache ? ' (salvate anterior)' : '')) : 'Încă necitit. Durează cîteva minute (~3.900 de pagini).') + '</span></div>';
+      if(sl.lastError) html += '<div class="feedback err">' + escAttr(sl.lastError) + '</div>';
+      if(sl.failedSitemaps && sl.failedSitemaps.length) html += '<div class="feedback warn">' + sl.failedSitemaps.length + ' părți din sitemap nu s-au putut citi — produsele din ele lipsesc din rezultat. Citește din nou.</div>';
+    }
+    html += '</div>';
+
+    // Pasul 2 — potrivirea și scrierea în MoySklad
+    var m = slMatch();
+    if(m && sl.phase !== 'scanning'){
+      var writeCount = m.toWrite.length + (sl.includeChanged ? m.changed.length : 0);
+      html += '<div class="panel" style="margin-bottom:12px"><h3 style="margin:0 0 8px">2. Potrivire cu MoySklad și salvare</h3>';
+      if(m.unscanned) html += '<div class="feedback warn">' + m.unscanned + ' pagini încă necitite — apasă „Citește din nou site-ul" ca să continui.</div>';
+      html += '<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;margin-bottom:10px">' +
+        '<span style="color:var(--rank1)">✓ <b class="num">' + m.same.length + '</b> deja salvate</span>' +
+        '<span><b class="num">' + m.toWrite.length + '</b> noi de salvat</span>' +
+        '<span style="color:var(--rank3)"><b class="num">' + m.changed.length + '</b> cu link schimbat</span>' +
+        '<span style="color:var(--bad)"><b class="num">' + (m.notInMs.length + m.noSku.length + m.dupCode.length + m.dupSku.length + m.errors.length) + '</b> nepotrivite</span></div>';
+      if(m.changed.length) html += '<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;margin-bottom:10px;text-transform:none;letter-spacing:normal;font-weight:400;color:var(--text)"><input type="checkbox" onchange="ptSiteToggleChanged(this.checked)"' + (sl.includeChanged ? ' checked' : '') + (slBusy() ? ' disabled' : '') + '> Înlocuiește și cele ' + m.changed.length + ' linkuri existente care diferă de site</label>';
+      if(sl.phase === 'writing'){
+        var wp = sl.writeTotal ? Math.round(sl.writeDone / sl.writeTotal * 100) : 0;
+        html += '<div style="font-size:12.5px;margin-bottom:6px">Se salvează în MoySklad: <span class="num">' + sl.writeDone + ' / ' + sl.writeTotal + '</span>' + (sl.cancel ? ' — se oprește după lotul curent…' : '') + '</div>' +
+          '<div style="height:8px;background:var(--border-soft);border-radius:4px;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:' + wp + '%;background:var(--accent)"></div></div>' +
+          '<button class="btn-outline" onclick="ptSiteCancel()"' + (sl.cancel ? ' disabled' : '') + '>Oprește</button>';
+      } else {
+        html += '<button class="btn-primary" onclick="ptSiteWrite()"' + ((!writeCount || slBusy()) ? ' disabled' : '') + '>Scrie în MoySklad (' + writeCount + ')</button>';
+        if(!writeCount && m.same.length) html += ' <span style="font-size:12px;color:var(--rank1)">✓ Totul e la zi.</span>';
+      }
+      html += '</div>';
+
+      if(sl.writeErrors.length) html += slGroup('⚠ Nu s-au salvat', sl.writeErrors.length, 'bad', slRows(sl.writeErrors, function(x){ return [slProd(x.product), escAttr(x.error)]; }), 'Încearcă din nou „Scrie în MoySklad" — se reiau doar cele nesalvate.', true);
+      html += slGroup('Noi de salvat', m.toWrite.length, '', slRows(m.toWrite, function(x){ return [slProd(x.product), slLink(x.url)]; }));
+      html += slGroup('Link schimbat față de MoySklad', m.changed.length, 'rank3', slRows(m.changed, function(x){ return [slProd(x.product), 'Acum: ' + slLink(x.product.siteLink) + '<br>Pe site: ' + slLink(x.url)]; }), 'Produsul are deja în MoySklad alt link decît pagina găsită acum pe site. Se înlocuiesc doar dacă bifezi opțiunea de mai sus.');
+      html += slGroup('Cod de pe site inexistent în MoySklad (sau produs arhivat)', m.notInMs.length, 'bad', slRows(m.notInMs, function(x){ return ['Cod <span class="num">' + escAttr(x.sku) + '</span>', slLink(x.url)]; }), 'Pagina are un cod care nu există printre produsele active din MoySklad — de obicei produsul e arhivat. Nu se salvează nimic pentru ele.');
+      html += slGroup('Pagini fără cod (sku) pe site', m.noSku.length, 'bad', slRows(m.noSku, function(x){ return [slLink(x.url)]; }), 'Pagina nu are codul produsului completat pe site (ex: seturi cadou), deci nu poate fi legată automat. Completează codul pe site și citește din nou.');
+      html += slGroup('Același cod la mai multe produse MoySklad', m.dupCode.length, 'bad', slRows(m.dupCode, function(x){ return ['Cod <span class="num">' + escAttr(x.sku) + '</span>', x.products.map(function(p){ return escAttr(p.name); }).join('<br>'), slLink(x.url)]; }), 'Nu știm la care produs să punem linkul — corectează duplicatul în MoySklad.');
+      html += slGroup('Același cod pe mai multe pagini ale site-ului', m.dupSku.length, 'bad', slRows(m.dupSku, function(x){ return [slProd(x.product), x.pages.map(function(pg){ return slLink(pg.url); }).join('<br>')]; }), 'Nu știm care pagină e cea corectă — corectează codul pe site.');
+      html += slGroup('Pagini care nu s-au putut citi', m.errors.length, 'bad', slRows(m.errors, function(x){ return [slLink(x.url), escAttr(x.error)]; }), 'Se reiau automat la următoarea apăsare a butonului „Citește din nou site-ul".');
+      html += slGroup('Produse cu stoc în MoySklad, fără pagină pe site', m.noPage.length, '', slRows(m.noPage, function(p){ return [slProd(p), 'Stoc <span class="num">' + p.stock + '</span>']; }), 'Nu apar în feed. Informativ — poate merită adăugate pe site.');
+    }
+
+    // Pasul 3 — feedul
+    html += '<div class="panel" style="margin-bottom:12px"><h3 style="margin:0 0 8px">3. Feed pentru ChatGPT</h3>' +
+      '<div class="hint" style="margin-bottom:8px">Conține produsele active cu „Link site" și „Poza site" completate și cu preț „Magazin și Online" &gt; 0. Prețul și stocul se citesc din MoySklad la fiecare descărcare.</div>' +
+      '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+      '<button class="btn-primary" onclick="ptDownloadFeed()"' + (sl.feedBusy ? ' disabled' : '') + '>' + (sl.feedBusy ? 'Se generează…' : 'Descarcă CSV pentru ChatGPT') + '</button>' +
+      '<button class="btn-outline" onclick="ptCopyFeedUrl()">Copiază linkul feedului</button></div>' +
+      '<div style="font-size:11.5px;color:var(--text-soft);margin-top:6px;word-break:break-all">Link pentru „Folosește o adresă URL găzduită": <span class="num">' + escAttr(catalogProxyUrl('feed=chatgpt')) + '</span></div></div>';
+    return html;
+  }
   window.ptAddBrand = async function(){
     var name = prompt('Numele noului brand:');
     if(!name || !name.trim()) return;
@@ -2297,11 +2605,16 @@
     var html = '<div class="panel" style="padding:10px 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px">' +
       '<button class="btn-outline" onclick="ptSyncCatalog()" ' + (catalogSyncing ? 'disabled' : '') + '>' + (catalogSyncing ? 'Se sincronizează…' : (ICON_SYNC + ' Sincronizează catalogul MoySklad')) + '</button>' +
       '<span style="font-size:11.5px;color:var(--text-soft)">' + (catalogUpdatedAt ? ('Ultima sincronizare: ' + new Date(catalogUpdatedAt).toLocaleString('ro-RO') + ' · ' + catalogProducts.length + ' produse') : 'Nesincronizat încă') + '</span>' +
-      (catalogProducts.length ? ('<span style="flex:1"></span><button class="btn-outline" onclick="ptSetCatalogView(\'duplicates\')" title="Caută produse MoySklad cu același barcode sau același cod — duplicatele fac ca prețurile să ajungă la produsul greșit">' + (dupCount ? ('<span style="color:var(--bad)">⚠ ' + dupCount + ' grupuri duplicate</span>') : '✓ Fără duplicate') + ' · Verifică duplicate</button>') : '') +
+      (catalogProducts.length ? ('<span style="flex:1"></span><button class="btn-outline" onclick="ptSetCatalogView(\'sitelinks\')" title="Leagă produsele din MoySklad de paginile lor de pe sublime.md și generează feedul de produse pentru ChatGPT">🔗 Linkuri site / feed ChatGPT</button><button class="btn-outline" onclick="ptSetCatalogView(\'duplicates\')" title="Caută produse MoySklad cu același barcode sau același cod — duplicatele fac ca prețurile să ajungă la produsul greșit">' + (dupCount ? ('<span style="color:var(--bad)">⚠ ' + dupCount + ' grupuri duplicate</span>') : '✓ Fără duplicate') + ' · Verifică duplicate</button>') : '') +
       '</div>';
     if(!catalogProducts.length){
       html += '<div class="panel empty">Niciun produs sincronizat încă. Apasă butonul de mai sus.</div>';
       el.innerHTML = html;
+      return;
+    }
+
+    if(catalogShowSiteLinks){
+      el.innerHTML = html + slRenderHtml();
       return;
     }
 

@@ -64,11 +64,16 @@ export default {
         if (action === 'deleteProducts') return await handleDeleteProducts(body, baseHeaders, corsHeaders);
         if (action === 'setAttrs') return await handleSetAttrs(body, baseHeaders, corsHeaders);
         if (action === 'createMoves') return await handleCreateMoves(body, baseHeaders, corsHeaders);
+        if (action === 'siteScan') return await handleSiteScan(body, corsHeaders);
+        if (action === 'ensureSiteAttrs') return await handleEnsureSiteAttrs(baseHeaders, corsHeaders);
+        if (action === 'setSiteLinks') return await handleSetSiteLinks(body, baseHeaders, corsHeaders);
         return json({ error: 'Acțiune necunoscută.' }, 400, corsHeaders);
       }
       if (url.searchParams.has('transferdata')) return await handleTransferData(url, baseHeaders, corsHeaders);
       if (url.searchParams.has('movehistory')) return await handleMoveHistory(url, baseHeaders, corsHeaders);
       if (url.searchParams.has('catalog')) return await handleCatalog(baseHeaders, corsHeaders);
+      if (url.searchParams.has('siteproducts')) return await handleSiteProducts(corsHeaders);
+      if (url.searchParams.get('feed') === 'chatgpt') return await handleProductFeed(url, baseHeaders, corsHeaders);
       if (url.searchParams.has('history')) return await handleHistory(url.searchParams.get('history'), baseHeaders, corsHeaders);
       if (url.searchParams.has('imgurl')) return await handleImageUrl(url.searchParams.get('imgurl'), baseHeaders, corsHeaders);
       if (url.searchParams.has('ordernum')) return await handleOrderImport(url.searchParams.get('ordernum'), baseHeaders, corsHeaders);
@@ -189,7 +194,9 @@ async function handleCatalog(baseHeaders, corsHeaders) {
       stock: null,
       stockDays: null,
       imageUrl: null,
-      hasImage: !!(p.images && p.images.meta && p.images.meta.size > 0)
+      hasImage: !!(p.images && p.images.meta && p.images.meta.size > 0),
+      siteLink: siteAttrValue(p, SITE_LINK_ATTR),
+      siteImage: siteAttrValue(p, SITE_IMAGE_ATTR)
     };
   }
 
@@ -613,6 +620,261 @@ async function handleSetAttrs(body, baseHeaders, corsHeaders) {
     confirmed[u.id] = sp ? sp.value / 100 : null;
   }
   return json({ ok: true, confirmed }, 200, corsHeaders);
+}
+
+// ================= LINKURI SITE (sublime.md) + FEED DE PRODUSE PENTRU CHATGPT =================
+// Legătura produs MoySklad ↔ pagina lui de pe site se face prin „sku"-ul din datele structurate
+// (schema.org Product) ale paginii, care e chiar CODUL produsului din MoySklad. Linkul (RO) și poza
+// paginii se salvează în două cîmpuri suplimentare ale produsului din MoySklad; feedul pentru ChatGPT
+// se generează apoi doar din MoySklad (preț, stoc, denumire) + aceste două cîmpuri.
+const SITE_ORIGIN = 'https://sublime.md';
+const SITE_PRODUCT_PREFIX = SITE_ORIGIN + '/ro/produse/';
+const SITE_LINK_ATTR = 'Link site';
+const SITE_IMAGE_ATTR = 'Poza site';
+// Tipul de preț afișat pe site („Magazin și Online"), identificat prin externalCode, ca în panou (PE_FIELDS).
+const SITE_PRICE_EXTCODE = 'f6f7183f-8e12-48df-acf8-c1cae302a64b';
+const SITE_SCAN_MAX_URLS = 40;      // planul gratuit Cloudflare permite 50 de subcereri per apel
+const SITE_SCAN_CONCURRENCY = 4;    // nu încărcăm site-ul magazinului cu prea multe cereri simultane
+const SITE_LINKS_MAX_ITEMS = 100;   // produse per scriere în masă în MoySklad (o singură cerere)
+
+function siteAttrValue(p, name) {
+  const a = (p.attributes || []).find(x => x && x.name === name);
+  return a && typeof a.value === 'string' && a.value ? a.value : null;
+}
+function isSiteProductUrl(u) {
+  return typeof u === 'string' && u.length < 500 && u.indexOf(SITE_PRODUCT_PREFIX) === 0 && !/[\s"'<>]/.test(u);
+}
+function isSiteUrl(u) {
+  return typeof u === 'string' && u.length < 500 && u.indexOf(SITE_ORIGIN + '/') === 0 && !/[\s"'<>]/.test(u);
+}
+async function siteFetchText(u) {
+  const res = await fetch(u, { headers: { 'User-Agent': 'SublimePanouAchizitii/1.0 (+' + SITE_ORIGIN + ')' }, signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.text();
+}
+function xmlLocs(xml) {
+  const out = [];
+  const re = /<loc>\s*([^<\s]+)\s*<\/loc>/g;
+  let m;
+  while ((m = re.exec(xml))) out.push(m[1].replace(/&amp;/g, '&'));
+  return out;
+}
+
+// Toate paginile de produs (RO) din sitemap: sitemap.xml → sitemap-products.xml → un sitemap per categorie.
+async function handleSiteProducts(corsHeaders) {
+  let categorySitemaps;
+  try {
+    categorySitemaps = xmlLocs(await siteFetchText(SITE_ORIGIN + '/sitemap-products.xml')).filter(isSiteUrl);
+  } catch (err) {
+    return json({ error: 'Nu am putut citi sitemap-ul site-ului (' + String(err && err.message || err) + ').' }, 502, corsHeaders);
+  }
+  if (!categorySitemaps.length) return json({ error: 'Sitemap-ul de produse al site-ului e gol sau are alt format.' }, 502, corsHeaders);
+  if (categorySitemaps.length > 45) return json({ error: 'Sitemap-ul are prea multe părți (' + categorySitemaps.length + ') pentru o singură citire.' }, 502, corsHeaders);
+  const urls = new Set();
+  const failed = [];
+  await Promise.all(categorySitemaps.map(async (sm) => {
+    try {
+      for (const u of xmlLocs(await siteFetchText(sm))) if (isSiteProductUrl(u)) urls.add(u);
+    } catch (err) { failed.push(sm); }
+  }));
+  // Dacă o parte a sitemap-ului nu s-a putut citi, raportăm — altfel produsele din ea ar părea „fără pagină".
+  return json({ urls: Array.from(urls).sort(), sitemaps: categorySitemaps.length, failedSitemaps: failed }, 200, corsHeaders);
+}
+
+// Extrage din pagina de produs blocul schema.org „Product" (sku, nume, poză, preț, disponibilitate).
+function parseProductPage(html) {
+  const re = /<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    let data;
+    try { data = JSON.parse(m[1]); } catch (e) { continue; }
+    const list = Array.isArray(data) ? data : [data];
+    for (const d of list) {
+      if (!d || d['@type'] !== 'Product') continue;
+      const img = Array.isArray(d.image) ? d.image[0] : d.image;
+      const offer = Array.isArray(d.offers) ? d.offers[0] : d.offers;
+      const price = offer && offer.price != null ? Number(offer.price) : null;
+      return {
+        sku: d.sku != null ? String(d.sku).trim() : '',
+        name: typeof d.name === 'string' ? d.name : '',
+        image: typeof img === 'string' && img ? (img.indexOf('http') === 0 ? img : SITE_ORIGIN + (img[0] === '/' ? '' : '/') + img) : null,
+        price: Number.isFinite(price) ? price : null,
+        inStock: offer && typeof offer.availability === 'string' ? /InStock/i.test(offer.availability) : null
+      };
+    }
+  }
+  return null;
+}
+
+async function handleSiteScan(body, corsHeaders) {
+  const urls = Array.isArray(body && body.urls) ? body.urls : [];
+  if (!urls.length) return json({ error: 'Lipsește lista de pagini.' }, 400, corsHeaders);
+  if (urls.length > SITE_SCAN_MAX_URLS) return json({ error: 'Maximum ' + SITE_SCAN_MAX_URLS + ' pagini per cerere.' }, 400, corsHeaders);
+  // Citim DOAR pagini de produs de pe sublime.md — Worker-ul nu devine un proxy deschis pentru orice adresă.
+  const bad = urls.find(u => !isSiteProductUrl(u));
+  if (bad) return json({ error: 'Adresă nepermisă: ' + String(bad).slice(0, 120) }, 400, corsHeaders);
+  const items = new Array(urls.length);
+  let next = 0;
+  async function worker() {
+    while (next < urls.length) {
+      const i = next++;
+      const u = urls[i];
+      try {
+        const info = parseProductPage(await siteFetchText(u));
+        items[i] = info ? Object.assign({ url: u }, info) : { url: u, error: 'Pagina nu are date de produs (schema.org).' };
+      } catch (err) {
+        items[i] = { url: u, error: String(err && err.message || err) };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(SITE_SCAN_CONCURRENCY, urls.length) }, worker));
+  return json({ items }, 200, corsHeaders);
+}
+
+// Creează (o singură dată) cîmpurile suplimentare „Link site" și „Poza site" pe produse. Idempotent:
+// dacă există deja (după nume), le refolosește — apăsat de două ori nu creează duplicate.
+async function ensureSiteAttrs(baseHeaders) {
+  const res = await msFetch(`${API}/entity/product/metadata/attributes`, { headers: baseHeaders });
+  if (!res.ok) throw new Error('Eroare la citirea cîmpurilor suplimentare din MoySklad: ' + res.status + ' ' + (await res.text()).slice(0, 300));
+  const rows = (await res.json()).rows || [];
+  const out = {};
+  for (const name of [SITE_LINK_ATTR, SITE_IMAGE_ATTR]) {
+    let a = rows.find(r => r.name === name);
+    if (a && a.type !== 'link') throw new Error('Cîmpul „' + name + '" există deja în MoySklad, dar are tipul „' + a.type + '" în loc de „link". Redenumește-l sau schimbă-i tipul în MoySklad.');
+    if (!a) {
+      const cr = await msFetch(`${API}/entity/product/metadata/attributes`, {
+        method: 'POST', headers: { ...baseHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, type: 'link', required: false, show: true })
+      });
+      const data = await cr.json().catch(() => ({}));
+      if (!cr.ok) throw new Error('Nu am putut crea cîmpul „' + name + '" în MoySklad: ' + ((data.errors && data.errors[0] && data.errors[0].error) || cr.status));
+      a = data;
+    }
+    out[name] = { href: a.meta.href, type: 'attributemetadata', mediaType: 'application/json' };
+  }
+  return out;
+}
+async function handleEnsureSiteAttrs(baseHeaders, corsHeaders) {
+  try {
+    const attrs = await ensureSiteAttrs(baseHeaders);
+    return json({ ok: true, linkAttr: attrs[SITE_LINK_ATTR].href, imageAttr: attrs[SITE_IMAGE_ATTR].href }, 200, corsHeaders);
+  } catch (err) {
+    return json({ error: String(err && err.message || err) }, 502, corsHeaders);
+  }
+}
+
+// Scrie linkul (și poza) pe pînă la 100 de produse dintr-o singură cerere MoySklad (actualizare în masă).
+// Se trimit DOAR cele două cîmpuri — restul atributelor și prețurile produsului rămîn neatinse.
+// Idempotent: scrierea aceleiași valori de două ori lasă produsul identic.
+async function handleSetSiteLinks(body, baseHeaders, corsHeaders) {
+  const items = Array.isArray(body && body.items) ? body.items : [];
+  if (!items.length) return json({ error: 'Lipsește lista de produse.' }, 400, corsHeaders);
+  if (items.length > SITE_LINKS_MAX_ITEMS) return json({ error: 'Maximum ' + SITE_LINKS_MAX_ITEMS + ' produse per cerere.' }, 400, corsHeaders);
+  for (const it of items) {
+    if (!it || typeof it.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(it.id)) return json({ error: 'Id de produs invalid.' }, 400, corsHeaders);
+    if (!isSiteProductUrl(it.link)) return json({ error: 'Link invalid pentru produsul ' + it.id + ' (trebuie să înceapă cu ' + SITE_PRODUCT_PREFIX + ').' }, 400, corsHeaders);
+    if (it.image != null && !isSiteUrl(it.image)) return json({ error: 'Link de poză invalid pentru produsul ' + it.id + '.' }, 400, corsHeaders);
+  }
+  let attrs;
+  try { attrs = await ensureSiteAttrs(baseHeaders); }
+  catch (err) { return json({ error: String(err && err.message || err) }, 502, corsHeaders); }
+
+  const payload = items.map(it => {
+    const a = [{ meta: attrs[SITE_LINK_ATTR], value: it.link }];
+    if (it.image) a.push({ meta: attrs[SITE_IMAGE_ATTR], value: it.image });
+    return { meta: { href: `${API}/entity/product/${it.id}`, type: 'product', mediaType: 'application/json' }, attributes: a };
+  });
+  const res = await msFetch(`${API}/entity/product`, {
+    method: 'POST', headers: { ...baseHeaders, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok && !Array.isArray(data)) {
+    return json({ error: (data && data.errors && data.errors[0] && data.errors[0].error) || ('Eroare MoySklad ' + res.status + ' la salvarea linkurilor.') }, res.status === 429 ? 429 : 502, corsHeaders);
+  }
+  // Confirmăm per produs ce a salvat MoySklad cu adevărat (răspunsul conține produsele actualizate,
+  // sau un obiect cu „errors" pentru cele refuzate), în aceeași ordine ca cererea.
+  const results = items.map((it, i) => {
+    const r = Array.isArray(data) ? data[i] : null;
+    if (!r) return { id: it.id, ok: false, error: 'Fără răspuns de la MoySklad pentru acest produs.' };
+    if (r.errors) return { id: it.id, ok: false, error: (r.errors[0] && r.errors[0].error) || 'Refuzat de MoySklad.' };
+    const savedLink = siteAttrValue(r, SITE_LINK_ATTR);
+    const savedImage = siteAttrValue(r, SITE_IMAGE_ATTR);
+    if (savedLink !== it.link) return { id: it.id, ok: false, error: 'MoySklad nu a păstrat linkul trimis.' };
+    return { id: it.id, ok: true, link: savedLink, image: savedImage };
+  });
+  return json({ results }, 200, corsHeaders);
+}
+
+function csvCell(v) {
+  const s = v == null ? '' : String(v).replace(/[\r\n\t]+/g, ' ').trim();
+  return /[",;]/.test(s) || s !== s.trim() ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function validGtin(codes) {
+  return (codes || []).find(c => /^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(c)) || '';
+}
+
+// Feed de produse în format Google Merchant (CSV) — acceptat de ChatGPT („Folosește o adresă URL găzduită").
+// Conține doar produsele nearhivate care au „Link site" completat și un preț „Magazin și Online" > 0.
+// ?feed=chatgpt&download=1 → descărcare ca fișier (pentru „Încarcă un fișier").
+async function handleProductFeed(url, baseHeaders, corsHeaders) {
+  const limit = 1000;
+  let productRows, stockRows, folderRows;
+  try {
+    [productRows, stockRows, folderRows] = await Promise.all([
+      fetchAllPages(`${API}/entity/product?filter=archived=false`, baseHeaders, limit),
+      msFetch(`${API}/report/stock/all/current?stockType=stock`, { headers: baseHeaders }).then(async r => {
+        if (!r.ok) throw new Error(r.status + ': ' + (await r.text()).slice(0, 300));
+        return r.json();
+      }),
+      fetchAllPages(`${API}/entity/productfolder`, baseHeaders, limit)
+    ]);
+  } catch (err) {
+    return json({ error: 'Eroare la citirea datelor din MoySklad pentru feed', detail: String(err) }, 502, corsHeaders);
+  }
+  const folders = {};
+  for (const f of folderRows) folders[f.id] = f.name;
+  const stockById = {};
+  for (const r of stockRows) stockById[r.assortmentId] = (stockById[r.assortmentId] || 0) + (r.stock || 0);
+
+  const header = ['id', 'title', 'description', 'link', 'image_link', 'availability', 'price', 'brand', 'gtin', 'identifier_exists', 'condition'];
+  const lines = [header.join(',')];
+  let skippedNoPrice = 0, skippedNoImage = 0;
+  for (const p of productRows) {
+    const link = siteAttrValue(p, SITE_LINK_ATTR);
+    if (!link) continue;
+    const image = siteAttrValue(p, SITE_IMAGE_ATTR);
+    if (!image) { skippedNoImage++; continue; }
+    const sp = (p.salePrices || []).find(s => s.priceType && s.priceType.externalCode === SITE_PRICE_EXTCODE);
+    const price = sp && typeof sp.value === 'number' ? sp.value / 100 : 0;
+    if (!(price > 0)) { skippedNoPrice++; continue; }
+    const brandId = p.productFolder && p.productFolder.meta ? extractId(p.productFolder.meta.href) : null;
+    const gtin = validGtin((p.barcodes || []).map(b => Object.values(b)[0]).filter(Boolean));
+    lines.push([
+      p.code || p.id,
+      p.name,
+      (p.description && p.description.trim()) || p.name,
+      link,
+      image,
+      (stockById[p.id] || 0) > 0 ? 'in_stock' : 'out_of_stock',
+      price.toFixed(2) + ' MDL',
+      (brandId && folders[brandId]) || '',
+      gtin,
+      gtin ? 'yes' : 'no',
+      'new'
+    ].map(csvCell).join(','));
+  }
+  const headers = {
+    ...corsHeaders,
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Feed-Products': String(lines.length - 1),
+    'X-Feed-Skipped-No-Price': String(skippedNoPrice),
+    'X-Feed-Skipped-No-Image': String(skippedNoImage),
+    'Access-Control-Expose-Headers': 'X-Feed-Products, X-Feed-Skipped-No-Price, X-Feed-Skipped-No-Image'
+  };
+  if (url.searchParams.get('download') === '1') headers['Content-Disposition'] = 'attachment; filename="sublime-produse-chatgpt.csv"';
+  return new Response(lines.join('\n') + '\n', { status: 200, headers });
 }
 
 // ================= SCRIERE: BRANDURI (grupuri de produse) =================
