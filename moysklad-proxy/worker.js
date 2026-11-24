@@ -825,8 +825,26 @@ function csvCell(v) {
   const s = v == null ? '' : String(v).replace(/[\r\n\t]+/g, ' ').trim();
   return /[",;]/.test(s) || s !== s.trim() ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
-function validGtin(codes) {
-  return (codes || []).find(c => /^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(c)) || '';
+// GTIN real pentru feed: doar barcode-urile MoySklad de tip EAN-13 / EAN-8 / UPC / GTIN, numai cifre,
+// cu cifra de control corectă. Se exclud codurile EAN-13 cu prefix 20–29 (ex: 2000000064208) — sînt
+// coduri interne de magazin („restricted circulation"), nu identificatori reali de produs.
+const GTIN_BARCODE_TYPES = ['ean13', 'ean8', 'upc', 'gtin'];
+function gtinCheckDigitOk(c) {
+  let sum = 0;
+  for (let i = c.length - 2, w = 3; i >= 0; i--, w = 4 - w) sum += Number(c[i]) * w;
+  return (10 - (sum % 10)) % 10 === Number(c[c.length - 1]);
+}
+function validGtin(barcodes) {
+  for (const b of barcodes || []) {
+    if (!b || typeof b !== 'object') continue;
+    for (const type of GTIN_BARCODE_TYPES) {
+      const c = typeof b[type] === 'string' ? b[type].trim() : '';
+      if (!/^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(c)) continue;
+      if (c.length === 13 && /^2\d/.test(c)) continue;
+      if (gtinCheckDigitOk(c)) return c;
+    }
+  }
+  return '';
 }
 
 // Feed de produse în format Google Merchant (CSV) — acceptat de ChatGPT („Folosește o adresă URL găzduită").
@@ -852,7 +870,7 @@ async function handleProductFeed(url, baseHeaders, corsHeaders) {
   const stockById = {};
   for (const r of stockRows) stockById[r.assortmentId] = (stockById[r.assortmentId] || 0) + (r.stock || 0);
 
-  const header = ['id', 'title', 'description', 'link', 'image_link', 'availability', 'price', 'brand', 'gtin', 'identifier_exists', 'condition'];
+  const header = ['id', 'title', 'description', 'link', 'image_link', 'availability', 'price', 'brand', 'gtin', 'identifier_exists', 'condition', 'target_countries'];
   const lines = [header.join(',')];
   let skippedNoPrice = 0, skippedNoImage = 0;
   for (const p of productRows) {
@@ -864,7 +882,7 @@ async function handleProductFeed(url, baseHeaders, corsHeaders) {
     const price = sp && typeof sp.value === 'number' ? sp.value / 100 : 0;
     if (!(price > 0)) { skippedNoPrice++; continue; }
     const brandId = p.productFolder && p.productFolder.meta ? extractId(p.productFolder.meta.href) : null;
-    const gtin = validGtin((p.barcodes || []).map(b => Object.values(b)[0]).filter(Boolean));
+    const gtin = validGtin(p.barcodes);
     lines.push([
       p.code || p.id,
       p.name,
@@ -875,8 +893,9 @@ async function handleProductFeed(url, baseHeaders, corsHeaders) {
       price.toFixed(2) + ' MDL',
       (brandId && folders[brandId]) || '',
       gtin,
-      gtin ? 'yes' : 'no',
-      'new'
+      gtin ? 'true' : 'false',
+      'new',
+      'MD'
     ].map(csvCell).join(','));
   }
   const headers = {
