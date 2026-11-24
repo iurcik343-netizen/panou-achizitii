@@ -631,8 +631,10 @@ const SITE_ORIGIN = 'https://sublime.md';
 const SITE_PRODUCT_PREFIX = SITE_ORIGIN + '/ro/produse/';
 const SITE_LINK_ATTR = 'Link site';
 const SITE_IMAGE_ATTR = 'Poza site';
-// Tipul de preț afișat pe site („Magazin și Online"), identificat prin externalCode, ca în panou (PE_FIELDS).
-const SITE_PRICE_EXTCODE = 'f6f7183f-8e12-48df-acf8-c1cae302a64b';
+// Prețul afișat pe site = „Preț Preventiv (reduceri)" (confirmat de proprietar și comparat cu site-ul);
+// dacă nu e completat (0 în MoySklad), „Pret de Vinzare". Identificate prin externalCode, ca în panou.
+const SITE_PRICE_EXTCODE = 'df2c7f04-fd28-4994-896c-1fa16a548e5c';       // Preț Preventiv (reduceri)
+const SITE_PRICE_FALLBACK_EXTCODE = 'cbcf493b-55bc-11d9-848a-00112f43529a'; // Pret de Vinzare
 const SITE_SCAN_MAX_URLS = 40;      // planul gratuit Cloudflare permite 50 de subcereri per apel
 // Site-ul e pe Hostinger, al cărui CDN (hcdn) răspunde 429 la cereri simultane și apoi blochează
 // temporar (403) adresa care le-a trimis — citim STRICT o pagină pe rînd, cu pauză între ele, și ne
@@ -848,7 +850,7 @@ function validGtin(barcodes) {
 }
 
 // Feed de produse în format Google Merchant (CSV) — acceptat de ChatGPT („Folosește o adresă URL găzduită").
-// Conține doar produsele nearhivate care au „Link site" completat și un preț „Magazin și Online" > 0.
+// Conține doar produsele nearhivate care au „Link site" completat și un preț > 0 (Preventiv, altfel Pret de Vinzare).
 // ?feed=chatgpt&download=1 → descărcare ca fișier (pentru „Încarcă un fișier").
 async function handleProductFeed(url, baseHeaders, corsHeaders) {
   const limit = 1000;
@@ -878,8 +880,11 @@ async function handleProductFeed(url, baseHeaders, corsHeaders) {
     if (!link) continue;
     const image = siteAttrValue(p, SITE_IMAGE_ATTR);
     if (!image) { skippedNoImage++; continue; }
-    const sp = (p.salePrices || []).find(s => s.priceType && s.priceType.externalCode === SITE_PRICE_EXTCODE);
-    const price = sp && typeof sp.value === 'number' ? sp.value / 100 : 0;
+    const priceOf = (ext) => {
+      const sp = (p.salePrices || []).find(s => s.priceType && s.priceType.externalCode === ext);
+      return sp && typeof sp.value === 'number' ? sp.value / 100 : 0;
+    };
+    const price = priceOf(SITE_PRICE_EXTCODE) || priceOf(SITE_PRICE_FALLBACK_EXTCODE);
     if (!(price > 0)) { skippedNoPrice++; continue; }
     const brandId = p.productFolder && p.productFolder.meta ? extractId(p.productFolder.meta.href) : null;
     const gtin = validGtin(p.barcodes);

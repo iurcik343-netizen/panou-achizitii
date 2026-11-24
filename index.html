@@ -2437,7 +2437,7 @@
       a.download = 'sublime-produse-chatgpt.csv';
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
-      ptToast('✓ CSV descărcat: ' + n + ' produse.' + (noPrice ? (' ' + noPrice + ' sărite (fără preț „Magazin și Online").') : '') + (noImage ? (' ' + noImage + ' sărite (fără poză).') : ''), true);
+      ptToast('✓ CSV descărcat: ' + n + ' produse.' + (noPrice ? (' ' + noPrice + ' sărite (fără preț de vînzare în MoySklad).') : '') + (noImage ? (' ' + noImage + ' sărite (fără poză).') : ''), true);
     } catch(err){
       ptToast('Nu am putut genera feedul: ' + (err && err.message ? err.message : err), false);
     } finally {
@@ -2531,7 +2531,7 @@
 
     // Pasul 3 — feedul
     html += '<div class="panel" style="margin-bottom:12px"><h3 style="margin:0 0 8px">3. Feed pentru ChatGPT</h3>' +
-      '<div class="hint" style="margin-bottom:8px">Conține produsele active cu „Link site" și „Poza site" completate și cu preț „Magazin și Online" &gt; 0. Prețul și stocul se citesc din MoySklad la fiecare descărcare.</div>' +
+      '<div class="hint" style="margin-bottom:8px">Conține produsele active cu „Link site" și „Poza site" completate. Prețul este „Preț Preventiv (reduceri)" — cel afișat pe site — sau, dacă lipsește, „Pret de Vinzare". Prețul și stocul se citesc din MoySklad la fiecare descărcare.</div>' +
       '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
       '<button class="btn-primary" onclick="ptDownloadFeed()"' + (sl.feedBusy ? ' disabled' : '') + '>' + (sl.feedBusy ? 'Se generează…' : 'Descarcă CSV pentru ChatGPT') + '</button>' +
       '<button class="btn-outline" onclick="ptCopyFeedUrl()">Copiază linkul feedului</button></div>' +
