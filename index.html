@@ -2430,6 +2430,7 @@
       var n = parseInt(res.headers.get('X-Feed-Products') || '0', 10);
       var noPrice = parseInt(res.headers.get('X-Feed-Skipped-No-Price') || '0', 10);
       var noImage = parseInt(res.headers.get('X-Feed-Skipped-No-Image') || '0', 10);
+      var noBrand = parseInt(res.headers.get('X-Feed-Skipped-No-Brand') || '0', 10);
       var blob = await res.blob();
       if(!n){ ptToast('Feedul e gol — niciun produs nu are încă „Link site" completat în MoySklad. Scrie întîi linkurile.', false); return; }
       var a = document.createElement('a');
@@ -2437,7 +2438,7 @@
       a.download = 'sublime-produse-chatgpt.csv';
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
-      ptToast('✓ CSV descărcat: ' + n + ' produse.' + (noPrice ? (' ' + noPrice + ' sărite (fără preț de vînzare în MoySklad).') : '') + (noImage ? (' ' + noImage + ' sărite (fără poză).') : ''), true);
+      ptToast('✓ CSV descărcat: ' + n + ' produse.' + (noPrice ? (' ' + noPrice + ' sărite (fără preț de vînzare în MoySklad).') : '') + (noImage ? (' ' + noImage + ' sărite (fără poză).') : '') + (noBrand ? (' ' + noBrand + ' sărite (fără brand real: pune-le în grupul brandului în MoySklad).') : ''), true);
     } catch(err){
       ptToast('Nu am putut genera feedul: ' + (err && err.message ? err.message : err), false);
     } finally {

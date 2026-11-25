@@ -869,12 +869,22 @@ async function handleProductFeed(url, baseHeaders, corsHeaders) {
   }
   const folders = {};
   for (const f of folderRows) folders[f.id] = f.name;
+  // Brandul din feed trebuie să fie brandul real (ChatGPT respinge valori de umplutură). Grupele tehnice
+  // din MoySklad („Zsample", „Ztestere", „ZZProduse fara gupa") nu sînt branduri; pentru produsele din ele
+  // sau fără grup (ex: „dott. Melt Lip Balm…"), brandul = cel mai lung nume de brand real cu care începe
+  // denumirea produsului. Dacă nu se găsește, produsul nu intră în feed.
+  const isTechFolder = (name) => !name || /^(ZZ|Z[a-z])/.test(name);
+  const brandNames = Object.values(folders).filter(n => !isTechFolder(n)).sort((a, b) => b.length - a.length);
+  const brandFromName = (title) => {
+    const t = String(title || '').toLowerCase();
+    return brandNames.find(b => t.startsWith(b.toLowerCase()) && (t.length === b.length || /[\s,.\-:]/.test(t[b.length]) || /[.\-]$/.test(b))) || '';
+  };
   const stockById = {};
   for (const r of stockRows) stockById[r.assortmentId] = (stockById[r.assortmentId] || 0) + (r.stock || 0);
 
-  const header = ['id', 'title', 'description', 'link', 'image_link', 'availability', 'price', 'brand', 'gtin', 'identifier_exists', 'condition', 'target_countries'];
+  const header = ['id', 'title', 'description', 'link', 'image_link', 'availability', 'price', 'brand', 'gtin', 'identifier_exists', 'condition', 'target_countries', 'seller_name', 'seller_url', 'store_country'];
   const lines = [header.join(',')];
-  let skippedNoPrice = 0, skippedNoImage = 0;
+  let skippedNoPrice = 0, skippedNoImage = 0, skippedNoBrand = 0;
   for (const p of productRows) {
     const link = siteAttrValue(p, SITE_LINK_ATTR);
     if (!link) continue;
@@ -887,6 +897,9 @@ async function handleProductFeed(url, baseHeaders, corsHeaders) {
     const price = priceOf(SITE_PRICE_EXTCODE) || priceOf(SITE_PRICE_FALLBACK_EXTCODE);
     if (!(price > 0)) { skippedNoPrice++; continue; }
     const brandId = p.productFolder && p.productFolder.meta ? extractId(p.productFolder.meta.href) : null;
+    const folderName = brandId ? folders[brandId] : '';
+    const brand = isTechFolder(folderName) ? brandFromName(p.name) : folderName;
+    if (!brand) { skippedNoBrand++; continue; }
     const gtin = validGtin(p.barcodes);
     lines.push([
       p.code || p.id,
@@ -896,10 +909,13 @@ async function handleProductFeed(url, baseHeaders, corsHeaders) {
       image,
       (stockById[p.id] || 0) > 0 ? 'in_stock' : 'out_of_stock',
       price.toFixed(2) + ' MDL',
-      (brandId && folders[brandId]) || '',
+      brand,
       gtin,
       gtin ? 'true' : 'false',
       'new',
+      'MD',
+      'Sublime',
+      SITE_ORIGIN,
       'MD'
     ].map(csvCell).join(','));
   }
@@ -910,7 +926,8 @@ async function handleProductFeed(url, baseHeaders, corsHeaders) {
     'X-Feed-Products': String(lines.length - 1),
     'X-Feed-Skipped-No-Price': String(skippedNoPrice),
     'X-Feed-Skipped-No-Image': String(skippedNoImage),
-    'Access-Control-Expose-Headers': 'X-Feed-Products, X-Feed-Skipped-No-Price, X-Feed-Skipped-No-Image'
+    'X-Feed-Skipped-No-Brand': String(skippedNoBrand),
+    'Access-Control-Expose-Headers': 'X-Feed-Products, X-Feed-Skipped-No-Price, X-Feed-Skipped-No-Image, X-Feed-Skipped-No-Brand'
   };
   if (url.searchParams.get('download') === '1') headers['Content-Disposition'] = 'attachment; filename="sublime-produse-chatgpt.csv"';
   return new Response(lines.join('\n') + '\n', { status: 200, headers });
